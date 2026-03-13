@@ -1,5 +1,6 @@
 const express = require("express");
 const session = require("express-session");
+const fs = require("fs");
 const http = require("http");
 const path = require("path");
 
@@ -13,11 +14,29 @@ const { registerWebRoutes } = require("./src/routes/web");
 const { renderDocument } = require("./src/views/layout");
 const { LEAD_STATUSES } = require("./src/types/models");
 
+function shouldServeReactApp(options = {}) {
+  if (options.uiMode === "legacy") {
+    return false;
+  }
+
+  if (options.uiMode === "react") {
+    return true;
+  }
+
+  if (process.env.CRM_UI_MODE === "legacy") {
+    return false;
+  }
+
+  return true;
+}
+
 async function createApp(options = {}) {
   const app = express();
   const dbPath = options.dbPath || path.join(__dirname, "data", "crm.sqlite");
   const db = await CrmDatabase.initialize({ dbPath });
   const ringcentral = createRingCentralService(options.ringcentral);
+  const frontendDistPath = path.join(__dirname, "frontend", "dist");
+  const serveReactApp = shouldServeReactApp(options) && fs.existsSync(frontendDistPath);
 
   app.locals.db = db;
   app.locals.leadStatuses = LEAD_STATUSES;
@@ -46,7 +65,21 @@ async function createApp(options = {}) {
   registerAuthRoutes(app);
   registerApiRoutes(app);
   registerUserRoutes(app);
-  registerWebRoutes(app);
+
+  if (serveReactApp) {
+    app.use(express.static(frontendDistPath, { index: false }));
+
+    app.get("*", (req, res, next) => {
+      if (req.path.startsWith("/api/") || req.path === "/health") {
+        next();
+        return;
+      }
+
+      res.sendFile(path.join(frontendDistPath, "index.html"));
+    });
+  } else {
+    registerWebRoutes(app);
+  }
 
   app.use((req, res) => {
     res

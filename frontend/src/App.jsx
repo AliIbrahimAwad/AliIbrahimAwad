@@ -3,9 +3,10 @@ import { Menu, Search, SlidersHorizontal } from "lucide-react";
 
 import { LeadCard } from "./components/LeadCard";
 import { LeadDetailsPanel } from "./components/LeadDetailsPanel";
+import { LoginPage } from "./components/LoginPage";
 import { MetricCard } from "./components/MetricCard";
 import { Sidebar } from "./components/Sidebar";
-import { getDashboardMetrics, getLead, getLeads, updateLeadStatus } from "./lib/api";
+import { getDashboardMetrics, getLead, getLeads, getSession, login, logout, updateLeadStatus } from "./lib/api";
 import { pipelineLabel } from "./lib/format";
 
 const tabs = ["All leads", "New Lead", "Contacted", "Appointment", "Negotiation", "Sold", "Lost"];
@@ -80,6 +81,8 @@ const emptyMetrics = {
 };
 
 export default function App() {
+  const [authStatus, setAuthStatus] = useState("loading");
+  const [currentUser, setCurrentUser] = useState(null);
   const [leads, setLeads] = useState([]);
   const [metrics, setMetrics] = useState(emptyMetrics);
   const [selectedLeadId, setSelectedLeadId] = useState(null);
@@ -89,10 +92,51 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
   const [error, setError] = useState("");
   const deferredQuery = useDeferredValue(query);
 
   useEffect(() => {
+    let active = true;
+
+    async function initialize() {
+      try {
+        const session = await getSession();
+        if (!active) {
+          return;
+        }
+
+        setCurrentUser(session.user);
+        setAuthStatus("authenticated");
+        setError("");
+      } catch (sessionError) {
+        if (!active) {
+          return;
+        }
+
+        if (sessionError.status === 401) {
+          setAuthStatus("unauthenticated");
+          setCurrentUser(null);
+          setLoading(false);
+          return;
+        }
+
+        setError(sessionError.message || "Unable to verify your session.");
+      }
+    }
+
+    initialize();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") {
+      return;
+    }
+
     let active = true;
 
     async function loadDashboard() {
@@ -117,6 +161,14 @@ export default function App() {
           return;
         }
 
+        if (loadError.status === 401) {
+          setAuthStatus("unauthenticated");
+          setCurrentUser(null);
+          setSelectedLeadId(null);
+          setSelectedLeadDetails(null);
+          return;
+        }
+
         setError(loadError.message || "Unable to load CRM dashboard.");
       } finally {
         if (active) {
@@ -130,9 +182,13 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [authStatus]);
 
   useEffect(() => {
+    if (authStatus !== "authenticated") {
+      return;
+    }
+
     if (!selectedLeadId) {
       setSelectedLeadDetails(null);
       return;
@@ -157,6 +213,12 @@ export default function App() {
           return;
         }
 
+        if (loadError.status === 401) {
+          setAuthStatus("unauthenticated");
+          setCurrentUser(null);
+          return;
+        }
+
         setError(loadError.message || "Unable to load lead details.");
       } finally {
         if (active) {
@@ -170,7 +232,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [selectedLeadId]);
+  }, [authStatus, selectedLeadId]);
 
   const visibleLeads = leads.filter((lead) => {
     const matchesTab = activeTab === "All leads" ? true : lead.statusLabel === activeTab;
@@ -224,6 +286,52 @@ export default function App() {
     }
   }
 
+  async function handleLogin(email, password) {
+    try {
+      setAuthLoading(true);
+      const session = await login(email, password);
+      setCurrentUser(session.user);
+      setAuthStatus("authenticated");
+      setSelectedLeadId(null);
+      setSelectedLeadDetails(null);
+      setError("");
+    } catch (loginError) {
+      setError(loginError.message || "Unable to sign in.");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await logout();
+    } finally {
+      setCurrentUser(null);
+      setAuthStatus("unauthenticated");
+      setSelectedLeadId(null);
+      setSelectedLeadDetails(null);
+      setLeads([]);
+      setMetrics(emptyMetrics);
+    }
+  }
+
+  if (authStatus === "loading") {
+    return (
+      <div className="min-h-screen bg-ink-950 bg-dashboard px-4 py-6 font-body text-slate-100 sm:px-6 lg:px-8">
+        <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-[1200px] items-center justify-center rounded-[2.25rem] border border-white/10 bg-ink-900/80 shadow-card backdrop-blur">
+          <div className="space-y-4 text-center">
+            <div className="mx-auto h-14 w-14 animate-pulse rounded-2xl bg-gradient-to-br from-ember-500 to-ice-500" />
+            <p className="text-sm uppercase tracking-[0.32em] text-slate-500">Loading CRM session</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (authStatus !== "authenticated") {
+    return <LoginPage onSubmit={handleLogin} loading={authLoading} error={error} />;
+  }
+
   return (
     <div className="min-h-screen bg-ink-950 bg-dashboard px-4 py-4 font-body text-slate-100 sm:px-6 lg:px-8">
       <div className="mx-auto grid max-w-[1800px] gap-4 xl:grid-cols-[290px_minmax(0,1fr)]">
@@ -248,10 +356,20 @@ export default function App() {
                 <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">
                   Monitor live shopper momentum, respond faster, and keep every lead moving toward an appointment.
                 </p>
+                <p className="mt-3 text-xs uppercase tracking-[0.26em] text-slate-500">
+                  Signed in as {currentUser?.name} • {currentUser?.role}
+                </p>
               </div>
             </div>
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+              >
+                Logout
+              </button>
               <label className="flex min-w-[260px] items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-slate-300 focus-within:border-ice-400/40 focus-within:bg-white/10">
                 <Search className="h-4 w-4 text-slate-500" />
                 <input

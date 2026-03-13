@@ -57,6 +57,10 @@ jobs:
 
           git pull origin main
           npm install
+          cd frontend
+          npm install
+          npm run build
+          cd ..
           pm2 restart crm --update-env || pm2 start server.js --name crm --update-env
           pm2 save
           EOF

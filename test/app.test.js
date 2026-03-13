@@ -90,7 +90,7 @@ function createClient(server) {
 
 async function withServer(run) {
   const temp = createTempDbPath();
-  const app = await createApp({ dbPath: temp.dbPath });
+  const app = await createApp({ dbPath: temp.dbPath, uiMode: "legacy" });
   const server = app.listen(0);
 
   try {

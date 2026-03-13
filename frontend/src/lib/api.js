@@ -20,7 +20,13 @@ async function request(path, options = {}) {
       // Ignore JSON parse failures and use the default message.
     }
 
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
+  }
+
+  if (response.status === 204) {
+    return null;
   }
 
   return response.json();
@@ -51,4 +57,21 @@ export function updateLeadStatus(id, status) {
 
 export function getDashboardMetrics() {
   return request("/api/dashboard/metrics");
+}
+
+export function getSession() {
+  return request("/api/auth/session");
+}
+
+export function login(email, password) {
+  return request("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function logout() {
+  return request("/api/auth/logout", {
+    method: "POST",
+  });
 }
