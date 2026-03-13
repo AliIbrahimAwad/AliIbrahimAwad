@@ -1,13 +1,6 @@
+const { requireAuth } = require("../middleware/auth");
 const { ValidationError } = require("../data/database");
 const { asyncHandler } = require("./helpers");
-
-function splitName(name) {
-  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
-  return {
-    first_name: parts[0] || "",
-    last_name: parts.slice(1).join(" "),
-  };
-}
 
 function extractWebhookEvent(body = {}) {
   const rawType = String(body.type || body.eventType || body.event || "").toLowerCase();
@@ -37,56 +30,105 @@ function extractWebhookEvent(body = {}) {
   };
 }
 
+function toPagination(query = {}) {
+  return {
+    limit: Math.max(1, Math.min(200, Number(query.limit) || 100)),
+    offset: Math.max(0, Number(query.offset) || 0),
+    search: String(query.search || "").trim(),
+    status: String(query.status || "").trim().toLowerCase(),
+  };
+}
+
+function normalizeLeadPayload(body = {}) {
+  const customerName = String(body.customer_name || body.customerName || body.name || "").trim();
+  const email = String(body.email || "").trim();
+  const phone = String(body.phone || "").trim();
+  const vehicleInterest = String(body.vehicle_interest || body.vehicleInterest || body.vehicle || "").trim();
+  const source = String(body.source || "website").trim().toLowerCase();
+
+  if (!customerName && !email && !phone) {
+    throw new ValidationError("At least one contact field is required.");
+  }
+
+  return {
+    source,
+    customer_name: customerName || null,
+    phone: phone || null,
+    email: email || null,
+    vehicle_interest: vehicleInterest || null,
+    vehicle_id: body.vehicle_id || body.vehicleId || null,
+    listing_url: body.listing_url || body.listingUrl || null,
+    message: String(body.message || "").trim() || null,
+    status: String(body.status || "new").trim().toLowerCase(),
+  };
+}
+
 function registerApiRoutes(app) {
+  app.get(
+    "/api/leads",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const page = req.app.locals.db.listApiLeads(toPagination(req.query), req.currentUser);
+
+      res.json({
+        items: page.items,
+        pagination: {
+          total: page.total,
+          limit: page.limit,
+          offset: page.offset,
+          has_more: page.offset + page.limit < page.total,
+        },
+      });
+    })
+  );
+
+  app.get(
+    "/api/leads/:id",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const payload = req.app.locals.db.getApiLeadWithActivities(Number(req.params.id), req.currentUser);
+      res.json(payload);
+    })
+  );
+
   app.post(
     "/api/leads",
     asyncHandler(async (req, res) => {
-      const name = String(req.body.name || "").trim();
-      const email = String(req.body.email || "").trim();
-      const phone = String(req.body.phone || "").trim();
-      const vehicle = String(req.body.vehicle || "").trim();
-      const source = String(req.body.source || "").trim().toLowerCase();
+      const payload = normalizeLeadPayload(req.body);
+      const lead = req.app.locals.db.createApiLead(payload);
 
-      if (!name && !email && !phone) {
-        throw new ValidationError("At least one contact field is required.");
+      res.status(201).json(lead);
+    })
+  );
+
+  app.patch(
+    "/api/leads/:id/status",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const status = String(req.body.status || "").trim().toLowerCase();
+      if (!status) {
+        throw new ValidationError("A lead status is required.");
       }
 
-      if (source !== "website") {
-        throw new ValidationError("Website lead API only accepts source=website.");
-      }
+      const lead = req.app.locals.db.updateApiLeadStatus(Number(req.params.id), status);
+      res.json(lead);
+    })
+  );
 
-      const nameParts = splitName(name);
-      const contact = req.app.locals.db.createContact({
-        first_name: nameParts.first_name,
-        last_name: nameParts.last_name,
-        email: email || null,
-        phone: phone || null,
-        company: null,
-        job_title: null,
-      });
+  app.patch(
+    "/api/leads/:id",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const lead = req.app.locals.db.updateApiLead(Number(req.params.id), normalizeLeadPayload(req.body));
+      res.json(lead);
+    })
+  );
 
-      const lead = req.app.locals.db.createLead({
-        contact_id: contact.id,
-        assigned_to: null,
-        source: "website",
-        status: "new",
-        priority: null,
-        follow_up_date: null,
-        next_action: vehicle ? `Website inquiry for ${vehicle}` : "Review website inquiry",
-      });
-
-      if (vehicle) {
-        req.app.locals.db.addLeadNote(lead.id, `Interested vehicle: ${vehicle}`);
-      }
-
-      const createdLead = req.app.locals.db.getLead(lead.id);
-      res.status(201).json({
-        id: createdLead.id,
-        assigned_to: createdLead.assigned_to,
-        assigned_user_name: createdLead.assigned_user_name,
-        status: createdLead.status,
-        source: createdLead.source,
-      });
+  app.get(
+    "/api/dashboard/metrics",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      res.json(req.app.locals.db.getDashboardApiMetrics(req.currentUser));
     })
   );
 

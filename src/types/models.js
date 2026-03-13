@@ -46,7 +46,16 @@
 const USER_ROLES = ["admin", "manager", "sales"];
 const LEAD_STATUSES = ["new", "contacted", "appointment", "test_drive", "negotiation", "won", "lost"];
 const LEAD_SOURCES = ["website", "autotrader", "cargurus", "manual"];
-const LEAD_ACTIVITY_TYPES = ["call", "sms", "note"];
+const LEAD_ACTIVITY_TYPES = [
+  "call",
+  "sms",
+  "note",
+  "lead_created",
+  "status_changed",
+  "note_added",
+  "call_logged",
+  "email_sent",
+];
 
 module.exports = {
   LEAD_ACTIVITY_TYPES,

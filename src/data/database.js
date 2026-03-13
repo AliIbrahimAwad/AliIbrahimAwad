@@ -8,6 +8,40 @@ const { LEAD_ACTIVITY_TYPES, LEAD_STATUSES } = require("../types/models");
 const { toDateOnlyString } = require("../utils/dates");
 const { normalizePhone } = require("../utils/phones");
 
+const DEALER_PIPELINE_STATUSES = ["new", "contacted", "appointment", "negotiation", "sold", "lost"];
+
+function toStoredStatus(status) {
+  const normalized = String(status || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
+  switch (normalized) {
+    case "new_lead":
+      return "new";
+    case "sold":
+      return "won";
+    default:
+      return normalized;
+  }
+}
+
+function fromStoredStatus(status) {
+  return status === "won" ? "sold" : String(status || "new").trim().toLowerCase();
+}
+
+function ensureNumber(value) {
+  return value == null || value === "" ? null : Number(value);
+}
+
+function titleCaseStatus(status) {
+  return String(status || "")
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 const SCHEMA_SQL = `
   PRAGMA foreign_keys = ON;
 
@@ -65,6 +99,18 @@ const SCHEMA_SQL = `
     FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
   );
+
+  CREATE TABLE IF NOT EXISTS activities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_activities_lead_id_created_at ON activities(lead_id, created_at DESC);
 `;
 
 class HttpError extends Error {
@@ -170,9 +216,17 @@ class CrmDatabase {
     this.ensureColumn("leads", "status", "TEXT DEFAULT 'new'");
     this.ensureColumn("leads", "source", "TEXT NOT NULL DEFAULT 'manual'");
     this.ensureColumn("leads", "assigned_to", "INTEGER REFERENCES users(id) ON DELETE SET NULL");
+    this.ensureColumn("leads", "customer_name", "TEXT");
+    this.ensureColumn("leads", "phone", "TEXT");
+    this.ensureColumn("leads", "email", "TEXT");
+    this.ensureColumn("leads", "vehicle_interest", "TEXT");
+    this.ensureColumn("leads", "vehicle_id", "TEXT");
+    this.ensureColumn("leads", "listing_url", "TEXT");
+    this.ensureColumn("leads", "message", "TEXT");
     this.execute("UPDATE leads SET status = 'new' WHERE status IS NULL OR TRIM(status) = ''");
     this.execute("UPDATE leads SET status = 'appointment' WHERE status = 'qualified'");
     this.execute("UPDATE leads SET status = 'negotiation' WHERE status = 'proposal'");
+    this.execute("UPDATE leads SET status = 'won' WHERE status = 'sold'");
     this.execute("UPDATE leads SET source = 'manual' WHERE source IS NULL OR TRIM(source) = ''");
   }
 
@@ -297,6 +351,84 @@ class CrmDatabase {
     `;
   }
 
+  apiLeadSelectSql() {
+    return `
+      SELECT
+        leads.id,
+        leads.source,
+        leads.status,
+        leads.created_at,
+        leads.updated_at,
+        leads.customer_name,
+        leads.phone,
+        leads.email,
+        leads.vehicle_interest,
+        leads.vehicle_id,
+        leads.listing_url,
+        leads.message,
+        leads.next_action,
+        leads.contact_id,
+        leads.assigned_to,
+        contacts.phone AS contact_phone,
+        contacts.email AS contact_email,
+        CASE
+          WHEN leads.customer_name IS NOT NULL AND TRIM(leads.customer_name) <> '' THEN TRIM(leads.customer_name)
+          WHEN TRIM(contacts.first_name || ' ' || contacts.last_name) <> '' THEN TRIM(contacts.first_name || ' ' || contacts.last_name)
+          WHEN contacts.company IS NOT NULL AND TRIM(contacts.company) <> '' THEN contacts.company
+          WHEN leads.email IS NOT NULL AND TRIM(leads.email) <> '' THEN leads.email
+          WHEN contacts.email IS NOT NULL AND TRIM(contacts.email) <> '' THEN contacts.email
+          WHEN leads.phone IS NOT NULL AND TRIM(leads.phone) <> '' THEN leads.phone
+          WHEN contacts.phone IS NOT NULL AND TRIM(contacts.phone) <> '' THEN contacts.phone
+          ELSE 'Lead #' || leads.id
+        END AS display_name,
+        sales_user.name AS assigned_user_name,
+        (
+          SELECT content
+          FROM activities
+          WHERE activities.lead_id = leads.id
+          ORDER BY activities.created_at DESC, activities.id DESC
+          LIMIT 1
+        ) AS latest_activity_content,
+        (
+          SELECT created_at
+          FROM activities
+          WHERE activities.lead_id = leads.id
+          ORDER BY activities.created_at DESC, activities.id DESC
+          LIMIT 1
+        ) AS latest_activity_at
+      FROM leads
+      LEFT JOIN contacts ON contacts.id = leads.contact_id
+      LEFT JOIN users AS sales_user ON sales_user.id = leads.assigned_to
+    `;
+  }
+
+  formatApiLead(row) {
+    const status = fromStoredStatus(row.status);
+    const customerName = row.customer_name || row.display_name || `Lead #${row.id}`;
+    const phone = row.phone || row.contact_phone || null;
+    const email = row.email || row.contact_email || null;
+    const message = row.message || row.latest_activity_content || "";
+
+    return {
+      id: Number(row.id),
+      source: row.source || "manual",
+      customer_name: customerName,
+      phone,
+      email,
+      vehicle_interest: row.vehicle_interest || row.next_action || "Vehicle inquiry",
+      vehicle_id: row.vehicle_id || null,
+      listing_url: row.listing_url || null,
+      message,
+      message_preview: message ? String(message).slice(0, 140) : "",
+      status,
+      status_label: titleCaseStatus(status === "new" ? "new lead" : status),
+      assigned_user_name: row.assigned_user_name || "Unassigned",
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      latest_activity_at: row.latest_activity_at || row.updated_at,
+    };
+  }
+
   listUsers() {
     return this.all(
       `
@@ -353,6 +485,310 @@ class CrmDatabase {
     }
 
     return user;
+  }
+
+  listApiLeads({ limit = 100, offset = 0, status = "", search = "" } = {}, user = null) {
+    const access = this.accessClauseForUser(user);
+    const filters = [access.clause];
+    const params = [...access.params];
+
+    const storedStatus = toStoredStatus(status);
+    if (storedStatus && DEALER_PIPELINE_STATUSES.includes(fromStoredStatus(storedStatus))) {
+      filters.push("leads.status = ?");
+      params.push(storedStatus);
+    }
+
+    if (String(search || "").trim()) {
+      const term = `%${String(search).trim().toLowerCase()}%`;
+      filters.push(`
+        (
+          LOWER(COALESCE(leads.customer_name, '')) LIKE ?
+          OR LOWER(COALESCE(leads.phone, '')) LIKE ?
+          OR LOWER(COALESCE(leads.email, '')) LIKE ?
+          OR LOWER(COALESCE(leads.vehicle_interest, '')) LIKE ?
+          OR LOWER(COALESCE(leads.message, '')) LIKE ?
+        )
+      `);
+      params.push(term, term, term, term, term);
+    }
+
+    const safeLimit = Math.max(1, Math.min(200, Number(limit) || 100));
+    const safeOffset = Math.max(0, Number(offset) || 0);
+
+    const countRow = this.get(
+      `
+        SELECT COUNT(*) AS count
+        FROM leads
+        LEFT JOIN contacts ON contacts.id = leads.contact_id
+        WHERE ${filters.join(" AND ")}
+      `,
+      params
+    );
+
+    const rows = this.all(
+      `
+        ${this.apiLeadSelectSql()}
+        WHERE ${filters.join(" AND ")}
+        ORDER BY leads.created_at DESC, leads.id DESC
+        LIMIT ? OFFSET ?
+      `,
+      [...params, safeLimit, safeOffset]
+    );
+
+    return {
+      items: rows.map((row) => this.formatApiLead(row)),
+      total: Number(countRow.count),
+      limit: safeLimit,
+      offset: safeOffset,
+    };
+  }
+
+  getApiLead(id, user = null) {
+    const access = this.accessClauseForUser(user);
+    const row = this.get(
+      `
+        ${this.apiLeadSelectSql()}
+        WHERE leads.id = ? AND ${access.clause}
+      `,
+      [id, ...access.params]
+    );
+
+    if (!row) {
+      throw new NotFoundError("Lead not found");
+    }
+
+    return this.formatApiLead(row);
+  }
+
+  listLeadActivitiesForApi(leadId) {
+    return this.all(
+      `
+        SELECT id, lead_id, type, content, created_at
+        FROM activities
+        WHERE lead_id = ?
+        ORDER BY created_at DESC, id DESC
+      `,
+      [leadId]
+    ).map((row) => ({
+      id: Number(row.id),
+      lead_id: Number(row.lead_id),
+      type: row.type,
+      content: row.content,
+      created_at: row.created_at,
+    }));
+  }
+
+  createActivity({ lead_id, type, content, created_at = null }) {
+    const timestamp = created_at || new Date().toISOString();
+
+    this.execute(
+      `
+        INSERT INTO activities (lead_id, type, content, created_at)
+        VALUES (?, ?, ?, ?)
+      `,
+      [lead_id, type, content, timestamp]
+    );
+  }
+
+  createApiLead(input) {
+    const now = new Date().toISOString();
+    const storedStatus = toStoredStatus(input.status || "new");
+    const assigneeId = this.getDefaultAssigneeId();
+
+    this.execute(
+      `
+        INSERT INTO leads (
+          source,
+          status,
+          assigned_to,
+          customer_name,
+          phone,
+          email,
+          vehicle_interest,
+          vehicle_id,
+          listing_url,
+          message,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        input.source || "website",
+        storedStatus || "new",
+        assigneeId,
+        input.customer_name || null,
+        input.phone || null,
+        input.email || null,
+        input.vehicle_interest || null,
+        input.vehicle_id || null,
+        input.listing_url || null,
+        input.message || null,
+        now,
+        now,
+      ]
+    );
+
+    const id = this.nextId();
+    this.createActivity({
+      lead_id: id,
+      type: "lead_created",
+      content: `Lead created from ${input.source || "website"}`,
+      created_at: now,
+    });
+    this.save();
+
+    return this.getApiLead(id);
+  }
+
+  updateApiLead(id, input) {
+    this.getApiLead(id);
+    const now = new Date().toISOString();
+    const storedStatus = input.status ? toStoredStatus(input.status) : null;
+
+    this.execute(
+      `
+        UPDATE leads
+        SET
+          source = ?,
+          status = COALESCE(?, status),
+          customer_name = ?,
+          phone = ?,
+          email = ?,
+          vehicle_interest = ?,
+          vehicle_id = ?,
+          listing_url = ?,
+          message = ?,
+          updated_at = ?
+        WHERE id = ?
+      `,
+      [
+        input.source || "website",
+        storedStatus,
+        input.customer_name || null,
+        input.phone || null,
+        input.email || null,
+        input.vehicle_interest || null,
+        input.vehicle_id || null,
+        input.listing_url || null,
+        input.message || null,
+        now,
+        id,
+      ]
+    );
+
+    this.save();
+    return this.getApiLead(id);
+  }
+
+  updateApiLeadStatus(id, status) {
+    const existingLead = this.getApiLead(id);
+    const storedStatus = toStoredStatus(status);
+
+    if (!DEALER_PIPELINE_STATUSES.includes(fromStoredStatus(storedStatus))) {
+      throw new ValidationError("Invalid lead status.");
+    }
+
+    this.execute(
+      `
+        UPDATE leads
+        SET status = ?, updated_at = ?
+        WHERE id = ?
+      `,
+      [storedStatus, new Date().toISOString(), id]
+    );
+
+    this.createActivity({
+      lead_id: id,
+      type: "status_changed",
+      content: `${existingLead.status_label} -> ${titleCaseStatus(fromStoredStatus(storedStatus))}`,
+    });
+    this.save();
+
+    return this.getApiLead(id);
+  }
+
+  getApiLeadWithActivities(id, user = null) {
+    const lead = this.getApiLead(id, user);
+
+    return {
+      lead,
+      activities: this.listLeadActivitiesForApi(id),
+    };
+  }
+
+  getDashboardApiMetrics(user = null) {
+    const access = this.accessClauseForUser(user);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const weekStart = new Date(today);
+    weekStart.setDate(weekStart.getDate() - 6);
+
+    const todayIso = today.toISOString();
+    const weekStartIso = weekStart.toISOString();
+
+    const newLeadsToday = Number(
+      this.get(
+        `
+          SELECT COUNT(*) AS count
+          FROM leads
+          WHERE created_at >= ? AND ${access.clause}
+        `,
+        [todayIso, ...access.params]
+      ).count
+    );
+
+    const leadsThisWeek = Number(
+      this.get(
+        `
+          SELECT COUNT(*) AS count
+          FROM leads
+          WHERE created_at >= ? AND ${access.clause}
+        `,
+        [weekStartIso, ...access.params]
+      ).count
+    );
+
+    const appointmentsScheduled = Number(
+      this.get(
+        `
+          SELECT COUNT(*) AS count
+          FROM leads
+          WHERE status = 'appointment' AND ${access.clause}
+        `,
+        access.params
+      ).count
+    );
+
+    const vehiclesSold = Number(
+      this.get(
+        `
+          SELECT COUNT(*) AS count
+          FROM leads
+          WHERE status = 'won' AND ${access.clause}
+        `,
+        access.params
+      ).count
+    );
+
+    const totalLeads = Number(
+      this.get(
+        `
+          SELECT COUNT(*) AS count
+          FROM leads
+          WHERE ${access.clause}
+        `,
+        access.params
+      ).count
+    );
+
+    return {
+      new_leads_today: newLeadsToday,
+      leads_this_week: leadsThisWeek,
+      appointments_scheduled: appointmentsScheduled,
+      vehicles_sold: vehiclesSold,
+      conversion_rate: totalLeads > 0 ? Number(((vehiclesSold / totalLeads) * 100).toFixed(1)) : 0,
+    };
   }
 
   createUser(input) {

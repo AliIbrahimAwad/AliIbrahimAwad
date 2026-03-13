@@ -4,8 +4,12 @@
   "description": "Local-first CRM MVP built with Express and SQLite",
   "main": "server.js",
   "scripts": {
+    "dev": "nodemon server.js",
     "start": "node server.js",
     "test": "node --test"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
