@@ -104,11 +104,11 @@ function validateLead(payload, contacts = [], assignees = []) {
   return errors;
 }
 
-function getLeadFormContext(req, formData = {}) {
-  const contacts = req.app.locals.db.listContactsForSelect(req.currentUser);
-  const assignees = req.app.locals.db.listSalesUsers();
+async function getLeadFormContext(req, formData = {}) {
+  const contacts = await req.app.locals.db.listContactsForSelect(req.currentUser);
+  const assignees = await req.app.locals.db.listSalesUsers();
   const defaultAssignee =
-    req.currentUser.role === "sales" ? req.currentUser.id : req.app.locals.db.getDefaultAssigneeId();
+    req.currentUser.role === "sales" ? req.currentUser.id : await req.app.locals.db.getDefaultAssigneeId();
 
   return {
     contacts,
@@ -127,7 +127,7 @@ function getLeadFormContext(req, formData = {}) {
   };
 }
 
-function normalizeLeadAssignment(req, payload, existingLead = null) {
+async function normalizeLeadAssignment(req, payload, existingLead = null) {
   if (req.currentUser.role === "sales") {
     return req.currentUser.id;
   }
@@ -140,7 +140,7 @@ function normalizeLeadAssignment(req, payload, existingLead = null) {
     return Number(existingLead.assigned_to);
   }
 
-  return req.app.locals.db.getDefaultAssigneeId();
+  return await req.app.locals.db.getDefaultAssigneeId();
 }
 
 function validateAssignment(assignedTo, assignees = []) {
@@ -155,11 +155,11 @@ function validateAssignment(assignedTo, assignees = []) {
   return "";
 }
 
-function renderLeadDetailResponse(req, res, lead, options = {}) {
-  const contacts = req.app.locals.db.listContactsForSelect(req.currentUser);
-  const notes = req.app.locals.db.listLeadNotes(lead.id);
-  const assignees = canViewAllLeads(req.currentUser) ? req.app.locals.db.listSalesUsers() : [];
-  const activities = req.app.locals.db.listLeadActivities(lead.id);
+async function renderLeadDetailResponse(req, res, lead, options = {}) {
+  const contacts = await req.app.locals.db.listContactsForSelect(req.currentUser);
+  const notes = await req.app.locals.db.listLeadNotes(lead.id);
+  const assignees = canViewAllLeads(req.currentUser) ? await req.app.locals.db.listSalesUsers() : [];
+  const activities = await req.app.locals.db.listLeadActivities(lead.id);
 
   res.status(options.statusCode || 200).send(
     renderLeadDetailPage({
@@ -184,7 +184,7 @@ function registerWebRoutes(app) {
     "/",
     requireAuth,
     asyncHandler(async (req, res) => {
-      const metrics = req.app.locals.db.getDashboardMetrics(req.currentUser);
+      const metrics = await req.app.locals.db.getDashboardMetrics(req.currentUser);
       res.send(renderDashboardPage({ metrics, activePath: req.path, currentUser: req.currentUser }));
     })
   );
@@ -193,7 +193,7 @@ function registerWebRoutes(app) {
     "/contacts",
     requireAuth,
     asyncHandler(async (req, res) => {
-      const contacts = req.app.locals.db.listContacts(req.currentUser);
+      const contacts = await req.app.locals.db.listContacts(req.currentUser);
       res.send(renderContactsListPage({ contacts, activePath: req.path, currentUser: req.currentUser }));
     })
   );
@@ -240,7 +240,7 @@ function registerWebRoutes(app) {
         return;
       }
 
-      const contact = req.app.locals.db.createContact(payload);
+      const contact = await req.app.locals.db.createContact(payload);
       res.redirect(`/contacts/${contact.id}`);
     })
   );
@@ -249,8 +249,8 @@ function registerWebRoutes(app) {
     "/contacts/:id",
     requireAuth,
     asyncHandler(async (req, res) => {
-      const contact = req.app.locals.db.getContact(Number(req.params.id), req.currentUser);
-      const leads = req.app.locals.db.getContactLeads(Number(req.params.id), req.currentUser);
+      const contact = await req.app.locals.db.getContact(Number(req.params.id), req.currentUser);
+      const leads = await req.app.locals.db.getContactLeads(Number(req.params.id), req.currentUser);
       res.send(
         renderContactDetailPage({
           contact,
@@ -266,7 +266,7 @@ function registerWebRoutes(app) {
     "/contacts/:id/edit",
     requireAuth,
     asyncHandler(async (req, res) => {
-      const contact = req.app.locals.db.getContact(Number(req.params.id), req.currentUser);
+      const contact = await req.app.locals.db.getContact(Number(req.params.id), req.currentUser);
       res.send(
         renderContactForm({
           title: "Edit contact",
@@ -292,7 +292,7 @@ function registerWebRoutes(app) {
     requireAuth,
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id);
-      req.app.locals.db.getContact(id, req.currentUser);
+      await req.app.locals.db.getContact(id, req.currentUser);
       const payload = sanitizeContactPayload(req.body);
       const errors = validateContact(payload);
 
@@ -311,7 +311,7 @@ function registerWebRoutes(app) {
         return;
       }
 
-      req.app.locals.db.updateContact(id, payload);
+      await req.app.locals.db.updateContact(id, payload);
       res.redirect(`/contacts/${id}`);
     })
   );
@@ -320,8 +320,8 @@ function registerWebRoutes(app) {
     "/contacts/:id/delete",
     requireAuth,
     asyncHandler(async (req, res) => {
-      req.app.locals.db.getContact(Number(req.params.id), req.currentUser);
-      req.app.locals.db.deleteContact(Number(req.params.id));
+      await req.app.locals.db.getContact(Number(req.params.id), req.currentUser);
+      await req.app.locals.db.deleteContact(Number(req.params.id));
       res.redirect("/contacts");
     })
   );
@@ -330,7 +330,7 @@ function registerWebRoutes(app) {
     "/leads",
     requireAuth,
     asyncHandler(async (req, res) => {
-      const leads = req.app.locals.db.listLeads(req.currentUser);
+      const leads = await req.app.locals.db.listLeads(req.currentUser);
       res.send(renderLeadsListPage({ leads, activePath: req.path, currentUser: req.currentUser }));
     })
   );
@@ -339,7 +339,7 @@ function registerWebRoutes(app) {
     "/leads/new",
     requireAuth,
     asyncHandler(async (req, res) => {
-      const context = getLeadFormContext(req);
+      const context = await getLeadFormContext(req);
       res.send(
         renderLeadForm({
           title: "New lead",
@@ -358,10 +358,10 @@ function registerWebRoutes(app) {
     "/leads",
     requireAuth,
     asyncHandler(async (req, res) => {
-      const context = getLeadFormContext(req, sanitizeLeadPayload(req.body));
+      const context = await getLeadFormContext(req, sanitizeLeadPayload(req.body));
       const payload = {
         ...context.formData,
-        assigned_to: normalizeLeadAssignment(req, context.formData),
+        assigned_to: await normalizeLeadAssignment(req, context.formData),
       };
       const errors = validateLead(payload, context.contacts, context.assignees);
 
@@ -382,7 +382,7 @@ function registerWebRoutes(app) {
         return;
       }
 
-      const lead = req.app.locals.db.createLead(payload);
+      const lead = await req.app.locals.db.createLead(payload);
       res.redirect(`/leads/${lead.id}`);
     })
   );
@@ -392,8 +392,8 @@ function registerWebRoutes(app) {
     requireAuth,
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id);
-      const lead = req.app.locals.db.getLead(id, req.currentUser);
-      renderLeadDetailResponse(req, res, lead);
+      const lead = await req.app.locals.db.getLead(id, req.currentUser);
+      await renderLeadDetailResponse(req, res, lead);
     })
   );
 
@@ -401,8 +401,8 @@ function registerWebRoutes(app) {
     "/leads/:id/edit",
     requireAuth,
     asyncHandler(async (req, res) => {
-      const lead = req.app.locals.db.getLead(Number(req.params.id), req.currentUser);
-      const context = getLeadFormContext(req, {
+      const lead = await req.app.locals.db.getLead(Number(req.params.id), req.currentUser);
+      const context = await getLeadFormContext(req, {
         contact_id: lead.contact_id || "",
         assigned_to: lead.assigned_to || "",
         source: lead.source || "manual",
@@ -431,11 +431,11 @@ function registerWebRoutes(app) {
     requireAuth,
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id);
-      const existingLead = req.app.locals.db.getLead(id, req.currentUser);
-      const context = getLeadFormContext(req, sanitizeLeadPayload(req.body));
+      const existingLead = await req.app.locals.db.getLead(id, req.currentUser);
+      const context = await getLeadFormContext(req, sanitizeLeadPayload(req.body));
       const payload = {
         ...context.formData,
-        assigned_to: normalizeLeadAssignment(req, context.formData, existingLead),
+        assigned_to: await normalizeLeadAssignment(req, context.formData, existingLead),
       };
       const errors = validateLead(payload, context.contacts, context.assignees);
 
@@ -456,7 +456,7 @@ function registerWebRoutes(app) {
         return;
       }
 
-      req.app.locals.db.updateLead(id, payload);
+      await req.app.locals.db.updateLead(id, payload);
       res.redirect(`/leads/${id}`);
     })
   );
@@ -466,7 +466,7 @@ function registerWebRoutes(app) {
     requireAuth,
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id);
-      const lead = req.app.locals.db.getLead(id, req.currentUser);
+      const lead = await req.app.locals.db.getLead(id, req.currentUser);
 
       if (!canViewAllLeads(req.currentUser)) {
         res.status(403).send("Forbidden");
@@ -474,18 +474,18 @@ function registerWebRoutes(app) {
       }
 
       const assignedTo = Number(req.body.salesperson_id || req.body.assigned_to);
-      const assignees = req.app.locals.db.listSalesUsers();
+      const assignees = await req.app.locals.db.listSalesUsers();
       const assignmentError = validateAssignment(assignedTo, assignees);
 
       if (assignmentError) {
-        renderLeadDetailResponse(req, res, lead, {
+        await renderLeadDetailResponse(req, res, lead, {
           assignmentError,
           statusCode: 422,
         });
         return;
       }
 
-      req.app.locals.db.assignLead(id, assignedTo);
+      await req.app.locals.db.assignLead(id, assignedTo);
       res.redirect(`/leads/${id}`);
     })
   );
@@ -495,11 +495,11 @@ function registerWebRoutes(app) {
     requireAuth,
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id);
-      const lead = req.app.locals.db.getLead(id, req.currentUser);
+      const lead = await req.app.locals.db.getLead(id, req.currentUser);
       const payload = sanitizeCommunicationPayload(req.body);
 
       if (!payload.message) {
-        renderLeadDetailResponse(req, res, lead, {
+        await renderLeadDetailResponse(req, res, lead, {
           communicationError: "Message text is required to send an SMS.",
           smsDraft: payload.message,
           statusCode: 422,
@@ -508,7 +508,7 @@ function registerWebRoutes(app) {
       }
 
       if (!lead.contact_phone) {
-        renderLeadDetailResponse(req, res, lead, {
+        await renderLeadDetailResponse(req, res, lead, {
           communicationError: "This lead does not have a phone number for SMS delivery.",
           smsDraft: payload.message,
           statusCode: 422,
@@ -517,7 +517,7 @@ function registerWebRoutes(app) {
       }
 
       await req.app.locals.ringcentral.sendSMS(lead.contact_phone, payload.message);
-      req.app.locals.db.recordLeadActivity({
+      await req.app.locals.db.recordLeadActivity({
         lead_id: id,
         user_id: req.currentUser.id,
         type: "sms",
@@ -532,11 +532,11 @@ function registerWebRoutes(app) {
     requireAuth,
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id);
-      const lead = req.app.locals.db.getLead(id, req.currentUser);
+      const lead = await req.app.locals.db.getLead(id, req.currentUser);
       const payload = sanitizeCommunicationPayload(req.body);
 
       if (!lead.contact_phone) {
-        renderLeadDetailResponse(req, res, lead, {
+        await renderLeadDetailResponse(req, res, lead, {
           communicationError: "This lead does not have a phone number for call logging.",
           callDuration: payload.duration ? String(payload.duration) : "",
           statusCode: 422,
@@ -545,7 +545,7 @@ function registerWebRoutes(app) {
       }
 
       const call = req.app.locals.ringcentral.logCall(lead.contact_phone, payload.duration);
-      req.app.locals.db.recordLeadActivity({
+      await req.app.locals.db.recordLeadActivity({
         lead_id: id,
         user_id: req.currentUser.id,
         type: "call",
@@ -559,8 +559,8 @@ function registerWebRoutes(app) {
     "/leads/:id/delete",
     requireAuth,
     asyncHandler(async (req, res) => {
-      req.app.locals.db.getLead(Number(req.params.id), req.currentUser);
-      req.app.locals.db.deleteLead(Number(req.params.id));
+      await req.app.locals.db.getLead(Number(req.params.id), req.currentUser);
+      await req.app.locals.db.deleteLead(Number(req.params.id));
       res.redirect("/leads");
     })
   );
@@ -570,7 +570,7 @@ function registerWebRoutes(app) {
     requireAuth,
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id);
-      req.app.locals.db.getLead(id, req.currentUser);
+      await req.app.locals.db.getLead(id, req.currentUser);
       const body = String(req.body.body || "").trim();
 
       if (!body) {
@@ -578,7 +578,7 @@ function registerWebRoutes(app) {
         return;
       }
 
-      req.app.locals.db.addLeadNote(id, body, req.currentUser.id);
+      await req.app.locals.db.addLeadNote(id, body, req.currentUser.id);
       res.redirect(`/leads/${id}`);
     })
   );

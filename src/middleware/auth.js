@@ -1,6 +1,6 @@
 const { canManageUsers } = require("../models/user");
 
-function attachCurrentUser(req, res, next) {
+async function attachCurrentUser(req, res, next) {
   const userId = req.session && req.session.userId;
 
   if (!userId) {
@@ -9,7 +9,7 @@ function attachCurrentUser(req, res, next) {
   }
 
   try {
-    req.currentUser = req.app.locals.db.getUser(userId);
+    req.currentUser = await req.app.locals.db.getUser(userId);
     return next();
   } catch (error) {
     req.session.userId = null;

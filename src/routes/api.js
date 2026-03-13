@@ -68,8 +68,7 @@ function registerApiRoutes(app) {
     "/api/leads",
     requireAuth,
     asyncHandler(async (req, res) => {
-      const page = req.app.locals.db.listApiLeads(toPagination(req.query), req.currentUser);
-
+      const page = await req.app.locals.db.listApiLeads(toPagination(req.query), req.currentUser);
       res.json({
         items: page.items,
         pagination: {
@@ -86,7 +85,7 @@ function registerApiRoutes(app) {
     "/api/leads/:id",
     requireAuth,
     asyncHandler(async (req, res) => {
-      const payload = req.app.locals.db.getApiLeadWithActivities(Number(req.params.id), req.currentUser);
+      const payload = await req.app.locals.db.getApiLeadWithActivities(Number(req.params.id), req.currentUser);
       res.json(payload);
     })
   );
@@ -95,7 +94,7 @@ function registerApiRoutes(app) {
     "/api/leads",
     asyncHandler(async (req, res) => {
       const payload = normalizeLeadPayload(req.body);
-      const lead = req.app.locals.db.createApiLead(payload);
+      const lead = await req.app.locals.db.createApiLead(payload);
 
       res.status(201).json(lead);
     })
@@ -110,7 +109,7 @@ function registerApiRoutes(app) {
         throw new ValidationError("A lead status is required.");
       }
 
-      const lead = req.app.locals.db.updateApiLeadStatus(Number(req.params.id), status);
+      const lead = await req.app.locals.db.updateApiLeadStatus(Number(req.params.id), status);
       res.json(lead);
     })
   );
@@ -119,7 +118,7 @@ function registerApiRoutes(app) {
     "/api/leads/:id",
     requireAuth,
     asyncHandler(async (req, res) => {
-      const lead = req.app.locals.db.updateApiLead(Number(req.params.id), normalizeLeadPayload(req.body));
+      const lead = await req.app.locals.db.updateApiLead(Number(req.params.id), normalizeLeadPayload(req.body));
       res.json(lead);
     })
   );
@@ -128,7 +127,7 @@ function registerApiRoutes(app) {
     "/api/dashboard/metrics",
     requireAuth,
     asyncHandler(async (req, res) => {
-      res.json(req.app.locals.db.getDashboardApiMetrics(req.currentUser));
+      res.json(await req.app.locals.db.getDashboardApiMetrics(req.currentUser));
     })
   );
 
@@ -145,20 +144,20 @@ function registerApiRoutes(app) {
         throw new ValidationError("Webhook payload did not include a phone number.");
       }
 
-      const lead = req.app.locals.db.findLeadByPhone(event.phone);
+      const lead = await req.app.locals.db.findLeadByPhone(event.phone);
       if (!lead) {
         res.status(202).json({ matched: false });
         return;
       }
 
-      req.app.locals.db.recordLeadActivity({
+      await req.app.locals.db.recordLeadActivity({
         lead_id: lead.id,
         user_id: event.userId,
         type: event.type,
         content: event.content || (event.type === "sms" ? "RingCentral SMS logged" : "RingCentral call logged"),
       });
 
-      const updatedLead = req.app.locals.db.getLead(lead.id);
+      const updatedLead = await req.app.locals.db.getLead(lead.id);
       res.json({
         matched: true,
         lead_id: updatedLead.id,

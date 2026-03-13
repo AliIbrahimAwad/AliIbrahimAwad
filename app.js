@@ -3,9 +3,10 @@ const session = require("express-session");
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, ".env"), quiet: true });
 
 const { createRingCentralService } = require("./services/ringcentral");
-const { CrmDatabase } = require("./src/data/database");
+const { initializeDatabase } = require("./src/data");
 const { attachCurrentUser } = require("./src/middleware/auth");
 const { registerApiRoutes } = require("./src/routes/api");
 const { registerAuthRoutes } = require("./src/routes/auth");
@@ -33,7 +34,12 @@ function shouldServeReactApp(options = {}) {
 async function createApp(options = {}) {
   const app = express();
   const dbPath = options.dbPath || path.join(__dirname, "data", "crm.sqlite");
-  const db = await CrmDatabase.initialize({ dbPath });
+  const db = await initializeDatabase({
+    dbClient: options.dbClient,
+    dbPath,
+    databaseSsl: options.databaseSsl,
+    databaseUrl: options.databaseUrl,
+  });
   const ringcentral = createRingCentralService(options.ringcentral);
   const frontendDistPath = path.join(__dirname, "frontend", "dist");
   const serveReactApp = shouldServeReactApp(options) && fs.existsSync(frontendDistPath);

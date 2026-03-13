@@ -47,7 +47,7 @@ function registerUserRoutes(app) {
     requireAuth,
     requireAdmin,
     asyncHandler(async (req, res) => {
-      const users = req.app.locals.db.listUsers();
+      const users = await req.app.locals.db.listUsers();
       res.send(renderUsersListPage({ users, currentUser: req.currentUser }));
     })
   );
@@ -95,7 +95,7 @@ function registerUserRoutes(app) {
 
       try {
         const passwordHash = await bcrypt.hash(payload.password, 10);
-        req.app.locals.db.createUser({
+        await req.app.locals.db.createUser({
           name: payload.name,
           email: payload.email,
           password_hash: passwordHash,
@@ -109,7 +109,10 @@ function registerUserRoutes(app) {
             action: "/users",
             formData: payload,
             errors: {
-              form: error.message.includes("UNIQUE") ? "That email is already in use." : "Could not create the user.",
+              form:
+                error.code === "23505" || error.message.includes("UNIQUE")
+                  ? "That email is already in use."
+                  : "Could not create the user.",
             },
             roles: USER_ROLES,
             currentUser: req.currentUser,
@@ -125,7 +128,7 @@ function registerUserRoutes(app) {
     requireAuth,
     requireAdmin,
     asyncHandler(async (req, res) => {
-      const user = req.app.locals.db.getUser(Number(req.params.id));
+      const user = await req.app.locals.db.getUser(Number(req.params.id));
       res.send(
         renderUserForm({
           title: "Edit user",
@@ -150,7 +153,7 @@ function registerUserRoutes(app) {
     requireAdmin,
     asyncHandler(async (req, res) => {
       const userId = Number(req.params.id);
-      req.app.locals.db.getUser(userId);
+      await req.app.locals.db.getUser(userId);
       const payload = sanitizeUserPayload(req.body);
       const errors = validateUserPayload(payload, { requirePassword: false });
 
@@ -171,7 +174,7 @@ function registerUserRoutes(app) {
 
       try {
         const passwordHash = payload.password ? await bcrypt.hash(payload.password, 10) : null;
-        req.app.locals.db.updateUser(userId, {
+        await req.app.locals.db.updateUser(userId, {
           name: payload.name,
           email: payload.email,
           role: payload.role,
@@ -185,7 +188,10 @@ function registerUserRoutes(app) {
             action: `/users/${userId}`,
             formData: payload,
             errors: {
-              form: error.message.includes("UNIQUE") ? "That email is already in use." : "Could not update the user.",
+              form:
+                error.code === "23505" || error.message.includes("UNIQUE")
+                  ? "That email is already in use."
+                  : "Could not update the user.",
             },
             roles: USER_ROLES,
             currentUser: req.currentUser,

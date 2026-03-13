@@ -1,244 +1,154 @@
-const fs = require("fs");
-const path = require("path");
 const bcrypt = require("bcrypt");
-const initSqlJs = require("sql.js");
+const { Pool } = require("pg");
 
+const {
+  CrmDatabase,
+  DEALER_PIPELINE_STATUSES,
+  NotFoundError,
+  UnauthorizedError,
+  ValidationError,
+  fromStoredStatus,
+  titleCaseStatus,
+  toStoredStatus,
+} = require("./database");
 const { canViewAllLeads } = require("../models/user");
 const { LEAD_ACTIVITY_TYPES, LEAD_STATUSES } = require("../types/models");
-const { toDateOnlyString } = require("../utils/dates");
 const { normalizePhone } = require("../utils/phones");
+const { toDateOnlyString } = require("../utils/dates");
 
-const DEALER_PIPELINE_STATUSES = ["new", "contacted", "appointment", "negotiation", "sold", "lost"];
-
-function toStoredStatus(status) {
-  const normalized = String(status || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "_");
-
-  switch (normalized) {
-    case "new_lead":
-      return "new";
-    case "sold":
-      return "won";
-    default:
-      return normalized;
-  }
+function withPgPlaceholders(sql) {
+  let index = 0;
+  return sql.replace(/\?/g, () => `$${++index}`);
 }
 
-function fromStoredStatus(status) {
-  return status === "won" ? "sold" : String(status || "new").trim().toLowerCase();
-}
-
-function ensureNumber(value) {
-  return value == null || value === "" ? null : Number(value);
-}
-
-function titleCaseStatus(status) {
-  return String(status || "")
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-const SCHEMA_SQL = `
-  PRAGMA foreign_keys = ON;
-
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    role TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS contacts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    first_name TEXT NOT NULL DEFAULT '',
-    last_name TEXT NOT NULL DEFAULT '',
-    email TEXT,
-    phone TEXT,
-    company TEXT,
-    job_title TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS leads (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    contact_id INTEGER,
-    source TEXT NOT NULL DEFAULT 'manual',
-    assigned_to INTEGER,
-    status TEXT NOT NULL,
-    priority TEXT,
-    follow_up_date TEXT,
-    next_action TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL,
-    FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS notes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    lead_id INTEGER NOT NULL,
-    body TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS lead_activities (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    lead_id INTEGER NOT NULL,
-    user_id INTEGER,
-    type TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS activities (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    lead_id INTEGER NOT NULL,
-    type TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at DESC);
-  CREATE INDEX IF NOT EXISTS idx_activities_lead_id_created_at ON activities(lead_id, created_at DESC);
-`;
-
-class HttpError extends Error {
-  constructor(message, statusCode) {
-    super(message);
-    this.name = "HttpError";
-    this.statusCode = statusCode;
-  }
-}
-
-class NotFoundError extends HttpError {
-  constructor(message) {
-    super(message, 404);
-    this.name = "NotFoundError";
-  }
-}
-
-class ValidationError extends HttpError {
-  constructor(message) {
-    super(message, 400);
-    this.name = "ValidationError";
-  }
-}
-
-class UnauthorizedError extends HttpError {
-  constructor(message = "Unauthorized") {
-    super(message, 401);
-    this.name = "UnauthorizedError";
-  }
-}
-
-class CrmDatabase {
-  static async initialize({ dbPath }) {
-    const SQL = await initSqlJs({
-      locateFile: (file) => require.resolve(`sql.js/dist/${file}`),
+class PostgresCrmDatabase extends CrmDatabase {
+  static async initialize({ connectionString, ssl = false }) {
+    const pool = new Pool({
+      connectionString,
+      ssl: ssl ? { rejectUnauthorized: false } : undefined,
     });
 
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-    const existing = fs.existsSync(dbPath) ? fs.readFileSync(dbPath) : null;
-    const db = existing ? new SQL.Database(new Uint8Array(existing)) : new SQL.Database();
-    const instance = new CrmDatabase({ db, dbPath });
-
-    instance.runScript(SCHEMA_SQL);
-    instance.applyMigrations();
+    const instance = new PostgresCrmDatabase({ pool });
+    await instance.applyMigrations();
     await instance.seedDefaultUsers();
-    instance.save();
-
     return instance;
   }
 
-  constructor({ db, dbPath }) {
-    this.db = db;
-    this.dbPath = dbPath;
+  constructor({ pool }) {
+    super({ db: null, dbPath: null });
+    this.pool = pool;
   }
 
-  runScript(sql) {
-    this.db.run(sql);
+  async close() {
+    await this.pool.end();
   }
 
-  save() {
-    const data = this.db.export();
-    fs.writeFileSync(this.dbPath, Buffer.from(data));
+  save() {}
+
+  async execute(sql, params = []) {
+    await this.pool.query(withPgPlaceholders(sql), params);
   }
 
-  execute(sql, params = []) {
-    this.db.run(sql, params);
+  async get(sql, params = []) {
+    const result = await this.pool.query(withPgPlaceholders(sql), params);
+    return result.rows[0] || null;
   }
 
-  get(sql, params = []) {
-    const statement = this.db.prepare(sql, params);
-    try {
-      if (!statement.step()) {
-        return null;
-      }
-
-      return statement.getAsObject();
-    } finally {
-      statement.free();
-    }
+  async all(sql, params = []) {
+    const result = await this.pool.query(withPgPlaceholders(sql), params);
+    return result.rows;
   }
 
-  all(sql, params = []) {
-    const statement = this.db.prepare(sql, params);
-    const rows = [];
+  async applyMigrations() {
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id BIGSERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
 
-    try {
-      while (statement.step()) {
-        rows.push(statement.getAsObject());
-      }
-    } finally {
-      statement.free();
-    }
+      CREATE TABLE IF NOT EXISTS contacts (
+        id BIGSERIAL PRIMARY KEY,
+        first_name TEXT NOT NULL DEFAULT '',
+        last_name TEXT NOT NULL DEFAULT '',
+        email TEXT,
+        phone TEXT,
+        company TEXT,
+        job_title TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
 
-    return rows;
-  }
+      CREATE TABLE IF NOT EXISTS leads (
+        id BIGSERIAL PRIMARY KEY,
+        contact_id BIGINT REFERENCES contacts(id) ON DELETE SET NULL,
+        source TEXT NOT NULL DEFAULT 'manual',
+        assigned_to BIGINT REFERENCES users(id) ON DELETE SET NULL,
+        status TEXT NOT NULL,
+        priority TEXT,
+        follow_up_date TEXT,
+        next_action TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        customer_name TEXT,
+        phone TEXT,
+        email TEXT,
+        vehicle_interest TEXT,
+        vehicle_id TEXT,
+        listing_url TEXT,
+        message TEXT
+      );
 
-  nextId() {
-    const row = this.get("SELECT last_insert_rowid() AS id");
-    return Number(row.id);
-  }
+      CREATE TABLE IF NOT EXISTS notes (
+        id BIGSERIAL PRIMARY KEY,
+        lead_id BIGINT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
 
-  applyMigrations() {
-    this.ensureColumn("leads", "status", "TEXT DEFAULT 'new'");
-    this.ensureColumn("leads", "source", "TEXT NOT NULL DEFAULT 'manual'");
-    this.ensureColumn("leads", "assigned_to", "INTEGER REFERENCES users(id) ON DELETE SET NULL");
-    this.ensureColumn("leads", "customer_name", "TEXT");
-    this.ensureColumn("leads", "phone", "TEXT");
-    this.ensureColumn("leads", "email", "TEXT");
-    this.ensureColumn("leads", "vehicle_interest", "TEXT");
-    this.ensureColumn("leads", "vehicle_id", "TEXT");
-    this.ensureColumn("leads", "listing_url", "TEXT");
-    this.ensureColumn("leads", "message", "TEXT");
-    this.execute("UPDATE leads SET status = 'new' WHERE status IS NULL OR TRIM(status) = ''");
-    this.execute("UPDATE leads SET status = 'appointment' WHERE status = 'qualified'");
-    this.execute("UPDATE leads SET status = 'negotiation' WHERE status = 'proposal'");
-    this.execute("UPDATE leads SET status = 'won' WHERE status = 'sold'");
-    this.execute("UPDATE leads SET source = 'manual' WHERE source IS NULL OR TRIM(source) = ''");
-  }
+      CREATE TABLE IF NOT EXISTS lead_activities (
+        id BIGSERIAL PRIMARY KEY,
+        lead_id BIGINT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+        user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+        type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
 
-  ensureColumn(tableName, columnName, definition) {
-    const columns = this.all(`PRAGMA table_info(${tableName})`);
-    if (!columns.some((column) => column.name === columnName)) {
-      this.execute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
-    }
+      CREATE TABLE IF NOT EXISTS activities (
+        id BIGSERIAL PRIMARY KEY,
+        lead_id BIGINT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS assigned_to BIGINT REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS customer_name TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS phone TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS email TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_interest TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_id TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS listing_url TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS message TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_activities_lead_id_created_at ON activities(lead_id, created_at DESC);
+    `);
+
+    await this.execute("UPDATE leads SET status = 'new' WHERE status IS NULL OR TRIM(status) = ''");
+    await this.execute("UPDATE leads SET status = 'appointment' WHERE status = 'qualified'");
+    await this.execute("UPDATE leads SET status = 'negotiation' WHERE status = 'proposal'");
+    await this.execute("UPDATE leads SET status = 'won' WHERE status = 'sold'");
+    await this.execute("UPDATE leads SET source = 'manual' WHERE source IS NULL OR TRIM(source) = ''");
   }
 
   async seedDefaultUsers() {
-    const row = this.get("SELECT COUNT(*) AS count FROM users");
+    const row = await this.get("SELECT COUNT(*) AS count FROM users");
     if (Number(row.count) > 0) {
       return;
     }
@@ -266,7 +176,7 @@ class CrmDatabase {
 
     for (const user of defaults) {
       const passwordHash = await bcrypt.hash(user.password, 10);
-      this.execute(
+      await this.execute(
         `
           INSERT INTO users (name, email, password_hash, role, created_at)
           VALUES (?, ?, ?, ?, ?)
@@ -429,7 +339,7 @@ class CrmDatabase {
     };
   }
 
-  listUsers() {
+  async listUsers() {
     return this.all(
       `
         SELECT id, name, email, role, created_at
@@ -445,8 +355,8 @@ class CrmDatabase {
     );
   }
 
-  getUser(id) {
-    const user = this.get(
+  async getUser(id) {
+    const user = await this.get(
       `
         SELECT id, name, email, password_hash, role, created_at
         FROM users
@@ -462,7 +372,7 @@ class CrmDatabase {
     return user;
   }
 
-  getUserByEmail(email) {
+  async getUserByEmail(email) {
     return this.get(
       `
         SELECT id, name, email, password_hash, role, created_at
@@ -474,7 +384,7 @@ class CrmDatabase {
   }
 
   async authenticateUser(email, password) {
-    const user = this.getUserByEmail(email);
+    const user = await this.getUserByEmail(email);
     if (!user) {
       throw new UnauthorizedError("Invalid email or password.");
     }
@@ -487,7 +397,7 @@ class CrmDatabase {
     return user;
   }
 
-  listApiLeads({ limit = 100, offset = 0, status = "", search = "" } = {}, user = null) {
+  async listApiLeads({ limit = 100, offset = 0, status = "", search = "" } = {}, user = null) {
     const access = this.accessClauseForUser(user);
     const filters = [access.clause];
     const params = [...access.params];
@@ -515,7 +425,7 @@ class CrmDatabase {
     const safeLimit = Math.max(1, Math.min(200, Number(limit) || 100));
     const safeOffset = Math.max(0, Number(offset) || 0);
 
-    const countRow = this.get(
+    const countRow = await this.get(
       `
         SELECT COUNT(*) AS count
         FROM leads
@@ -525,7 +435,7 @@ class CrmDatabase {
       params
     );
 
-    const rows = this.all(
+    const rows = await this.all(
       `
         ${this.apiLeadSelectSql()}
         WHERE ${filters.join(" AND ")}
@@ -543,9 +453,9 @@ class CrmDatabase {
     };
   }
 
-  getApiLead(id, user = null) {
+  async getApiLead(id, user = null) {
     const access = this.accessClauseForUser(user);
-    const row = this.get(
+    const row = await this.get(
       `
         ${this.apiLeadSelectSql()}
         WHERE leads.id = ? AND ${access.clause}
@@ -560,8 +470,8 @@ class CrmDatabase {
     return this.formatApiLead(row);
   }
 
-  listLeadActivitiesForApi(leadId) {
-    return this.all(
+  async listLeadActivitiesForApi(leadId) {
+    const rows = await this.all(
       `
         SELECT id, lead_id, type, content, created_at
         FROM activities
@@ -569,7 +479,9 @@ class CrmDatabase {
         ORDER BY created_at DESC, id DESC
       `,
       [leadId]
-    ).map((row) => ({
+    );
+
+    return rows.map((row) => ({
       id: Number(row.id),
       lead_id: Number(row.lead_id),
       type: row.type,
@@ -578,10 +490,10 @@ class CrmDatabase {
     }));
   }
 
-  createActivity({ lead_id, type, content, created_at = null }) {
+  async createActivity({ lead_id, type, content, created_at = null }) {
     const timestamp = created_at || new Date().toISOString();
 
-    this.execute(
+    await this.execute(
       `
         INSERT INTO activities (lead_id, type, content, created_at)
         VALUES (?, ?, ?, ?)
@@ -590,12 +502,12 @@ class CrmDatabase {
     );
   }
 
-  createApiLead(input) {
+  async createApiLead(input) {
     const now = new Date().toISOString();
     const storedStatus = toStoredStatus(input.status || "new");
-    const assigneeId = this.getDefaultAssigneeId();
+    const assigneeId = await this.getDefaultAssigneeId();
 
-    this.execute(
+    const row = await this.get(
       `
         INSERT INTO leads (
           source,
@@ -611,6 +523,7 @@ class CrmDatabase {
           created_at,
           updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
       `,
       [
         input.source || "website",
@@ -628,24 +541,22 @@ class CrmDatabase {
       ]
     );
 
-    const id = this.nextId();
-    this.createActivity({
-      lead_id: id,
+    await this.createActivity({
+      lead_id: row.id,
       type: "lead_created",
       content: `Lead created from ${input.source || "website"}`,
       created_at: now,
     });
-    this.save();
 
-    return this.getApiLead(id);
+    return this.getApiLead(row.id);
   }
 
-  updateApiLead(id, input) {
-    this.getApiLead(id);
+  async updateApiLead(id, input) {
+    await this.getApiLead(id);
     const now = new Date().toISOString();
     const storedStatus = input.status ? toStoredStatus(input.status) : null;
 
-    this.execute(
+    await this.execute(
       `
         UPDATE leads
         SET
@@ -676,19 +587,18 @@ class CrmDatabase {
       ]
     );
 
-    this.save();
     return this.getApiLead(id);
   }
 
-  updateApiLeadStatus(id, status) {
-    const existingLead = this.getApiLead(id);
+  async updateApiLeadStatus(id, status) {
+    const existingLead = await this.getApiLead(id);
     const storedStatus = toStoredStatus(status);
 
     if (!DEALER_PIPELINE_STATUSES.includes(fromStoredStatus(storedStatus))) {
       throw new ValidationError("Invalid lead status.");
     }
 
-    this.execute(
+    await this.execute(
       `
         UPDATE leads
         SET status = ?, updated_at = ?
@@ -697,26 +607,25 @@ class CrmDatabase {
       [storedStatus, new Date().toISOString(), id]
     );
 
-    this.createActivity({
+    await this.createActivity({
       lead_id: id,
       type: "status_changed",
       content: `${existingLead.status_label} -> ${titleCaseStatus(fromStoredStatus(storedStatus))}`,
     });
-    this.save();
 
     return this.getApiLead(id);
   }
 
-  getApiLeadWithActivities(id, user = null) {
-    const lead = this.getApiLead(id, user);
+  async getApiLeadWithActivities(id, user = null) {
+    const lead = await this.getApiLead(id, user);
 
     return {
       lead,
-      activities: this.listLeadActivitiesForApi(id),
+      activities: await this.listLeadActivitiesForApi(id),
     };
   }
 
-  getDashboardApiMetrics(user = null) {
+  async getDashboardApiMetrics(user = null) {
     const access = this.accessClauseForUser(user);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -728,57 +637,67 @@ class CrmDatabase {
     const weekStartIso = weekStart.toISOString();
 
     const newLeadsToday = Number(
-      this.get(
-        `
-          SELECT COUNT(*) AS count
-          FROM leads
-          WHERE created_at >= ? AND ${access.clause}
-        `,
-        [todayIso, ...access.params]
+      (
+        await this.get(
+          `
+            SELECT COUNT(*) AS count
+            FROM leads
+            WHERE created_at >= ? AND ${access.clause}
+          `,
+          [todayIso, ...access.params]
+        )
       ).count
     );
 
     const leadsThisWeek = Number(
-      this.get(
-        `
-          SELECT COUNT(*) AS count
-          FROM leads
-          WHERE created_at >= ? AND ${access.clause}
-        `,
-        [weekStartIso, ...access.params]
+      (
+        await this.get(
+          `
+            SELECT COUNT(*) AS count
+            FROM leads
+            WHERE created_at >= ? AND ${access.clause}
+          `,
+          [weekStartIso, ...access.params]
+        )
       ).count
     );
 
     const appointmentsScheduled = Number(
-      this.get(
-        `
-          SELECT COUNT(*) AS count
-          FROM leads
-          WHERE status = 'appointment' AND ${access.clause}
-        `,
-        access.params
+      (
+        await this.get(
+          `
+            SELECT COUNT(*) AS count
+            FROM leads
+            WHERE status = 'appointment' AND ${access.clause}
+          `,
+          access.params
+        )
       ).count
     );
 
     const vehiclesSold = Number(
-      this.get(
-        `
-          SELECT COUNT(*) AS count
-          FROM leads
-          WHERE status = 'won' AND ${access.clause}
-        `,
-        access.params
+      (
+        await this.get(
+          `
+            SELECT COUNT(*) AS count
+            FROM leads
+            WHERE status = 'won' AND ${access.clause}
+          `,
+          access.params
+        )
       ).count
     );
 
     const totalLeads = Number(
-      this.get(
-        `
-          SELECT COUNT(*) AS count
-          FROM leads
-          WHERE ${access.clause}
-        `,
-        access.params
+      (
+        await this.get(
+          `
+            SELECT COUNT(*) AS count
+            FROM leads
+            WHERE ${access.clause}
+          `,
+          access.params
+        )
       ).count
     );
 
@@ -791,21 +710,21 @@ class CrmDatabase {
     };
   }
 
-  createUser(input) {
-    this.execute(
+  async createUser(input) {
+    const row = await this.get(
       `
         INSERT INTO users (name, email, password_hash, role, created_at)
         VALUES (?, ?, ?, ?, ?)
+        RETURNING id
       `,
       [input.name, input.email.toLowerCase(), input.password_hash, input.role, new Date().toISOString()]
     );
-    const id = this.nextId();
-    this.save();
-    return this.getUser(id);
+
+    return this.getUser(row.id);
   }
 
-  updateUser(id, input) {
-    this.getUser(id);
+  async updateUser(id, input) {
+    await this.getUser(id);
     const fields = ["name = ?", "email = ?", "role = ?"];
     const params = [input.name, input.email.toLowerCase(), input.role];
 
@@ -815,7 +734,7 @@ class CrmDatabase {
     }
 
     params.push(id);
-    this.execute(
+    await this.execute(
       `
         UPDATE users
         SET ${fields.join(", ")}
@@ -823,11 +742,11 @@ class CrmDatabase {
       `,
       params
     );
-    this.save();
+
     return this.getUser(id);
   }
 
-  listSalesUsers() {
+  async listSalesUsers() {
     return this.all(
       `
         SELECT id, name, email, role, created_at
@@ -838,7 +757,7 @@ class CrmDatabase {
     );
   }
 
-  getAssignableSalesUser() {
+  async getAssignableSalesUser() {
     return this.get(
       `
         SELECT id, name, email, role, created_at
@@ -850,7 +769,7 @@ class CrmDatabase {
     );
   }
 
-  listContacts() {
+  async listContacts() {
     return this.all(
       `
         SELECT
@@ -869,15 +788,16 @@ class CrmDatabase {
     );
   }
 
-  listContactsForSelect() {
-    return this.listContacts().map((contact) => ({
+  async listContactsForSelect() {
+    const contacts = await this.listContacts();
+    return contacts.map((contact) => ({
       ...contact,
       display_name: this.displayContactName(contact),
     }));
   }
 
-  getContact(id) {
-    const contact = this.get(
+  async getContact(id) {
+    const contact = await this.get(
       `
         SELECT
           id,
@@ -902,7 +822,7 @@ class CrmDatabase {
     return contact;
   }
 
-  getContactLeads(contactId, user) {
+  async getContactLeads(contactId, user) {
     const access = this.accessClauseForUser(user);
     return this.all(
       `
@@ -914,9 +834,9 @@ class CrmDatabase {
     );
   }
 
-  createContact(input) {
+  async createContact(input) {
     const now = new Date().toISOString();
-    this.execute(
+    const row = await this.get(
       `
         INSERT INTO contacts (
           first_name,
@@ -928,6 +848,7 @@ class CrmDatabase {
           created_at,
           updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
       `,
       [
         input.first_name,
@@ -940,14 +861,13 @@ class CrmDatabase {
         now,
       ]
     );
-    const id = this.nextId();
-    this.save();
-    return this.getContact(id);
+
+    return this.getContact(row.id);
   }
 
-  updateContact(id, input) {
-    this.getContact(id);
-    this.execute(
+  async updateContact(id, input) {
+    await this.getContact(id);
+    await this.execute(
       `
         UPDATE contacts
         SET
@@ -971,17 +891,16 @@ class CrmDatabase {
         id,
       ]
     );
-    this.save();
+
     return this.getContact(id);
   }
 
-  deleteContact(id) {
-    this.getContact(id);
-    this.execute("DELETE FROM contacts WHERE id = ?", [id]);
-    this.save();
+  async deleteContact(id) {
+    await this.getContact(id);
+    await this.execute("DELETE FROM contacts WHERE id = ?", [id]);
   }
 
-  listLeads(user) {
+  async listLeads(user) {
     const access = this.accessClauseForUser(user);
     return this.all(
       `
@@ -996,9 +915,9 @@ class CrmDatabase {
     );
   }
 
-  getLead(id, user) {
+  async getLead(id, user) {
     const access = this.accessClauseForUser(user);
-    const lead = this.get(
+    const lead = await this.get(
       `
         ${this.leadSelectSql()}
         WHERE leads.id = ? AND ${access.clause}
@@ -1013,15 +932,15 @@ class CrmDatabase {
     return lead;
   }
 
-  createLead(input) {
-    const assigneeId = input.assigned_to || this.getDefaultAssigneeId();
+  async createLead(input) {
+    const assigneeId = input.assigned_to || (await this.getDefaultAssigneeId());
     const now = new Date().toISOString();
 
     if (!assigneeId) {
       throw new ValidationError("At least one sales user is required before creating leads.");
     }
 
-    this.execute(
+    const row = await this.get(
       `
         INSERT INTO leads (
           contact_id,
@@ -1034,6 +953,7 @@ class CrmDatabase {
           created_at,
           updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
       `,
       [
         input.contact_id,
@@ -1047,14 +967,13 @@ class CrmDatabase {
         now,
       ]
     );
-    const id = this.nextId();
-    this.save();
-    return this.getLead(id);
+
+    return this.getLead(row.id);
   }
 
-  updateLead(id, input) {
-    this.getLead(id);
-    this.execute(
+  async updateLead(id, input) {
+    await this.getLead(id);
+    await this.execute(
       `
         UPDATE leads
         SET
@@ -1080,13 +999,13 @@ class CrmDatabase {
         id,
       ]
     );
-    this.save();
+
     return this.getLead(id);
   }
 
-  assignLead(id, assignedTo) {
-    this.getLead(id);
-    this.execute(
+  async assignLead(id, assignedTo) {
+    await this.getLead(id);
+    await this.execute(
       `
         UPDATE leads
         SET
@@ -1096,17 +1015,17 @@ class CrmDatabase {
       `,
       [assignedTo, new Date().toISOString(), id]
     );
-    this.save();
+
     return this.getLead(id);
   }
 
-  updateLeadStatusIfNew(id, status = "contacted") {
-    const lead = this.getLead(id);
+  async updateLeadStatusIfNew(id, status = "contacted") {
+    const lead = await this.getLead(id);
     if (lead.status !== "new") {
       return lead;
     }
 
-    this.execute(
+    await this.execute(
       `
         UPDATE leads
         SET
@@ -1116,17 +1035,16 @@ class CrmDatabase {
       `,
       [status, new Date().toISOString(), id]
     );
-    this.save();
+
     return this.getLead(id);
   }
 
-  deleteLead(id) {
-    this.getLead(id);
-    this.execute("DELETE FROM leads WHERE id = ?", [id]);
-    this.save();
+  async deleteLead(id) {
+    await this.getLead(id);
+    await this.execute("DELETE FROM leads WHERE id = ?", [id]);
   }
 
-  listLeadNotes(leadId) {
+  async listLeadNotes(leadId) {
     return this.all(
       `
         SELECT id, lead_id, body, created_at
@@ -1138,32 +1056,32 @@ class CrmDatabase {
     );
   }
 
-  addLeadNote(leadId, body, userId = null) {
-    this.getLead(leadId);
-    this.execute(
+  async addLeadNote(leadId, body, userId = null) {
+    await this.getLead(leadId);
+    await this.execute(
       `
         INSERT INTO notes (lead_id, body, created_at)
         VALUES (?, ?, ?)
       `,
       [leadId, body, new Date().toISOString()]
     );
-    this.createLeadActivity({
+    await this.createLeadActivity({
       lead_id: leadId,
       user_id: userId,
       type: "note",
       content: body,
     });
-    this.save();
+
     return this.listLeadNotes(leadId);
   }
 
-  createLeadActivity(input) {
+  async createLeadActivity(input) {
     const type = String(input.type || "").trim().toLowerCase();
     if (!LEAD_ACTIVITY_TYPES.includes(type)) {
       throw new ValidationError("Invalid lead activity type.");
     }
 
-    this.execute(
+    await this.execute(
       `
         INSERT INTO lead_activities (lead_id, user_id, type, content, created_at)
         VALUES (?, ?, ?, ?, ?)
@@ -1178,9 +1096,9 @@ class CrmDatabase {
     );
   }
 
-  recordLeadActivity({ lead_id, user_id = null, type, content, created_at = null }) {
-    this.getLead(lead_id);
-    this.createLeadActivity({
+  async recordLeadActivity({ lead_id, user_id = null, type, content, created_at = null }) {
+    await this.getLead(lead_id);
+    await this.createLeadActivity({
       lead_id,
       user_id,
       type,
@@ -1189,14 +1107,13 @@ class CrmDatabase {
     });
 
     if (type === "sms" || type === "call") {
-      this.updateLeadStatusIfNew(lead_id, "contacted");
+      await this.updateLeadStatusIfNew(lead_id, "contacted");
     }
 
-    this.save();
     return this.listLeadActivities(lead_id);
   }
 
-  listLeadActivities(leadId) {
+  async listLeadActivities(leadId) {
     return this.all(
       `
         ${this.activitySelectSql()}
@@ -1207,7 +1124,7 @@ class CrmDatabase {
     );
   }
 
-  listRecentActivities(user, limit = 8) {
+  async listRecentActivities(user, limit = 8) {
     const access = this.accessClauseForUser(user);
     return this.all(
       `
@@ -1220,13 +1137,13 @@ class CrmDatabase {
     );
   }
 
-  findLeadByPhone(phone) {
+  async findLeadByPhone(phone) {
     const normalizedPhone = normalizePhone(phone);
     if (!normalizedPhone) {
       return null;
     }
 
-    const leads = this.all(
+    const leads = await this.all(
       `
         ${this.leadSelectSql()}
         WHERE contacts.phone IS NOT NULL AND TRIM(contacts.phone) <> ''
@@ -1237,78 +1154,90 @@ class CrmDatabase {
     return leads.find((lead) => normalizePhone(lead.contact_phone) === normalizedPhone) || null;
   }
 
-  getDashboardMetrics(user) {
+  async getDashboardMetrics(user) {
     const access = this.accessClauseForUser(user);
     const today = toDateOnlyString();
 
     const totalLeads = Number(
-      this.get(
-        `
-          SELECT COUNT(*) AS count
-          FROM leads
-          WHERE ${access.clause}
-        `,
-        access.params
+      (
+        await this.get(
+          `
+            SELECT COUNT(*) AS count
+            FROM leads
+            WHERE ${access.clause}
+          `,
+          access.params
+        )
       ).count
     );
 
-    const statusCounts = LEAD_STATUSES.map((status) => ({
-      status,
-      count: Number(
-        this.get(
-          `
-            SELECT COUNT(*) AS count
-            FROM leads
-            WHERE status = ? AND ${access.clause}
-          `,
-          [status, ...access.params]
-        ).count
-      ),
-    }));
+    const statusCounts = await Promise.all(
+      LEAD_STATUSES.map(async (status) => ({
+        status,
+        count: Number(
+          (
+            await this.get(
+              `
+                SELECT COUNT(*) AS count
+                FROM leads
+                WHERE status = ? AND ${access.clause}
+              `,
+              [status, ...access.params]
+            )
+          ).count
+        ),
+      }))
+    );
 
     const followUps = {
       overdue: Number(
-        this.get(
-          `
-            SELECT COUNT(*) AS count
-            FROM leads
-            WHERE follow_up_date IS NOT NULL
-              AND follow_up_date <> ''
-              AND follow_up_date < ?
-              AND ${access.clause}
-          `,
-          [today, ...access.params]
+        (
+          await this.get(
+            `
+              SELECT COUNT(*) AS count
+              FROM leads
+              WHERE follow_up_date IS NOT NULL
+                AND follow_up_date <> ''
+                AND follow_up_date < ?
+                AND ${access.clause}
+            `,
+            [today, ...access.params]
+          )
         ).count
       ),
       today: Number(
-        this.get(
-          `
-            SELECT COUNT(*) AS count
-            FROM leads
-            WHERE follow_up_date IS NOT NULL
-              AND follow_up_date <> ''
-              AND follow_up_date = ?
-              AND ${access.clause}
-          `,
-          [today, ...access.params]
+        (
+          await this.get(
+            `
+              SELECT COUNT(*) AS count
+              FROM leads
+              WHERE follow_up_date IS NOT NULL
+                AND follow_up_date <> ''
+                AND follow_up_date = ?
+                AND ${access.clause}
+            `,
+            [today, ...access.params]
+          )
         ).count
       ),
       upcoming: Number(
-        this.get(
-          `
-            SELECT COUNT(*) AS count
-            FROM leads
-            WHERE follow_up_date IS NOT NULL
-              AND follow_up_date <> ''
-              AND follow_up_date > ?
-              AND ${access.clause}
-          `,
-          [today, ...access.params]
+        (
+          await this.get(
+            `
+              SELECT COUNT(*) AS count
+              FROM leads
+              WHERE follow_up_date IS NOT NULL
+                AND follow_up_date <> ''
+                AND follow_up_date > ?
+                AND ${access.clause}
+            `,
+            [today, ...access.params]
+          )
         ).count
       ),
     };
 
-    const upcomingLeads = this.all(
+    const upcomingLeads = await this.all(
       `
         ${this.leadSelectSql()}
         WHERE leads.follow_up_date IS NOT NULL
@@ -1321,25 +1250,27 @@ class CrmDatabase {
     );
 
     const leadsPerSalesperson = canViewAllLeads(user)
-      ? this.all(
-          `
-            SELECT
-              users.id,
-              users.name,
-              COUNT(leads.id) AS count
-            FROM users
-            LEFT JOIN leads ON leads.assigned_to = users.id
-            WHERE users.role = 'sales'
-            GROUP BY users.id, users.name
-            ORDER BY LOWER(users.name) ASC
-          `
+      ? (
+          await this.all(
+            `
+              SELECT
+                users.id,
+                users.name,
+                COUNT(leads.id) AS count
+              FROM users
+              LEFT JOIN leads ON leads.assigned_to = users.id
+              WHERE users.role = 'sales'
+              GROUP BY users.id, users.name
+              ORDER BY LOWER(users.name) ASC
+            `
+          )
         ).map((row) => ({
           ...row,
           count: Number(row.count),
         }))
       : [];
 
-    const recentActivities = this.listRecentActivities(user);
+    const recentActivities = await this.listRecentActivities(user);
 
     return {
       followUps,
@@ -1351,25 +1282,12 @@ class CrmDatabase {
     };
   }
 
-  getDefaultAssigneeId() {
-    const user = this.getAssignableSalesUser();
+  async getDefaultAssigneeId() {
+    const user = await this.getAssignableSalesUser();
     return user ? Number(user.id) : null;
-  }
-
-  displayContactName(contact) {
-    const name = `${contact.first_name || ""} ${contact.last_name || ""}`.trim();
-    return name || contact.company || contact.email || contact.phone || `Contact #${contact.id}`;
   }
 }
 
 module.exports = {
-  CrmDatabase,
-  DEALER_PIPELINE_STATUSES,
-  fromStoredStatus,
-  HttpError,
-  NotFoundError,
-  titleCaseStatus,
-  toStoredStatus,
-  UnauthorizedError,
-  ValidationError,
+  PostgresCrmDatabase,
 };
