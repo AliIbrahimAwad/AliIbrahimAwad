@@ -1,5 +1,6 @@
 const express = require("express");
 const session = require("express-session");
+const http = require("http");
 const path = require("path");
 
 const { createRingCentralService } = require("./services/ringcentral");
@@ -102,8 +103,11 @@ async function startServer(options = {}) {
   const app = await createApp(options);
   const port = options.port || Number(process.env.PORT) || 3000;
 
-  return new Promise((resolve) => {
-    const server = app.listen(port, () => {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer(app);
+
+    server.once("error", reject);
+    server.listen(port, () => {
       console.log(`CRM listening on http://localhost:${port}`);
       resolve({ app, server });
     });
