@@ -48,6 +48,33 @@ SourceUrl:
   assert.match(lead.vehicle_interest, /Ram 2500/);
 });
 
+test("parses AutoTrader CARFAX request emails", () => {
+  const text = `
+A potential customer has viewed your ad on www.autotrader.ca and is requesting a CARFAX Canada report on the vehicle. Please send the CARFAX Canada report to: saifhanoudi11@yahoo.com, Phone: 6479658360.
+
+Your Mercedes-Benz C-Class 2017 (Stock #: D9770) ad:
+https://www.autotrader.ca/go/5-69458424
+
+To purchase a CARFAX Canada report, visit:
+https://www.carfax.ca/orderform.aspx?vin=55SWF6EB0HU180615&report=claims
+`;
+
+  const lead = parseAutoTraderEmail(text, {
+    from: {
+      emailAddress: {
+        address: "no-reply@trader.ca",
+      },
+    },
+  });
+
+  assert.equal(lead.source, "autotrader");
+  assert.equal(lead.email, "saifhanoudi11@yahoo.com");
+  assert.equal(lead.phone, "6479658360");
+  assert.equal(lead.stock_number, "D9770");
+  assert.match(lead.vehicle_interest, /Mercedes-Benz C-Class 2017/);
+  assert.equal(lead.lead_type, "carfax_request");
+});
+
 test("parses CarGurus lead emails", () => {
   const text = `
 Lead Submission from CarGurus

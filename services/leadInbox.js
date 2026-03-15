@@ -35,6 +35,10 @@ function cleanValue(value) {
   return normalized || null;
 }
 
+function cleanPhone(value) {
+  return cleanValue(value ? String(value).replace(/[.,;:]+$/, "") : "");
+}
+
 function getSenderEmail(message = {}) {
   return String(message.from?.emailAddress?.address || "").trim().toLowerCase();
 }
@@ -84,10 +88,37 @@ function detectLeadSource(message, text) {
 }
 
 function parseAutoTraderEmail(text, message = {}) {
+  const carfaxMatch = text.match(
+    /Please send the CARFAX Canada report to:\s*([^\s,]+)[,\s]+Phone:\s*([+\d(). -]+)/i
+  );
+  const vehicleLineMatch = text.match(/Your\s+(.+?)\s+\(Stock #:\s*([^)]+)\)\s+ad:/i);
+  const listingUrlMatch = text.match(/https?:\/\/www\.autotrader\.ca\/[^\s]+/i);
+  const carfaxUrlMatch = text.match(/https?:\/\/www\.carfax\.ca\/[^\s]+/i);
+
+  if (carfaxMatch || vehicleLineMatch) {
+    return {
+      source: "autotrader",
+      customer_name: null,
+      phone: cleanPhone(carfaxMatch ? carfaxMatch[2] : ""),
+      email: cleanValue(carfaxMatch ? carfaxMatch[1] : ""),
+      vehicle_interest: cleanValue(vehicleLineMatch ? vehicleLineMatch[1] : ""),
+      vehicle_id: null,
+      listing_url: cleanValue(listingUrlMatch ? listingUrlMatch[0] : ""),
+      message: cleanValue(
+        carfaxUrlMatch
+          ? `Requested a CARFAX Canada report. Purchase link: ${carfaxUrlMatch[0]}`
+          : "Requested a CARFAX Canada report."
+      ),
+      stock_number: cleanValue(vehicleLineMatch ? vehicleLineMatch[2] : ""),
+      lead_type: "carfax_request",
+      sender: getSenderEmail(message),
+    };
+  }
+
   return {
     source: "autotrader",
     customer_name: getField(text, "Name"),
-    phone: getField(text, "Phone"),
+    phone: cleanPhone(getField(text, "Phone")),
     email: getField(text, "Email"),
     vehicle_interest: combineVehicle([
       getField(text, "Year"),
@@ -111,7 +142,7 @@ function parseCarGurusEmail(text, message = {}) {
   return {
     source: "cargurus",
     customer_name: cleanValue([firstName, lastName].filter(Boolean).join(" ")),
-    phone: getField(text, "Telephone"),
+    phone: cleanPhone(getField(text, "Telephone")),
     email: getField(text, "Email"),
     vehicle_interest: getField(text, "Vehicle"),
     vehicle_id: getField(text, "VIN"),
@@ -136,7 +167,7 @@ function parseWebsiteLeadEmail(text, message = {}) {
   return {
     source: "website",
     customer_name: getField(text, "Full Name"),
-    phone: getField(text, "Phone Number"),
+    phone: cleanPhone(getField(text, "Phone Number")),
     email: getField(text, "Email"),
     vehicle_interest: derivedVehicle,
     vehicle_id: null,
