@@ -80,8 +80,17 @@ async function main() {
     "SELECT id, lead_id, user_id, type, content, created_at FROM lead_activities ORDER BY id ASC"
   );
   const activities = source.all("SELECT id, lead_id, type, content, created_at FROM activities ORDER BY id ASC");
+  const importedMessages = source.all(
+    `
+      SELECT id, external_id, source, lead_id, subject, sender, received_at, status, matched_reason, created_at
+      FROM imported_messages
+      ORDER BY id ASC
+    `
+  );
 
-  await target.execute("TRUNCATE activities, lead_activities, notes, leads, contacts, users RESTART IDENTITY CASCADE");
+  await target.execute(
+    "TRUNCATE imported_messages, activities, lead_activities, notes, leads, contacts, users RESTART IDENTITY CASCADE"
+  );
 
   await copyTable(target, "users", users);
   await copyTable(target, "contacts", contacts);
@@ -89,6 +98,7 @@ async function main() {
   await copyTable(target, "notes", notes);
   await copyTable(target, "lead_activities", leadActivities);
   await copyTable(target, "activities", activities);
+  await copyTable(target, "imported_messages", importedMessages);
 
   await resetSequence(target, "users");
   await resetSequence(target, "contacts");
@@ -96,6 +106,7 @@ async function main() {
   await resetSequence(target, "notes");
   await resetSequence(target, "lead_activities");
   await resetSequence(target, "activities");
+  await resetSequence(target, "imported_messages");
 
   console.log("Migration complete.");
   console.log(`Users: ${users.length}`);
@@ -104,6 +115,7 @@ async function main() {
   console.log(`Notes: ${notes.length}`);
   console.log(`Lead activities: ${leadActivities.length}`);
   console.log(`Activities: ${activities.length}`);
+  console.log(`Imported messages: ${importedMessages.length}`);
 
   if (typeof target.close === "function") {
     await target.close();

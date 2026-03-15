@@ -126,6 +126,19 @@ class PostgresCrmDatabase extends CrmDatabase {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS imported_messages (
+        id BIGSERIAL PRIMARY KEY,
+        external_id TEXT NOT NULL UNIQUE,
+        source TEXT NOT NULL,
+        lead_id BIGINT REFERENCES leads(id) ON DELETE SET NULL,
+        subject TEXT,
+        sender TEXT,
+        received_at TEXT,
+        status TEXT NOT NULL,
+        matched_reason TEXT,
+        created_at TEXT NOT NULL
+      );
+
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS assigned_to BIGINT REFERENCES users(id) ON DELETE SET NULL;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS customer_name TEXT;
@@ -138,6 +151,7 @@ class PostgresCrmDatabase extends CrmDatabase {
 
       CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_activities_lead_id_created_at ON activities(lead_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_imported_messages_external_id ON imported_messages(external_id);
     `);
 
     await this.execute("UPDATE leads SET status = 'new' WHERE status IS NULL OR TRIM(status) = ''");
@@ -1285,6 +1299,91 @@ class PostgresCrmDatabase extends CrmDatabase {
   async getDefaultAssigneeId() {
     const user = await this.getAssignableSalesUser();
     return user ? Number(user.id) : null;
+  }
+
+  async getImportedMessageByExternalId(externalId) {
+    return this.get(
+      `
+        SELECT id, external_id, source, lead_id, subject, sender, received_at, status, matched_reason, created_at
+        FROM imported_messages
+        WHERE external_id = ?
+      `,
+      [externalId]
+    );
+  }
+
+  async recordImportedMessage(input) {
+    await this.execute(
+      `
+        INSERT INTO imported_messages (
+          external_id,
+          source,
+          lead_id,
+          subject,
+          sender,
+          received_at,
+          status,
+          matched_reason,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        input.external_id,
+        input.source,
+        input.lead_id || null,
+        input.subject || null,
+        input.sender || null,
+        input.received_at || null,
+        input.status || "imported",
+        input.matched_reason || null,
+        input.created_at || new Date().toISOString(),
+      ]
+    );
+
+    return this.getImportedMessageByExternalId(input.external_id);
+  }
+
+  async findLeadDuplicate(input = {}) {
+    const email = String(input.email || "").trim().toLowerCase();
+    const phone = normalizePhone(input.phone);
+    const customerName = String(input.customer_name || "").trim().toLowerCase();
+    const vehicleInterest = String(input.vehicle_interest || "").trim().toLowerCase();
+
+    const rows = await this.all(
+      `
+        ${this.apiLeadSelectSql()}
+        ORDER BY leads.updated_at DESC, leads.id DESC
+      `
+    );
+    const leads = rows.map((row) => this.formatApiLead(row));
+
+    if (email) {
+      const emailMatch = leads.find((lead) => String(lead.email || "").trim().toLowerCase() === email);
+      if (emailMatch) {
+        return { lead: emailMatch, reason: "email" };
+      }
+    }
+
+    if (phone) {
+      const phoneMatch = leads.find((lead) => normalizePhone(lead.phone) === phone);
+      if (phoneMatch) {
+        return { lead: phoneMatch, reason: "phone" };
+      }
+    }
+
+    if (customerName && vehicleInterest) {
+      const nameVehicleMatch = leads.find((lead) => {
+        const leadName = String(lead.customer_name || "").trim().toLowerCase();
+        const leadVehicle = String(lead.vehicle_interest || "").trim().toLowerCase();
+        return leadName === customerName && leadVehicle === vehicleInterest;
+      });
+
+      if (nameVehicleMatch) {
+        return { lead: nameVehicleMatch, reason: "name_vehicle" };
+      }
+    }
+
+    return null;
   }
 }
 

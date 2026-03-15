@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "dev": "nodemon server.js",
+    "import:leads": "node scripts/import-graph-leads.js",
     "migrate:postgres": "node scripts/migrate-sqlite-to-postgres.js",
     "start": "node server.js",
     "test": "node --test"
