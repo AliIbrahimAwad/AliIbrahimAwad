@@ -363,7 +363,7 @@ test("sending SMS through the CRM logs activity and updates new leads to contact
   });
 });
 
-test("website API creates and auto-assigns a website lead", async () => {
+test("website API creates an unassigned website lead", async () => {
   await withServer(async ({ server }) => {
     const client = createClient(server);
     const response = await client.request({
@@ -382,7 +382,52 @@ test("website API creates and auto-assigns a website lead", async () => {
     const body = JSON.parse(response.body);
     assert.equal(body.source, "website");
     assert.equal(body.status, "new");
-    assert.equal(body.assigned_user_name, "CRM Sales");
+    assert.equal(body.assigned_user_name, "Unassigned");
+    assert.equal(body.assigned_to, null);
+  });
+});
+
+test("manager can assign an unassigned API lead", async () => {
+  await withServer(async ({ server }) => {
+    const client = createClient(server);
+    const createResponse = await client.request({
+      method: "POST",
+      path: "/api/leads",
+      json: {
+        name: "Fresh Shopper",
+        phone: "555-0109",
+        email: "fresh@example.com",
+        vehicle: "2023 Audi Q5",
+        source: "website",
+      },
+    });
+
+    assert.equal(createResponse.statusCode, 201);
+    const createdLead = JSON.parse(createResponse.body);
+    assert.equal(createdLead.assigned_to, null);
+
+    await login(client, "manager@crm.local", "manager123");
+
+    const assigneesResponse = await client.request({ path: "/api/users/assignable" });
+    assert.equal(assigneesResponse.statusCode, 200);
+    const assigneesBody = JSON.parse(assigneesResponse.body);
+    const salesUser = assigneesBody.items.find((user) => user.email === "sales@crm.local");
+
+    assert.ok(salesUser);
+
+    const assignResponse = await client.request({
+      method: "PATCH",
+      path: `/api/leads/${createdLead.id}/assign`,
+      json: { assigned_to: salesUser.id },
+    });
+
+    assert.equal(assignResponse.statusCode, 200);
+    const assignedBody = JSON.parse(assignResponse.body);
+    assert.equal(assignedBody.lead.assigned_to, Number(salesUser.id));
+    assert.equal(assignedBody.lead.assigned_user_name, "CRM Sales");
+    assert.ok(
+      assignedBody.activities.some((activity) => /Lead assigned to CRM Sales\./.test(activity.content))
+    );
   });
 });
 

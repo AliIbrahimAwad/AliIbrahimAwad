@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { CalendarDays, CarFront, MessageSquareText, PhoneCall, ShieldCheck, Sparkles } from "lucide-react";
 
 import { pipelineLabel, sourceTone, statusTone } from "../lib/format";
@@ -13,7 +14,23 @@ function InfoBlock({ label, value }) {
   );
 }
 
-export function LeadDetailsPanel({ lead, loading = false, onStatusChange, statusUpdating = false }) {
+export function LeadDetailsPanel({
+  lead,
+  loading = false,
+  onStatusChange,
+  statusUpdating = false,
+  canAssign = false,
+  assignees = [],
+  assigneesLoading = false,
+  assignmentUpdating = false,
+  onAssignLead,
+}) {
+  const [assignmentValue, setAssignmentValue] = useState("");
+
+  useEffect(() => {
+    setAssignmentValue(lead?.assignedTo ? String(lead.assignedTo) : "");
+  }, [lead?.assignedTo, lead?.id]);
+
   if (loading) {
     return (
       <aside className="rounded-[2rem] border border-white/10 bg-ink-900/85 p-6 shadow-card backdrop-blur">
@@ -75,6 +92,44 @@ export function LeadDetailsPanel({ lead, loading = false, onStatusChange, status
           </button>
         ))}
       </div>
+
+      {canAssign ? (
+        <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-5">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+            <label className="grid flex-1 gap-2">
+              <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Assign lead</span>
+              <select
+                value={assignmentValue}
+                onChange={(event) => setAssignmentValue(event.target.value)}
+                disabled={assigneesLoading || assignmentUpdating}
+                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none disabled:cursor-wait disabled:opacity-70"
+              >
+                <option value="" className="bg-ink-900">
+                  Select salesperson
+                </option>
+                {assignees.map((user) => (
+                  <option key={user.id} value={user.id} className="bg-ink-900">
+                    {user.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => onAssignLead?.(Number(assignmentValue))}
+              disabled={
+                assigneesLoading ||
+                assignmentUpdating ||
+                !assignmentValue ||
+                Number(assignmentValue) === Number(lead.assignedTo)
+              }
+              className="inline-flex items-center justify-center rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {assignmentUpdating ? "Assigning..." : "Assign lead"}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-6 grid gap-3 sm:grid-cols-2">
         <InfoBlock label="Phone" value={lead.phone} />

@@ -8,8 +8,10 @@ import { MetricCard } from "./components/MetricCard";
 import { Sidebar } from "./components/Sidebar";
 import { TeamManagementPanel } from "./components/TeamManagementPanel";
 import {
+  assignLead,
   createUser,
   deleteUser,
+  getAssignableUsers,
   getDashboardMetrics,
   getLead,
   getLeads,
@@ -56,6 +58,7 @@ function formatLead(lead) {
   return {
     id: lead.id,
     customerName: lead.customer_name,
+    assignedTo: lead.assigned_to ?? null,
     phone: lead.phone || "No phone on file",
     email: lead.email || "No email on file",
     vehicleInterest: lead.vehicle_interest || "Vehicle inquiry",
@@ -110,11 +113,14 @@ export default function App() {
   const [activeSection, setActiveSection] = useState("Dashboard");
   const [activeTab, setActiveTab] = useState("All leads");
   const [users, setUsers] = useState([]);
+  const [assignees, setAssignees] = useState([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [assigneesLoading, setAssigneesLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
+  const [assignmentUpdating, setAssignmentUpdating] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [userSubmitting, setUserSubmitting] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState(null);
@@ -253,6 +259,44 @@ export default function App() {
   }, [authStatus, currentUser?.role]);
 
   useEffect(() => {
+    const canAssign = currentUser?.role === "admin" || currentUser?.role === "manager";
+    if (authStatus !== "authenticated" || !canAssign) {
+      setAssignees([]);
+      return;
+    }
+
+    let active = true;
+
+    async function loadAssignees() {
+      try {
+        setAssigneesLoading(true);
+        const response = await getAssignableUsers();
+        if (!active) {
+          return;
+        }
+
+        setAssignees(response.items || []);
+      } catch (loadError) {
+        if (!active) {
+          return;
+        }
+
+        setError(loadError.message || "Unable to load assignment options.");
+      } finally {
+        if (active) {
+          setAssigneesLoading(false);
+        }
+      }
+    }
+
+    loadAssignees();
+
+    return () => {
+      active = false;
+    };
+  }, [authStatus, currentUser?.role]);
+
+  useEffect(() => {
     if (authStatus !== "authenticated") {
       return;
     }
@@ -354,6 +398,31 @@ export default function App() {
     }
   }
 
+  async function handleAssignLead(assignedTo) {
+    if (!selectedLeadId) {
+      return;
+    }
+
+    try {
+      setAssignmentUpdating(true);
+      const payload = await assignLead(selectedLeadId, assignedTo);
+      const updatedLead = formatLead(payload.lead);
+
+      setLeads((current) =>
+        current.map((lead) => (lead.id === updatedLead.id ? { ...lead, ...updatedLead } : lead))
+      );
+      setSelectedLeadDetails({
+        ...updatedLead,
+        activities: payload.activities.map(formatActivity),
+      });
+      setError("");
+    } catch (assignError) {
+      setError(assignError.message || "Unable to assign lead.");
+    } finally {
+      setAssignmentUpdating(false);
+    }
+  }
+
   async function handleLogin(email, password) {
     try {
       setAuthLoading(true);
@@ -382,6 +451,7 @@ export default function App() {
       setLeads([]);
       setMetrics(emptyMetrics);
       setUsers([]);
+      setAssignees([]);
     }
   }
 
@@ -615,6 +685,11 @@ export default function App() {
                 loading={detailLoading}
                 onStatusChange={handleStatusChange}
                 statusUpdating={statusUpdating}
+                canAssign={currentUser?.role === "admin" || currentUser?.role === "manager"}
+                assignees={assignees}
+                assigneesLoading={assigneesLoading}
+                assignmentUpdating={assignmentUpdating}
+                onAssignLead={handleAssignLead}
               />
             </div>
           </section>

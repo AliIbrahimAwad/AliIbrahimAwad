@@ -444,6 +444,7 @@ class CrmDatabase {
       id: Number(row.id),
       source: row.source || "manual",
       customer_name: customerName,
+      assigned_to: row.assigned_to == null ? null : Number(row.assigned_to),
       phone,
       email,
       vehicle_interest: row.vehicle_interest || row.next_action || "Vehicle inquiry",
@@ -632,7 +633,6 @@ class CrmDatabase {
   createApiLead(input) {
     const now = new Date().toISOString();
     const storedStatus = toStoredStatus(input.status || "new");
-    const assigneeId = this.getDefaultAssigneeId();
 
     this.execute(
       `
@@ -659,10 +659,10 @@ class CrmDatabase {
           updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
-      [
-        input.source || "website",
-        storedStatus || "new",
-        assigneeId,
+        [
+          input.source || "website",
+          storedStatus || "new",
+          null,
         input.customer_name || null,
         input.phone || null,
         input.email || null,
@@ -1108,12 +1108,8 @@ class CrmDatabase {
   }
 
   createLead(input) {
-    const assigneeId = input.assigned_to || this.getDefaultAssigneeId();
+    const assigneeId = input.assigned_to || null;
     const now = new Date().toISOString();
-
-    if (!assigneeId) {
-      throw new ValidationError("At least one sales user is required before creating leads.");
-    }
 
     this.execute(
       `
@@ -1180,6 +1176,8 @@ class CrmDatabase {
 
   assignLead(id, assignedTo) {
     this.getLead(id);
+    const assignee = this.getUser(assignedTo);
+
     this.execute(
       `
         UPDATE leads
@@ -1190,6 +1188,11 @@ class CrmDatabase {
       `,
       [assignedTo, new Date().toISOString(), id]
     );
+    this.createActivity({
+      lead_id: id,
+      type: "note_added",
+      content: `Lead assigned to ${assignee.name}.`,
+    });
     this.save();
     return this.getLead(id);
   }

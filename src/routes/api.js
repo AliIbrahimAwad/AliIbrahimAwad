@@ -1,3 +1,4 @@
+const { canAssignLeads } = require("../models/user");
 const { requireAuth } = require("../middleware/auth");
 const { ValidationError } = require("../data/database");
 const { asyncHandler } = require("./helpers");
@@ -128,6 +129,32 @@ function registerApiRoutes(app) {
     asyncHandler(async (req, res) => {
       const lead = await req.app.locals.db.updateApiLead(Number(req.params.id), normalizeLeadPayload(req.body));
       res.json(lead);
+    })
+  );
+
+  app.patch(
+    "/api/leads/:id/assign",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const assignedTo = Number(req.body.assigned_to || req.body.assignedTo || req.body.salesperson_id);
+      if (!Number.isInteger(assignedTo) || assignedTo <= 0) {
+        throw new ValidationError("A valid salesperson is required.");
+      }
+
+      const assignees = await req.app.locals.db.listSalesUsers();
+      if (!assignees.some((user) => Number(user.id) === assignedTo)) {
+        throw new ValidationError("A valid salesperson is required.");
+      }
+
+      await req.app.locals.db.getApiLead(Number(req.params.id), req.currentUser);
+      await req.app.locals.db.assignLead(Number(req.params.id), assignedTo);
+
+      res.json(await req.app.locals.db.getApiLeadWithActivities(Number(req.params.id), req.currentUser));
     })
   );
 

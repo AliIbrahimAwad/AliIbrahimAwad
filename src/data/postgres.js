@@ -361,6 +361,7 @@ class PostgresCrmDatabase extends CrmDatabase {
       id: Number(row.id),
       source: row.source || "manual",
       customer_name: customerName,
+      assigned_to: row.assigned_to == null ? null : Number(row.assigned_to),
       phone,
       email,
       vehicle_interest: row.vehicle_interest || row.next_action || "Vehicle inquiry",
@@ -551,7 +552,6 @@ class PostgresCrmDatabase extends CrmDatabase {
   async createApiLead(input) {
     const now = new Date().toISOString();
     const storedStatus = toStoredStatus(input.status || "new");
-    const assigneeId = await this.getDefaultAssigneeId();
 
     const row = await this.get(
       `
@@ -582,7 +582,7 @@ class PostgresCrmDatabase extends CrmDatabase {
       [
         input.source || "website",
         storedStatus || "new",
-        assigneeId,
+        null,
         input.customer_name || null,
         input.phone || null,
         input.email || null,
@@ -1035,12 +1035,8 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   async createLead(input) {
-    const assigneeId = input.assigned_to || (await this.getDefaultAssigneeId());
+    const assigneeId = input.assigned_to || null;
     const now = new Date().toISOString();
-
-    if (!assigneeId) {
-      throw new ValidationError("At least one sales user is required before creating leads.");
-    }
 
     const row = await this.get(
       `
@@ -1107,6 +1103,7 @@ class PostgresCrmDatabase extends CrmDatabase {
 
   async assignLead(id, assignedTo) {
     await this.getLead(id);
+    const assignee = await this.getUser(assignedTo);
     await this.execute(
       `
         UPDATE leads
@@ -1117,6 +1114,11 @@ class PostgresCrmDatabase extends CrmDatabase {
       `,
       [assignedTo, new Date().toISOString(), id]
     );
+    await this.createActivity({
+      lead_id: id,
+      type: "note_added",
+      content: `Lead assigned to ${assignee.name}.`,
+    });
 
     return this.getLead(id);
   }

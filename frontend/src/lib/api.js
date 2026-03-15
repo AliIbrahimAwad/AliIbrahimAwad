@@ -55,12 +55,23 @@ export function updateLeadStatus(id, status) {
   });
 }
 
+export function assignLead(id, assignedTo) {
+  return request(`/api/leads/${id}/assign`, {
+    method: "PATCH",
+    body: JSON.stringify({ assigned_to: assignedTo }),
+  });
+}
+
 export function getDashboardMetrics() {
   return request("/api/dashboard/metrics");
 }
 
 export function getUsers() {
   return request("/api/users");
+}
+
+export function getAssignableUsers() {
+  return request("/api/users/assignable");
 }
 
 export function createUser(payload) {

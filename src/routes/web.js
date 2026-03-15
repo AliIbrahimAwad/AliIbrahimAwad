@@ -107,8 +107,7 @@ function validateLead(payload, contacts = [], assignees = []) {
 async function getLeadFormContext(req, formData = {}) {
   const contacts = await req.app.locals.db.listContactsForSelect(req.currentUser);
   const assignees = await req.app.locals.db.listSalesUsers();
-  const defaultAssignee =
-    req.currentUser.role === "sales" ? req.currentUser.id : await req.app.locals.db.getDefaultAssigneeId();
+  const defaultAssignee = req.currentUser.role === "sales" ? req.currentUser.id : null;
 
   return {
     contacts,
@@ -140,7 +139,7 @@ async function normalizeLeadAssignment(req, payload, existingLead = null) {
     return Number(existingLead.assigned_to);
   }
 
-  return await req.app.locals.db.getDefaultAssigneeId();
+  return null;
 }
 
 function validateAssignment(assignedTo, assignees = []) {

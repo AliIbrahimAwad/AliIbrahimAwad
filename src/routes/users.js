@@ -1,6 +1,6 @@
 const bcrypt = require("bcrypt");
 
-const { isValidUserRole, normalizeUserRole } = require("../models/user");
+const { canAssignLeads, isValidUserRole, normalizeUserRole } = require("../models/user");
 const { USER_ROLES } = require("../types/models");
 const { renderUserForm, renderUsersListPage } = require("../views/users");
 const { requireAdmin, requireAuth } = require("../middleware/auth");
@@ -42,6 +42,28 @@ function validateUserPayload(payload, { requirePassword }) {
 }
 
 function registerUserRoutes(app) {
+  app.get(
+    "/api/users/assignable",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const users = await req.app.locals.db.listSalesUsers();
+      res.json({
+        items: users.map((user) => ({
+          id: Number(user.id),
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          created_at: user.created_at,
+        })),
+      });
+    })
+  );
+
   app.get(
     "/api/users",
     requireAuth,
