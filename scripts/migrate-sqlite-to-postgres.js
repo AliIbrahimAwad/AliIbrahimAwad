@@ -69,6 +69,14 @@ async function main() {
         email,
         vehicle_interest,
         vehicle_id,
+        stock_number,
+        vehicle_year,
+        vehicle_make,
+        vehicle_model,
+        vehicle_trim,
+        vehicle_condition,
+        vehicle_price,
+        lead_type,
         listing_url,
         message
       FROM leads

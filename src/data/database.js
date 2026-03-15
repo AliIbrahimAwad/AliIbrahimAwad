@@ -236,6 +236,14 @@ class CrmDatabase {
     this.ensureColumn("leads", "email", "TEXT");
     this.ensureColumn("leads", "vehicle_interest", "TEXT");
     this.ensureColumn("leads", "vehicle_id", "TEXT");
+    this.ensureColumn("leads", "stock_number", "TEXT");
+    this.ensureColumn("leads", "vehicle_year", "TEXT");
+    this.ensureColumn("leads", "vehicle_make", "TEXT");
+    this.ensureColumn("leads", "vehicle_model", "TEXT");
+    this.ensureColumn("leads", "vehicle_trim", "TEXT");
+    this.ensureColumn("leads", "vehicle_condition", "TEXT");
+    this.ensureColumn("leads", "vehicle_price", "TEXT");
+    this.ensureColumn("leads", "lead_type", "TEXT");
     this.ensureColumn("leads", "listing_url", "TEXT");
     this.ensureColumn("leads", "message", "TEXT");
     this.execute("UPDATE leads SET status = 'new' WHERE status IS NULL OR TRIM(status) = ''");
@@ -379,6 +387,14 @@ class CrmDatabase {
         leads.email,
         leads.vehicle_interest,
         leads.vehicle_id,
+        leads.stock_number,
+        leads.vehicle_year,
+        leads.vehicle_make,
+        leads.vehicle_model,
+        leads.vehicle_trim,
+        leads.vehicle_condition,
+        leads.vehicle_price,
+        leads.lead_type,
         leads.listing_url,
         leads.message,
         leads.next_action,
@@ -432,6 +448,14 @@ class CrmDatabase {
       email,
       vehicle_interest: row.vehicle_interest || row.next_action || "Vehicle inquiry",
       vehicle_id: row.vehicle_id || null,
+      stock_number: row.stock_number || null,
+      vehicle_year: row.vehicle_year || null,
+      vehicle_make: row.vehicle_make || null,
+      vehicle_model: row.vehicle_model || null,
+      vehicle_trim: row.vehicle_trim || null,
+      vehicle_condition: row.vehicle_condition || null,
+      vehicle_price: row.vehicle_price || null,
+      lead_type: row.lead_type || null,
       listing_url: row.listing_url || null,
       message,
       message_preview: message ? String(message).slice(0, 140) : "",
@@ -621,11 +645,19 @@ class CrmDatabase {
           email,
           vehicle_interest,
           vehicle_id,
+          stock_number,
+          vehicle_year,
+          vehicle_make,
+          vehicle_model,
+          vehicle_trim,
+          vehicle_condition,
+          vehicle_price,
+          lead_type,
           listing_url,
           message,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         input.source || "website",
@@ -636,6 +668,14 @@ class CrmDatabase {
         input.email || null,
         input.vehicle_interest || null,
         input.vehicle_id || null,
+        input.stock_number || null,
+        input.vehicle_year || null,
+        input.vehicle_make || null,
+        input.vehicle_model || null,
+        input.vehicle_trim || null,
+        input.vehicle_condition || null,
+        input.vehicle_price || null,
+        input.lead_type || null,
         input.listing_url || null,
         input.message || null,
         now,
@@ -671,6 +711,14 @@ class CrmDatabase {
           email = ?,
           vehicle_interest = ?,
           vehicle_id = ?,
+          stock_number = ?,
+          vehicle_year = ?,
+          vehicle_make = ?,
+          vehicle_model = ?,
+          vehicle_trim = ?,
+          vehicle_condition = ?,
+          vehicle_price = ?,
+          lead_type = ?,
           listing_url = ?,
           message = ?,
           updated_at = ?
@@ -684,6 +732,14 @@ class CrmDatabase {
         input.email || null,
         input.vehicle_interest || null,
         input.vehicle_id || null,
+        input.stock_number || null,
+        input.vehicle_year || null,
+        input.vehicle_make || null,
+        input.vehicle_model || null,
+        input.vehicle_trim || null,
+        input.vehicle_condition || null,
+        input.vehicle_price || null,
+        input.lead_type || null,
         input.listing_url || null,
         input.message || null,
         now,
@@ -840,6 +896,29 @@ class CrmDatabase {
     );
     this.save();
     return this.getUser(id);
+  }
+
+  deleteUser(id) {
+    const user = this.getUser(id);
+
+    if (user.role === "admin") {
+      const adminCount = Number(
+        this.get(
+          `
+            SELECT COUNT(*) AS count
+            FROM users
+            WHERE role = 'admin'
+          `
+        ).count
+      );
+
+      if (adminCount <= 1) {
+        throw new ValidationError("You must keep at least one admin user.");
+      }
+    }
+
+    this.execute("DELETE FROM users WHERE id = ?", [id]);
+    this.save();
   }
 
   listSalesUsers() {

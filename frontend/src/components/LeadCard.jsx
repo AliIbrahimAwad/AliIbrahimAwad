@@ -36,6 +36,11 @@ export function LeadCard({ lead, selected, onSelect }) {
           <Phone className="h-3.5 w-3.5 text-ice-300" />
           {lead.phone}
         </span>
+        {lead.stockNumber ? (
+          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
+            Stock {lead.stockNumber}
+          </span>
+        ) : null}
         <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${sourceTone(lead.source)}`}>
           {lead.source}
         </span>

@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 
 const sections = [
-  { label: "Dashboard", icon: LayoutDashboard, active: true },
+  { label: "Dashboard", icon: LayoutDashboard },
   { label: "Leads", icon: ClipboardList },
   { label: "Inventory", icon: CarFront },
   { label: "Conversations", icon: MessageSquareMore },
@@ -18,7 +18,7 @@ const sections = [
   { label: "Analytics", icon: BarChart3 }
 ];
 
-export function Sidebar() {
+export function Sidebar({ activeSection = "Dashboard", onSelectSection, currentUser }) {
   return (
     <aside className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-ink-900/85 p-5 shadow-card backdrop-blur xl:min-h-[calc(100vh-3rem)]">
       <div className="pointer-events-none absolute inset-x-6 top-0 h-36 rounded-b-[3rem] bg-gradient-to-b from-ice-400/10 to-transparent" />
@@ -34,10 +34,14 @@ export function Sidebar() {
       </div>
 
       <nav className="relative mt-6 space-y-2">
-        {sections.map(({ label, icon: Icon, active }) => (
+        {sections.map(({ label, icon: Icon }) => {
+          const active = label === activeSection;
+
+          return (
           <button
             key={label}
             type="button"
+            onClick={() => onSelectSection?.(label)}
             className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left transition ${
               active
                 ? "bg-white text-ink-950 shadow-glow"
@@ -50,7 +54,8 @@ export function Sidebar() {
             </span>
             {active ? <span className="h-2.5 w-2.5 rounded-full bg-ember-500" /> : null}
           </button>
-        ))}
+          );
+        })}
       </nav>
 
       <div className="relative mt-8 rounded-[1.75rem] border border-white/10 bg-white/5 p-4">
@@ -71,8 +76,10 @@ export function Sidebar() {
           AI
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-white">Ali Ibrahim</p>
-          <p className="truncate text-xs uppercase tracking-[0.24em] text-slate-400">General manager</p>
+          <p className="truncate text-sm font-semibold text-white">{currentUser?.name || "Ali Ibrahim"}</p>
+          <p className="truncate text-xs uppercase tracking-[0.24em] text-slate-400">
+            {currentUser?.role || "General manager"}
+          </p>
         </div>
         <Settings className="h-4 w-4 text-slate-400" />
       </div>

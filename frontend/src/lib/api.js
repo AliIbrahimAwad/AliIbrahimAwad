@@ -59,6 +59,23 @@ export function getDashboardMetrics() {
   return request("/api/dashboard/metrics");
 }
 
+export function getUsers() {
+  return request("/api/users");
+}
+
+export function createUser(payload) {
+  return request("/api/users", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteUser(id) {
+  return request(`/api/users/${id}`, {
+    method: "DELETE",
+  });
+}
+
 export function getSession() {
   return request("/api/auth/session");
 }

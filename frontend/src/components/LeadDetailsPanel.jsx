@@ -81,6 +81,14 @@ export function LeadDetailsPanel({ lead, loading = false, onStatusChange, status
         <InfoBlock label="Assigned Rep" value={lead.assignedRep} />
         <InfoBlock label="Email" value={lead.email} />
         <InfoBlock label="Listing URL" value={lead.listingUrl || "Direct inventory inquiry"} />
+        <InfoBlock label="Stock Number" value={lead.stockNumber} />
+        <InfoBlock label="Lead Type" value={lead.leadType} />
+        <InfoBlock label="Year" value={lead.vehicleYear} />
+        <InfoBlock label="Make" value={lead.vehicleMake} />
+        <InfoBlock label="Model" value={lead.vehicleModel} />
+        <InfoBlock label="Trim" value={lead.vehicleTrim} />
+        <InfoBlock label="Condition" value={lead.vehicleCondition} />
+        <InfoBlock label="Price" value={lead.vehiclePrice} />
       </div>
 
       <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-gradient-to-br from-white/8 to-white/[0.03] p-5">

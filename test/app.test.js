@@ -161,6 +161,41 @@ test("admin can access user management and create a new salesperson", async () =
   });
 });
 
+test("admin can create and delete users through the API", async () => {
+  await withServer(async ({ app, server }) => {
+    const client = createClient(server);
+    await login(client, "admin@crm.local", "admin123");
+
+    const createResponse = await client.request({
+      method: "POST",
+      path: "/api/users",
+      json: {
+        name: "API Seller",
+        email: "apiseller@crm.local",
+        password: "seller234",
+        role: "sales",
+      },
+    });
+
+    assert.equal(createResponse.statusCode, 201);
+    const createdUser = JSON.parse(createResponse.body);
+    assert.equal(createdUser.email, "apiseller@crm.local");
+
+    const usersResponse = await client.request({ path: "/api/users" });
+    assert.equal(usersResponse.statusCode, 200);
+    const usersBody = JSON.parse(usersResponse.body);
+    assert.ok(usersBody.items.some((user) => user.email === "apiseller@crm.local"));
+
+    const deleteResponse = await client.request({
+      method: "DELETE",
+      path: `/api/users/${createdUser.id}`,
+    });
+
+    assert.equal(deleteResponse.statusCode, 204);
+    assert.equal(app.locals.db.getUserByEmail("apiseller@crm.local"), null);
+  });
+});
+
 test("sales users only see leads assigned to them", async () => {
   await withServer(async ({ app, server }) => {
     const secondSalesHash = await bcrypt.hash("seller234", 10);

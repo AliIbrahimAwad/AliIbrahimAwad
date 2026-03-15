@@ -98,6 +98,14 @@ class PostgresCrmDatabase extends CrmDatabase {
         email TEXT,
         vehicle_interest TEXT,
         vehicle_id TEXT,
+        stock_number TEXT,
+        vehicle_year TEXT,
+        vehicle_make TEXT,
+        vehicle_model TEXT,
+        vehicle_trim TEXT,
+        vehicle_condition TEXT,
+        vehicle_price TEXT,
+        lead_type TEXT,
         listing_url TEXT,
         message TEXT
       );
@@ -146,6 +154,14 @@ class PostgresCrmDatabase extends CrmDatabase {
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS email TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_interest TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_id TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS stock_number TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_year TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_make TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_model TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_trim TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_condition TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_price TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_type TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS listing_url TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS message TEXT;
 
@@ -288,6 +304,14 @@ class PostgresCrmDatabase extends CrmDatabase {
         leads.email,
         leads.vehicle_interest,
         leads.vehicle_id,
+        leads.stock_number,
+        leads.vehicle_year,
+        leads.vehicle_make,
+        leads.vehicle_model,
+        leads.vehicle_trim,
+        leads.vehicle_condition,
+        leads.vehicle_price,
+        leads.lead_type,
         leads.listing_url,
         leads.message,
         leads.next_action,
@@ -341,6 +365,14 @@ class PostgresCrmDatabase extends CrmDatabase {
       email,
       vehicle_interest: row.vehicle_interest || row.next_action || "Vehicle inquiry",
       vehicle_id: row.vehicle_id || null,
+      stock_number: row.stock_number || null,
+      vehicle_year: row.vehicle_year || null,
+      vehicle_make: row.vehicle_make || null,
+      vehicle_model: row.vehicle_model || null,
+      vehicle_trim: row.vehicle_trim || null,
+      vehicle_condition: row.vehicle_condition || null,
+      vehicle_price: row.vehicle_price || null,
+      lead_type: row.lead_type || null,
       listing_url: row.listing_url || null,
       message,
       message_preview: message ? String(message).slice(0, 140) : "",
@@ -532,13 +564,21 @@ class PostgresCrmDatabase extends CrmDatabase {
           email,
           vehicle_interest,
           vehicle_id,
+          stock_number,
+          vehicle_year,
+          vehicle_make,
+          vehicle_model,
+          vehicle_trim,
+          vehicle_condition,
+          vehicle_price,
+          lead_type,
           listing_url,
           message,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        RETURNING id
-      `,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          RETURNING id
+        `,
       [
         input.source || "website",
         storedStatus || "new",
@@ -548,6 +588,14 @@ class PostgresCrmDatabase extends CrmDatabase {
         input.email || null,
         input.vehicle_interest || null,
         input.vehicle_id || null,
+        input.stock_number || null,
+        input.vehicle_year || null,
+        input.vehicle_make || null,
+        input.vehicle_model || null,
+        input.vehicle_trim || null,
+        input.vehicle_condition || null,
+        input.vehicle_price || null,
+        input.lead_type || null,
         input.listing_url || null,
         input.message || null,
         now,
@@ -581,6 +629,14 @@ class PostgresCrmDatabase extends CrmDatabase {
           email = ?,
           vehicle_interest = ?,
           vehicle_id = ?,
+          stock_number = ?,
+          vehicle_year = ?,
+          vehicle_make = ?,
+          vehicle_model = ?,
+          vehicle_trim = ?,
+          vehicle_condition = ?,
+          vehicle_price = ?,
+          lead_type = ?,
           listing_url = ?,
           message = ?,
           updated_at = ?
@@ -594,6 +650,14 @@ class PostgresCrmDatabase extends CrmDatabase {
         input.email || null,
         input.vehicle_interest || null,
         input.vehicle_id || null,
+        input.stock_number || null,
+        input.vehicle_year || null,
+        input.vehicle_make || null,
+        input.vehicle_model || null,
+        input.vehicle_trim || null,
+        input.vehicle_condition || null,
+        input.vehicle_price || null,
+        input.lead_type || null,
         input.listing_url || null,
         input.message || null,
         now,
@@ -758,6 +822,30 @@ class PostgresCrmDatabase extends CrmDatabase {
     );
 
     return this.getUser(id);
+  }
+
+  async deleteUser(id) {
+    const user = await this.getUser(id);
+
+    if (user.role === "admin") {
+      const adminCount = Number(
+        (
+          await this.get(
+            `
+              SELECT COUNT(*) AS count
+              FROM users
+              WHERE role = 'admin'
+            `
+          )
+        ).count
+      );
+
+      if (adminCount <= 1) {
+        throw new ValidationError("You must keep at least one admin user.");
+      }
+    }
+
+    await this.execute("DELETE FROM users WHERE id = ?", [id]);
   }
 
   async listSalesUsers() {

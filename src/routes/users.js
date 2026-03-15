@@ -43,6 +43,80 @@ function validateUserPayload(payload, { requirePassword }) {
 
 function registerUserRoutes(app) {
   app.get(
+    "/api/users",
+    requireAuth,
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const users = await req.app.locals.db.listUsers();
+      res.json({
+        items: users.map((user) => ({
+          id: Number(user.id),
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          created_at: user.created_at,
+        })),
+      });
+    })
+  );
+
+  app.post(
+    "/api/users",
+    requireAuth,
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const payload = sanitizeUserPayload(req.body);
+      const errors = validateUserPayload(payload, { requirePassword: true });
+
+      if (Object.keys(errors).length > 0) {
+        res.status(422).json({ error: Object.values(errors)[0] || "Invalid user payload." });
+        return;
+      }
+
+      try {
+        const passwordHash = await bcrypt.hash(payload.password, 10);
+        const user = await req.app.locals.db.createUser({
+          name: payload.name,
+          email: payload.email,
+          password_hash: passwordHash,
+          role: payload.role,
+        });
+
+        res.status(201).json({
+          id: Number(user.id),
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          created_at: user.created_at,
+        });
+      } catch (error) {
+        res.status(422).json({
+          error:
+            error.code === "23505" || error.message.includes("UNIQUE")
+              ? "That email is already in use."
+              : "Could not create the user.",
+        });
+      }
+    })
+  );
+
+  app.delete(
+    "/api/users/:id",
+    requireAuth,
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const userId = Number(req.params.id);
+      if (Number(req.currentUser.id) === userId) {
+        res.status(400).json({ error: "You cannot delete your own user while signed in." });
+        return;
+      }
+
+      await req.app.locals.db.deleteUser(userId);
+      res.status(204).end();
+    })
+  );
+
+  app.get(
     "/users",
     requireAuth,
     requireAdmin,

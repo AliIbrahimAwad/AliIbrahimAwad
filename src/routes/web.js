@@ -1,4 +1,4 @@
-const { canViewAllLeads } = require("../models/user");
+const { canAssignLeads, canViewAllLeads } = require("../models/user");
 const {
   renderContactDetailPage,
   renderContactForm,
@@ -123,7 +123,7 @@ async function getLeadFormContext(req, formData = {}) {
       next_action: "",
       ...formData,
     },
-    allowAssignment: canViewAllLeads(req.currentUser),
+    allowAssignment: canAssignLeads(req.currentUser),
   };
 }
 
@@ -158,7 +158,7 @@ function validateAssignment(assignedTo, assignees = []) {
 async function renderLeadDetailResponse(req, res, lead, options = {}) {
   const contacts = await req.app.locals.db.listContactsForSelect(req.currentUser);
   const notes = await req.app.locals.db.listLeadNotes(lead.id);
-  const assignees = canViewAllLeads(req.currentUser) ? await req.app.locals.db.listSalesUsers() : [];
+  const assignees = canAssignLeads(req.currentUser) ? await req.app.locals.db.listSalesUsers() : [];
   const activities = await req.app.locals.db.listLeadActivities(lead.id);
 
   res.status(options.statusCode || 200).send(
@@ -170,7 +170,7 @@ async function renderLeadDetailResponse(req, res, lead, options = {}) {
       activities,
       activePath: "/leads",
       currentUser: req.currentUser,
-      canAssign: canViewAllLeads(req.currentUser),
+      canAssign: canAssignLeads(req.currentUser),
       assignmentError: options.assignmentError || "",
       communicationError: options.communicationError || "",
       smsDraft: options.smsDraft || "",
@@ -468,7 +468,7 @@ function registerWebRoutes(app) {
       const id = Number(req.params.id);
       const lead = await req.app.locals.db.getLead(id, req.currentUser);
 
-      if (!canViewAllLeads(req.currentUser)) {
+      if (!canAssignLeads(req.currentUser)) {
         res.status(403).send("Forbidden");
         return;
       }

@@ -6,7 +6,19 @@ import { LeadDetailsPanel } from "./components/LeadDetailsPanel";
 import { LoginPage } from "./components/LoginPage";
 import { MetricCard } from "./components/MetricCard";
 import { Sidebar } from "./components/Sidebar";
-import { getDashboardMetrics, getLead, getLeads, getSession, login, logout, updateLeadStatus } from "./lib/api";
+import { TeamManagementPanel } from "./components/TeamManagementPanel";
+import {
+  createUser,
+  deleteUser,
+  getDashboardMetrics,
+  getLead,
+  getLeads,
+  getSession,
+  getUsers,
+  login,
+  logout,
+  updateLeadStatus,
+} from "./lib/api";
 import { pipelineLabel } from "./lib/format";
 
 const tabs = ["All leads", "New Lead", "Contacted", "Appointment", "Negotiation", "Sold", "Lost"];
@@ -55,6 +67,14 @@ function formatLead(lead) {
     messagePreview: lead.message_preview || "No message captured yet.",
     message: lead.message || "No message captured yet.",
     assignedRep: lead.assigned_user_name || "Unassigned",
+    stockNumber: lead.stock_number || "",
+    vehicleYear: lead.vehicle_year || "",
+    vehicleMake: lead.vehicle_make || "",
+    vehicleModel: lead.vehicle_model || "",
+    vehicleTrim: lead.vehicle_trim || "",
+    vehicleCondition: lead.vehicle_condition || "",
+    vehiclePrice: lead.vehicle_price || "",
+    leadType: lead.lead_type || "",
     lastActivity: formatRelative(lead.latest_activity_at || lead.updated_at),
     createdAtLabel: formatRelative(lead.created_at),
     updatedAtLabel: formatRelative(lead.updated_at),
@@ -87,13 +107,24 @@ export default function App() {
   const [metrics, setMetrics] = useState(emptyMetrics);
   const [selectedLeadId, setSelectedLeadId] = useState(null);
   const [selectedLeadDetails, setSelectedLeadDetails] = useState(null);
+  const [activeSection, setActiveSection] = useState("Dashboard");
   const [activeTab, setActiveTab] = useState("All leads");
+  const [users, setUsers] = useState([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [usersLoading, setUsersLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
+  const [userSubmitting, setUserSubmitting] = useState(false);
+  const [deletingUserId, setDeletingUserId] = useState(null);
   const [error, setError] = useState("");
+  const [userForm, setUserForm] = useState({
+    name: "",
+    email: "",
+    password: "",
+    role: "sales",
+  });
   const deferredQuery = useDeferredValue(query);
 
   useEffect(() => {
@@ -183,6 +214,43 @@ export default function App() {
       active = false;
     };
   }, [authStatus]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || currentUser?.role !== "admin") {
+      setUsers([]);
+      return;
+    }
+
+    let active = true;
+
+    async function loadUsers() {
+      try {
+        setUsersLoading(true);
+        const response = await getUsers();
+        if (!active) {
+          return;
+        }
+
+        setUsers(response.items || []);
+      } catch (loadError) {
+        if (!active) {
+          return;
+        }
+
+        setError(loadError.message || "Unable to load users.");
+      } finally {
+        if (active) {
+          setUsersLoading(false);
+        }
+      }
+    }
+
+    loadUsers();
+
+    return () => {
+      active = false;
+    };
+  }, [authStatus, currentUser?.role]);
 
   useEffect(() => {
     if (authStatus !== "authenticated") {
@@ -310,8 +378,44 @@ export default function App() {
       setAuthStatus("unauthenticated");
       setSelectedLeadId(null);
       setSelectedLeadDetails(null);
+      setActiveSection("Dashboard");
       setLeads([]);
       setMetrics(emptyMetrics);
+      setUsers([]);
+    }
+  }
+
+  async function handleCreateUser() {
+    try {
+      setUserSubmitting(true);
+      const created = await createUser(userForm);
+      setUsers((current) =>
+        [...current, created].sort((left, right) => String(left.name).localeCompare(String(right.name)))
+      );
+      setUserForm({
+        name: "",
+        email: "",
+        password: "",
+        role: "sales",
+      });
+      setError("");
+    } catch (createError) {
+      setError(createError.message || "Unable to create user.");
+    } finally {
+      setUserSubmitting(false);
+    }
+  }
+
+  async function handleDeleteUser(user) {
+    try {
+      setDeletingUserId(user.id);
+      await deleteUser(user.id);
+      setUsers((current) => current.filter((item) => item.id !== user.id));
+      setError("");
+    } catch (deleteError) {
+      setError(deleteError.message || "Unable to delete user.");
+    } finally {
+      setDeletingUserId(null);
     }
   }
 
@@ -332,11 +436,13 @@ export default function App() {
     return <LoginPage onSubmit={handleLogin} loading={authLoading} error={error} />;
   }
 
+  const showTeam = activeSection === "Team" && currentUser?.role === "admin";
+
   return (
     <div className="min-h-screen bg-ink-950 bg-dashboard px-4 py-4 font-body text-slate-100 sm:px-6 lg:px-8">
       <div className="mx-auto grid max-w-[1800px] gap-4 xl:grid-cols-[290px_minmax(0,1fr)]">
         <div className="xl:block">
-          <Sidebar />
+          <Sidebar activeSection={activeSection} onSelectSection={setActiveSection} currentUser={currentUser} />
         </div>
 
         <main className="rounded-[2rem] border border-white/10 bg-ink-900/70 p-4 shadow-card backdrop-blur sm:p-6">
@@ -399,7 +505,8 @@ export default function App() {
             </div>
           ) : null}
 
-          <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          {!showTeam ? (
+            <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <MetricCard
               eyebrow="New leads today"
               value={String(metrics.new_leads_today).padStart(2, "0")}
@@ -430,8 +537,22 @@ export default function App() {
               detail="Closed deals divided by total leads on file."
               accent="from-fuchsia-500/20 to-transparent"
             />
-          </section>
+            </section>
+          ) : null}
 
+          {showTeam ? (
+            <TeamManagementPanel
+              users={users}
+              currentUser={currentUser}
+              form={userForm}
+              loading={usersLoading}
+              submitting={userSubmitting}
+              deletingUserId={deletingUserId}
+              onFormChange={(field, value) => setUserForm((current) => ({ ...current, [field]: value }))}
+              onSubmit={handleCreateUser}
+              onDelete={handleDeleteUser}
+            />
+          ) : (
           <section className="mt-6 grid gap-6 2xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]">
             <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 sm:p-5">
               <div className="flex flex-col gap-4 border-b border-white/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
@@ -497,6 +618,7 @@ export default function App() {
               />
             </div>
           </section>
+          )}
         </main>
       </div>
     </div>
