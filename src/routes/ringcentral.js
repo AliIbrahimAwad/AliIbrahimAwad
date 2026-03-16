@@ -17,14 +17,34 @@ function registerRingCentralRoutes(app) {
     requireAuth,
     asyncHandler(async (req, res) => {
       const state = crypto.randomUUID();
+      const authorizationUrl = req.app.locals.ringcentral.buildAuthorizationUrl(state);
       req.session.ringcentralOauth = {
         state,
         userId: Number(req.currentUser.id),
         createdAt: Date.now(),
       };
 
+      await new Promise((resolve, reject) => {
+        req.session.save((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+
+      const wantsHtml =
+        String(req.query.redirect || "") === "1" ||
+        String(req.headers.accept || "").includes("text/html");
+
+      if (wantsHtml) {
+        res.redirect(authorizationUrl);
+        return;
+      }
+
       res.json({
-        url: req.app.locals.ringcentral.buildAuthorizationUrl(state),
+        url: authorizationUrl,
       });
     })
   );
