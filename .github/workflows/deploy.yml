@@ -55,6 +55,7 @@ jobs:
 
           command -v pm2 >/dev/null 2>&1 || npm install -g pm2
 
+          rm -rf frontend/dist
           git pull origin main
           npm install
           cd frontend
