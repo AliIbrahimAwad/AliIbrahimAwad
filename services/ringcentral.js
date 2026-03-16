@@ -100,6 +100,26 @@ function formatCallActivity(record) {
   return `${label} call ${record.result || "synced"}${duration ? ` (${duration}s)` : ""}`;
 }
 
+function removeTemporaryRecordingFile(filePath) {
+  if (!filePath) {
+    return false;
+  }
+
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      return true;
+    }
+  } catch (error) {
+    logStructured("error", "ringcentral_recording_cleanup_failed", {
+      local_path: filePath,
+      error: error.message,
+    });
+  }
+
+  return false;
+}
+
 function sanitizeConnectionForStatus(connection) {
   if (!connection) {
     return null;
@@ -547,12 +567,14 @@ class RingCentralService {
       provider: "ringcentral",
       provider_recording_id: recordingRecord.provider_recording_id,
       content_uri: recordingRecord.content_uri,
-      local_path: recordingRecord.local_path,
+      local_path: null,
       mime_type: recordingRecord.mime_type,
       fetched_at: recordingRecord.fetched_at,
       transcript_status: transcript ? "completed" : "unavailable",
       raw: decodeJson(recordingRecord.raw_json, {}),
     });
+
+    removeTemporaryRecordingFile(recordingRecord.local_path);
 
     return { transcript, recommendation, audit };
   }

@@ -182,3 +182,75 @@ test("RingCentral status omits live tokens from the returned connection payload"
     assert.equal(status.connection.has_refresh_token, true);
   });
 });
+
+test("RingCentral call analysis deletes the local temp recording after success", async () => {
+  await withDb(async ({ db, temp }) => {
+    const lead = await db.createApiLead({
+      source: "website",
+      customer_name: "Call Shopper",
+      phone: "+1 (647) 555-0188",
+      email: "call@example.com",
+      vehicle_interest: "2024 Coupe",
+      status: "new",
+    });
+
+    const service = await createRingCentralService(
+      {
+        recordingsDir: path.join(temp.dir, "recordings"),
+      },
+      { db }
+    );
+
+    const leadCall = await service.store.upsertLeadCall({
+      lead_id: Number(lead.id),
+      provider: "ringcentral",
+      provider_call_id: "call-provider-1",
+      session_id: "session-1",
+      telephony_session_id: "telephony-1",
+      direction: "inbound",
+      from_number: "+16475550188",
+      to_number: "+16475551212",
+      external_number: "6475550188",
+      result: "Accepted",
+      duration_seconds: 42,
+      start_time: "2026-03-16T15:00:00.000Z",
+      crm_user_id: 1,
+      provider_extension_id: "ext-1",
+      recording_id: "recording-provider-1",
+      recording_status: "available",
+      transcript_status: "pending",
+      raw: {},
+    });
+
+    const localPath = path.join(temp.dir, "recordings", "recording-provider-1.mp3");
+    fs.mkdirSync(path.dirname(localPath), { recursive: true });
+    fs.writeFileSync(localPath, "fake-audio-data");
+
+    const recording = await service.store.upsertCallRecording({
+      lead_call_id: leadCall.record.id,
+      provider: "ringcentral",
+      provider_recording_id: "recording-provider-1",
+      content_uri: "https://platform.ringcentral.com/recordings/1",
+      local_path: localPath,
+      mime_type: "audio/mpeg",
+      fetched_at: "2026-03-16T15:01:00.000Z",
+      transcript_status: "pending",
+      raw: {},
+    });
+
+    const result = await service.analyzeCallRecording(recording.record);
+    assert.ok(result);
+    assert.equal(fs.existsSync(localPath), false);
+
+    const savedRecording = await db.get("SELECT * FROM call_recordings WHERE id = ?", [recording.record.id]);
+    assert.ok(savedRecording);
+    assert.equal(savedRecording.local_path, null);
+    assert.equal(savedRecording.transcript_status, "unavailable");
+
+    const analysis = await db.get(
+      "SELECT * FROM communication_ai_analyses WHERE lead_id = ? AND source_type = ? ORDER BY created_at DESC LIMIT 1",
+      [lead.id, "call"]
+    );
+    assert.ok(analysis);
+  });
+});
