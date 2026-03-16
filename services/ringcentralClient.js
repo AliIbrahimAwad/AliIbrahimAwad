@@ -53,7 +53,6 @@ class RingCentralApiClient {
       client_id: this.clientId,
       redirect_uri: this.redirectUri,
       state,
-      scope: this.scopes,
     });
   }
 
