@@ -3,6 +3,7 @@ const path = require("path");
 const bcrypt = require("bcrypt");
 const initSqlJs = require("sql.js");
 
+const { getDefaultDealershipId } = require("../config/dealership");
 const { canViewAllLeads } = require("../models/user");
 const { LEAD_ACTIVITY_TYPES, LEAD_STATUSES } = require("../types/models");
 const { toDateOnlyString } = require("../utils/dates");
@@ -47,6 +48,7 @@ const SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dealership_id INTEGER NOT NULL DEFAULT 1,
     name TEXT NOT NULL,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
@@ -56,6 +58,7 @@ const SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS contacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dealership_id INTEGER NOT NULL DEFAULT 1,
     first_name TEXT NOT NULL DEFAULT '',
     last_name TEXT NOT NULL DEFAULT '',
     email TEXT,
@@ -68,6 +71,7 @@ const SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS leads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dealership_id INTEGER NOT NULL DEFAULT 1,
     contact_id INTEGER,
     source TEXT NOT NULL DEFAULT 'manual',
     assigned_to INTEGER,
@@ -83,6 +87,7 @@ const SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dealership_id INTEGER NOT NULL DEFAULT 1,
     lead_id INTEGER NOT NULL,
     body TEXT NOT NULL,
     created_at TEXT NOT NULL,
@@ -91,6 +96,7 @@ const SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS lead_activities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dealership_id INTEGER NOT NULL DEFAULT 1,
     lead_id INTEGER NOT NULL,
     user_id INTEGER,
     type TEXT NOT NULL,
@@ -102,6 +108,7 @@ const SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS activities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dealership_id INTEGER NOT NULL DEFAULT 1,
     lead_id INTEGER NOT NULL,
     type TEXT NOT NULL,
     content TEXT NOT NULL,
@@ -111,6 +118,7 @@ const SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS imported_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dealership_id INTEGER NOT NULL DEFAULT 1,
     external_id TEXT NOT NULL UNIQUE,
     source TEXT NOT NULL,
     lead_id INTEGER,
@@ -228,6 +236,14 @@ class CrmDatabase {
   }
 
   applyMigrations() {
+    const dealershipId = getDefaultDealershipId();
+    this.ensureColumn("users", "dealership_id", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureColumn("contacts", "dealership_id", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureColumn("leads", "dealership_id", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureColumn("notes", "dealership_id", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureColumn("lead_activities", "dealership_id", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureColumn("activities", "dealership_id", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureColumn("imported_messages", "dealership_id", "INTEGER NOT NULL DEFAULT 1");
     this.ensureColumn("leads", "status", "TEXT DEFAULT 'new'");
     this.ensureColumn("leads", "source", "TEXT NOT NULL DEFAULT 'manual'");
     this.ensureColumn("leads", "assigned_to", "INTEGER REFERENCES users(id) ON DELETE SET NULL");
@@ -251,6 +267,16 @@ class CrmDatabase {
     this.execute("UPDATE leads SET status = 'negotiation' WHERE status = 'proposal'");
     this.execute("UPDATE leads SET status = 'won' WHERE status = 'sold'");
     this.execute("UPDATE leads SET source = 'manual' WHERE source IS NULL OR TRIM(source) = ''");
+    this.execute("UPDATE users SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [dealershipId]);
+    this.execute("UPDATE contacts SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [dealershipId]);
+    this.execute("UPDATE leads SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [dealershipId]);
+    this.execute("UPDATE notes SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [dealershipId]);
+    this.execute("UPDATE lead_activities SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [dealershipId]);
+    this.execute("UPDATE activities SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [dealershipId]);
+    this.execute(
+      "UPDATE imported_messages SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
+      [dealershipId]
+    );
   }
 
   ensureColumn(tableName, columnName, definition) {
@@ -261,6 +287,7 @@ class CrmDatabase {
   }
 
   async seedDefaultUsers() {
+    const dealershipId = getDefaultDealershipId();
     const row = this.get("SELECT COUNT(*) AS count FROM users");
     if (Number(row.count) > 0) {
       return;
@@ -291,10 +318,10 @@ class CrmDatabase {
       const passwordHash = await bcrypt.hash(user.password, 10);
       this.execute(
         `
-          INSERT INTO users (name, email, password_hash, role, created_at)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO users (dealership_id, name, email, password_hash, role, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
         `,
-        [user.name, user.email.toLowerCase(), passwordHash, user.role, new Date().toISOString()]
+        [dealershipId, user.name, user.email.toLowerCase(), passwordHash, user.role, new Date().toISOString()]
       );
     }
   }
@@ -326,6 +353,7 @@ class CrmDatabase {
     return `
       SELECT
         leads.id,
+        leads.dealership_id,
         leads.contact_id,
         leads.assigned_to,
         leads.source,
@@ -378,6 +406,7 @@ class CrmDatabase {
     return `
       SELECT
         leads.id,
+        leads.dealership_id,
         leads.source,
         leads.status,
         leads.created_at,
@@ -442,6 +471,7 @@ class CrmDatabase {
 
     return {
       id: Number(row.id),
+      dealership_id: Number(row.dealership_id || getDefaultDealershipId()),
       source: row.source || "manual",
       customer_name: customerName,
       assigned_to: row.assigned_to == null ? null : Number(row.assigned_to),
@@ -620,23 +650,26 @@ class CrmDatabase {
 
   createActivity({ lead_id, type, content, created_at = null }) {
     const timestamp = created_at || new Date().toISOString();
+    const dealershipId = getDefaultDealershipId();
 
     this.execute(
       `
-        INSERT INTO activities (lead_id, type, content, created_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO activities (dealership_id, lead_id, type, content, created_at)
+        VALUES (?, ?, ?, ?, ?)
       `,
-      [lead_id, type, content, timestamp]
+      [dealershipId, lead_id, type, content, timestamp]
     );
   }
 
   createApiLead(input) {
     const now = new Date().toISOString();
     const storedStatus = toStoredStatus(input.status || "new");
+    const dealershipId = getDefaultDealershipId();
 
     this.execute(
       `
         INSERT INTO leads (
+          dealership_id,
           source,
           status,
           assigned_to,
@@ -657,9 +690,10 @@ class CrmDatabase {
           message,
           created_at,
           updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         [
+          dealershipId,
           input.source || "website",
           storedStatus || "new",
           null,
@@ -863,12 +897,13 @@ class CrmDatabase {
   }
 
   createUser(input) {
+    const dealershipId = getDefaultDealershipId();
     this.execute(
       `
-        INSERT INTO users (name, email, password_hash, role, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO users (dealership_id, name, email, password_hash, role, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
       `,
-      [input.name, input.email.toLowerCase(), input.password_hash, input.role, new Date().toISOString()]
+      [dealershipId, input.name, input.email.toLowerCase(), input.password_hash, input.role, new Date().toISOString()]
     );
     const id = this.nextId();
     this.save();
@@ -1010,9 +1045,11 @@ class CrmDatabase {
 
   createContact(input) {
     const now = new Date().toISOString();
+    const dealershipId = getDefaultDealershipId();
     this.execute(
       `
         INSERT INTO contacts (
+          dealership_id,
           first_name,
           last_name,
           email,
@@ -1021,9 +1058,10 @@ class CrmDatabase {
           job_title,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
+        dealershipId,
         input.first_name,
         input.last_name,
         input.email,
@@ -1110,10 +1148,12 @@ class CrmDatabase {
   createLead(input) {
     const assigneeId = input.assigned_to || null;
     const now = new Date().toISOString();
+    const dealershipId = getDefaultDealershipId();
 
     this.execute(
       `
         INSERT INTO leads (
+          dealership_id,
           contact_id,
           assigned_to,
           source,
@@ -1123,9 +1163,10 @@ class CrmDatabase {
           next_action,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
+        dealershipId,
         input.contact_id,
         assigneeId,
         input.source || "manual",
@@ -1237,12 +1278,13 @@ class CrmDatabase {
 
   addLeadNote(leadId, body, userId = null) {
     this.getLead(leadId);
+    const dealershipId = getDefaultDealershipId();
     this.execute(
       `
-        INSERT INTO notes (lead_id, body, created_at)
-        VALUES (?, ?, ?)
+        INSERT INTO notes (dealership_id, lead_id, body, created_at)
+        VALUES (?, ?, ?, ?)
       `,
-      [leadId, body, new Date().toISOString()]
+      [dealershipId, leadId, body, new Date().toISOString()]
     );
     this.createLeadActivity({
       lead_id: leadId,
@@ -1256,16 +1298,18 @@ class CrmDatabase {
 
   createLeadActivity(input) {
     const type = String(input.type || "").trim().toLowerCase();
+    const dealershipId = getDefaultDealershipId();
     if (!LEAD_ACTIVITY_TYPES.includes(type)) {
       throw new ValidationError("Invalid lead activity type.");
     }
 
     this.execute(
       `
-        INSERT INTO lead_activities (lead_id, user_id, type, content, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO lead_activities (dealership_id, lead_id, user_id, type, content, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
       `,
       [
+        dealershipId,
         input.lead_id,
         input.user_id || null,
         type,
@@ -1465,9 +1509,11 @@ class CrmDatabase {
   }
 
   recordImportedMessage(input) {
+    const dealershipId = getDefaultDealershipId();
     this.execute(
       `
         INSERT INTO imported_messages (
+          dealership_id,
           external_id,
           source,
           lead_id,
@@ -1477,9 +1523,10 @@ class CrmDatabase {
           status,
           matched_reason,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
+        dealershipId,
         input.external_id,
         input.source,
         input.lead_id || null,

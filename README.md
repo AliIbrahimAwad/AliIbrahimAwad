@@ -31,6 +31,15 @@ Important flags:
 
 - `RINGCENTRAL_AUTO_STATUS_UPDATES=true|false`
 - `RINGCENTRAL_AI_CONFIDENCE_THRESHOLD=0.78`
+- `DEFAULT_DEALERSHIP_ID=1`
+
+### Dealership ID foundation
+
+The CRM now stamps new rows with a dealership ID. For now, keep:
+
+- `DEFAULT_DEALERSHIP_ID=1`
+
+This gives Looloo Auto Sales dealership ID `1` across the core CRM and communications tables while keeping the current single-dealership behavior unchanged.
 
 If auto-updates are disabled or confidence is below threshold, the CRM stores only an AI recommendation and audit row without changing the lead status.
 

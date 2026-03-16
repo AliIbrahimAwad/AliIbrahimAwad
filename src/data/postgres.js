@@ -1,6 +1,7 @@
 const bcrypt = require("bcrypt");
 const { Pool } = require("pg");
 
+const { getDefaultDealershipId } = require("../config/dealership");
 const {
   CrmDatabase,
   DEALER_PIPELINE_STATUSES,
@@ -63,6 +64,7 @@ class PostgresCrmDatabase extends CrmDatabase {
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id BIGSERIAL PRIMARY KEY,
+        dealership_id BIGINT NOT NULL DEFAULT 1,
         name TEXT NOT NULL,
         email TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
@@ -72,6 +74,7 @@ class PostgresCrmDatabase extends CrmDatabase {
 
       CREATE TABLE IF NOT EXISTS contacts (
         id BIGSERIAL PRIMARY KEY,
+        dealership_id BIGINT NOT NULL DEFAULT 1,
         first_name TEXT NOT NULL DEFAULT '',
         last_name TEXT NOT NULL DEFAULT '',
         email TEXT,
@@ -84,6 +87,7 @@ class PostgresCrmDatabase extends CrmDatabase {
 
       CREATE TABLE IF NOT EXISTS leads (
         id BIGSERIAL PRIMARY KEY,
+        dealership_id BIGINT NOT NULL DEFAULT 1,
         contact_id BIGINT REFERENCES contacts(id) ON DELETE SET NULL,
         source TEXT NOT NULL DEFAULT 'manual',
         assigned_to BIGINT REFERENCES users(id) ON DELETE SET NULL,
@@ -112,6 +116,7 @@ class PostgresCrmDatabase extends CrmDatabase {
 
       CREATE TABLE IF NOT EXISTS notes (
         id BIGSERIAL PRIMARY KEY,
+        dealership_id BIGINT NOT NULL DEFAULT 1,
         lead_id BIGINT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
         body TEXT NOT NULL,
         created_at TEXT NOT NULL
@@ -119,6 +124,7 @@ class PostgresCrmDatabase extends CrmDatabase {
 
       CREATE TABLE IF NOT EXISTS lead_activities (
         id BIGSERIAL PRIMARY KEY,
+        dealership_id BIGINT NOT NULL DEFAULT 1,
         lead_id BIGINT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
         user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
         type TEXT NOT NULL,
@@ -128,6 +134,7 @@ class PostgresCrmDatabase extends CrmDatabase {
 
       CREATE TABLE IF NOT EXISTS activities (
         id BIGSERIAL PRIMARY KEY,
+        dealership_id BIGINT NOT NULL DEFAULT 1,
         lead_id BIGINT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
         type TEXT NOT NULL,
         content TEXT NOT NULL,
@@ -136,6 +143,7 @@ class PostgresCrmDatabase extends CrmDatabase {
 
       CREATE TABLE IF NOT EXISTS imported_messages (
         id BIGSERIAL PRIMARY KEY,
+        dealership_id BIGINT NOT NULL DEFAULT 1,
         external_id TEXT NOT NULL UNIQUE,
         source TEXT NOT NULL,
         lead_id BIGINT REFERENCES leads(id) ON DELETE SET NULL,
@@ -147,6 +155,13 @@ class PostgresCrmDatabase extends CrmDatabase {
         created_at TEXT NOT NULL
       );
 
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS dealership_id BIGINT NOT NULL DEFAULT 1;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS dealership_id BIGINT NOT NULL DEFAULT 1;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS dealership_id BIGINT NOT NULL DEFAULT 1;
+      ALTER TABLE notes ADD COLUMN IF NOT EXISTS dealership_id BIGINT NOT NULL DEFAULT 1;
+      ALTER TABLE lead_activities ADD COLUMN IF NOT EXISTS dealership_id BIGINT NOT NULL DEFAULT 1;
+      ALTER TABLE activities ADD COLUMN IF NOT EXISTS dealership_id BIGINT NOT NULL DEFAULT 1;
+      ALTER TABLE imported_messages ADD COLUMN IF NOT EXISTS dealership_id BIGINT NOT NULL DEFAULT 1;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS assigned_to BIGINT REFERENCES users(id) ON DELETE SET NULL;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS customer_name TEXT;
@@ -170,14 +185,23 @@ class PostgresCrmDatabase extends CrmDatabase {
       CREATE INDEX IF NOT EXISTS idx_imported_messages_external_id ON imported_messages(external_id);
     `);
 
+    const dealershipId = getDefaultDealershipId();
     await this.execute("UPDATE leads SET status = 'new' WHERE status IS NULL OR TRIM(status) = ''");
     await this.execute("UPDATE leads SET status = 'appointment' WHERE status = 'qualified'");
     await this.execute("UPDATE leads SET status = 'negotiation' WHERE status = 'proposal'");
     await this.execute("UPDATE leads SET status = 'won' WHERE status = 'sold'");
     await this.execute("UPDATE leads SET source = 'manual' WHERE source IS NULL OR TRIM(source) = ''");
+    await this.execute("UPDATE users SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
+    await this.execute("UPDATE contacts SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
+    await this.execute("UPDATE leads SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
+    await this.execute("UPDATE notes SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
+    await this.execute("UPDATE lead_activities SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
+    await this.execute("UPDATE activities SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
+    await this.execute("UPDATE imported_messages SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
   }
 
   async seedDefaultUsers() {
+    const dealershipId = getDefaultDealershipId();
     const row = await this.get("SELECT COUNT(*) AS count FROM users");
     if (Number(row.count) > 0) {
       return;
@@ -208,10 +232,10 @@ class PostgresCrmDatabase extends CrmDatabase {
       const passwordHash = await bcrypt.hash(user.password, 10);
       await this.execute(
         `
-          INSERT INTO users (name, email, password_hash, role, created_at)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO users (dealership_id, name, email, password_hash, role, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
         `,
-        [user.name, user.email.toLowerCase(), passwordHash, user.role, new Date().toISOString()]
+        [dealershipId, user.name, user.email.toLowerCase(), passwordHash, user.role, new Date().toISOString()]
       );
     }
   }
@@ -243,6 +267,7 @@ class PostgresCrmDatabase extends CrmDatabase {
     return `
       SELECT
         leads.id,
+        leads.dealership_id,
         leads.contact_id,
         leads.assigned_to,
         leads.source,
@@ -295,6 +320,7 @@ class PostgresCrmDatabase extends CrmDatabase {
     return `
       SELECT
         leads.id,
+        leads.dealership_id,
         leads.source,
         leads.status,
         leads.created_at,
@@ -359,6 +385,7 @@ class PostgresCrmDatabase extends CrmDatabase {
 
     return {
       id: Number(row.id),
+      dealership_id: Number(row.dealership_id || getDefaultDealershipId()),
       source: row.source || "manual",
       customer_name: customerName,
       assigned_to: row.assigned_to == null ? null : Number(row.assigned_to),
@@ -539,23 +566,26 @@ class PostgresCrmDatabase extends CrmDatabase {
 
   async createActivity({ lead_id, type, content, created_at = null }) {
     const timestamp = created_at || new Date().toISOString();
+    const dealershipId = getDefaultDealershipId();
 
     await this.execute(
       `
-        INSERT INTO activities (lead_id, type, content, created_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO activities (dealership_id, lead_id, type, content, created_at)
+        VALUES (?, ?, ?, ?, ?)
       `,
-      [lead_id, type, content, timestamp]
+      [dealershipId, lead_id, type, content, timestamp]
     );
   }
 
   async createApiLead(input) {
     const now = new Date().toISOString();
     const storedStatus = toStoredStatus(input.status || "new");
+    const dealershipId = getDefaultDealershipId();
 
     const row = await this.get(
       `
         INSERT INTO leads (
+          dealership_id,
           source,
           status,
           assigned_to,
@@ -576,10 +606,11 @@ class PostgresCrmDatabase extends CrmDatabase {
           message,
           created_at,
           updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           RETURNING id
         `,
       [
+        dealershipId,
         input.source || "website",
         storedStatus || "new",
         null,
@@ -789,13 +820,14 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   async createUser(input) {
+    const dealershipId = getDefaultDealershipId();
     const row = await this.get(
       `
-        INSERT INTO users (name, email, password_hash, role, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO users (dealership_id, name, email, password_hash, role, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         RETURNING id
       `,
-      [input.name, input.email.toLowerCase(), input.password_hash, input.role, new Date().toISOString()]
+      [dealershipId, input.name, input.email.toLowerCase(), input.password_hash, input.role, new Date().toISOString()]
     );
 
     return this.getUser(row.id);
@@ -938,9 +970,11 @@ class PostgresCrmDatabase extends CrmDatabase {
 
   async createContact(input) {
     const now = new Date().toISOString();
+    const dealershipId = getDefaultDealershipId();
     const row = await this.get(
       `
         INSERT INTO contacts (
+          dealership_id,
           first_name,
           last_name,
           email,
@@ -949,10 +983,11 @@ class PostgresCrmDatabase extends CrmDatabase {
           job_title,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id
       `,
       [
+        dealershipId,
         input.first_name,
         input.last_name,
         input.email,
@@ -1037,10 +1072,12 @@ class PostgresCrmDatabase extends CrmDatabase {
   async createLead(input) {
     const assigneeId = input.assigned_to || null;
     const now = new Date().toISOString();
+    const dealershipId = getDefaultDealershipId();
 
     const row = await this.get(
       `
         INSERT INTO leads (
+          dealership_id,
           contact_id,
           assigned_to,
           source,
@@ -1050,10 +1087,11 @@ class PostgresCrmDatabase extends CrmDatabase {
           next_action,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id
       `,
       [
+        dealershipId,
         input.contact_id,
         assigneeId,
         input.source || "manual",
@@ -1162,12 +1200,13 @@ class PostgresCrmDatabase extends CrmDatabase {
 
   async addLeadNote(leadId, body, userId = null) {
     await this.getLead(leadId);
+    const dealershipId = getDefaultDealershipId();
     await this.execute(
       `
-        INSERT INTO notes (lead_id, body, created_at)
-        VALUES (?, ?, ?)
+        INSERT INTO notes (dealership_id, lead_id, body, created_at)
+        VALUES (?, ?, ?, ?)
       `,
-      [leadId, body, new Date().toISOString()]
+      [dealershipId, leadId, body, new Date().toISOString()]
     );
     await this.createLeadActivity({
       lead_id: leadId,
@@ -1181,16 +1220,18 @@ class PostgresCrmDatabase extends CrmDatabase {
 
   async createLeadActivity(input) {
     const type = String(input.type || "").trim().toLowerCase();
+    const dealershipId = getDefaultDealershipId();
     if (!LEAD_ACTIVITY_TYPES.includes(type)) {
       throw new ValidationError("Invalid lead activity type.");
     }
 
     await this.execute(
       `
-        INSERT INTO lead_activities (lead_id, user_id, type, content, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO lead_activities (dealership_id, lead_id, user_id, type, content, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
       `,
       [
+        dealershipId,
         input.lead_id,
         input.user_id || null,
         type,
@@ -1408,9 +1449,11 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   async recordImportedMessage(input) {
+    const dealershipId = getDefaultDealershipId();
     await this.execute(
       `
         INSERT INTO imported_messages (
+          dealership_id,
           external_id,
           source,
           lead_id,
@@ -1420,9 +1463,10 @@ class PostgresCrmDatabase extends CrmDatabase {
           status,
           matched_reason,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
+        dealershipId,
         input.external_id,
         input.source,
         input.lead_id || null,

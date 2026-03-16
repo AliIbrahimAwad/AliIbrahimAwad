@@ -1,5 +1,7 @@
 const crypto = require("crypto");
 
+const { getDefaultDealershipId } = require("../src/config/dealership");
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -23,6 +25,10 @@ function plusMinutes(dateString, minutes) {
 }
 
 function createRingCentralRepository(db) {
+  function dealershipId(input = {}) {
+    return Number(input.dealership_id || getDefaultDealershipId());
+  }
+
   async function getConnectionByUserId(userId) {
     return db.get("SELECT * FROM ringcentral_connections WHERE user_id = ?", [userId]);
   }
@@ -36,6 +42,7 @@ function createRingCentralRepository(db) {
     const timestamp = nowIso();
     const record = {
       id: existing?.id || uniqueId("rcconn"),
+      dealership_id: existing?.dealership_id || dealershipId(input),
       user_id: Number(input.user_id),
       ringcentral_account_id: input.ringcentral_account_id || null,
       ringcentral_extension_id: input.ringcentral_extension_id || null,
@@ -93,13 +100,14 @@ function createRingCentralRepository(db) {
     await db.execute(
       `
         INSERT INTO ringcentral_connections (
-          id, user_id, ringcentral_account_id, ringcentral_extension_id, server_url,
+          id, dealership_id, user_id, ringcentral_account_id, ringcentral_extension_id, server_url,
           access_token, refresh_token, token_type, scope, expires_at, refresh_expires_at,
           webhook_address, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         record.id,
+        record.dealership_id,
         record.user_id,
         record.ringcentral_account_id,
         record.ringcentral_extension_id,
@@ -142,6 +150,7 @@ function createRingCentralRepository(db) {
     const timestamp = nowIso();
     const record = {
       id: existing?.id || uniqueId("rcsub"),
+      dealership_id: existing?.dealership_id || dealershipId(input),
       connection_id: input.connection_id,
       subscription_id: input.subscription_id,
       event_filters: encodeJson(input.event_filters || []),
@@ -175,11 +184,12 @@ function createRingCentralRepository(db) {
     await db.execute(
       `
         INSERT INTO ringcentral_subscriptions (
-          id, connection_id, subscription_id, event_filters, delivery_mode, expires_at, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          id, dealership_id, connection_id, subscription_id, event_filters, delivery_mode, expires_at, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         record.id,
+        record.dealership_id,
         record.connection_id,
         record.subscription_id,
         record.event_filters,
@@ -205,6 +215,7 @@ function createRingCentralRepository(db) {
 
     const record = {
       id: uniqueId("rcevt"),
+      dealership_id: dealershipId(input),
       event_key: input.event_key,
       subscription_id: input.subscription_id || null,
       event_type: input.event_type || null,
@@ -221,12 +232,13 @@ function createRingCentralRepository(db) {
     await db.execute(
       `
         INSERT INTO ringcentral_webhook_events (
-          id, event_key, subscription_id, event_type, owner_id, payload_json,
+          id, dealership_id, event_key, subscription_id, event_type, owner_id, payload_json,
           process_status, retry_count, error_message, created_at, processed_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         record.id,
+        record.dealership_id,
         record.event_key,
         record.subscription_id,
         record.event_type,
@@ -269,6 +281,7 @@ function createRingCentralRepository(db) {
 
     const record = {
       id: existing?.id || uniqueId("job"),
+      dealership_id: existing?.dealership_id || dealershipId(input),
       job_type: input.job_type,
       unique_key: input.unique_key,
       payload_json: encodeJson(input.payload || {}),
@@ -298,12 +311,13 @@ function createRingCentralRepository(db) {
     await db.execute(
       `
         INSERT INTO processing_jobs (
-          id, job_type, unique_key, payload_json, status, attempts, last_error,
+          id, dealership_id, job_type, unique_key, payload_json, status, attempts, last_error,
           run_after, locked_at, completed_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         record.id,
+        record.dealership_id,
         record.job_type,
         record.unique_key,
         record.payload_json,
@@ -376,6 +390,7 @@ function createRingCentralRepository(db) {
     const existing = await getLeadMessageByProviderId(input.provider, input.provider_message_id);
     const record = {
       id: existing?.id || uniqueId("msg"),
+      dealership_id: existing?.dealership_id || dealershipId(input),
       lead_id: input.lead_id ?? null,
       provider: input.provider,
       provider_message_id: input.provider_message_id,
@@ -430,13 +445,14 @@ function createRingCentralRepository(db) {
     await db.execute(
       `
         INSERT INTO lead_messages (
-          id, lead_id, provider, provider_message_id, thread_id, direction, from_number, to_number,
+          id, dealership_id, lead_id, provider, provider_message_id, thread_id, direction, from_number, to_number,
           external_number, subject, body_text, message_status, sent_at, received_at, crm_user_id,
           provider_extension_id, raw_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         record.id,
+        record.dealership_id,
         record.lead_id,
         record.provider,
         record.provider_message_id,
@@ -481,6 +497,7 @@ function createRingCentralRepository(db) {
     const existing = await getLeadCallByProviderId(input.provider, input.provider_call_id);
     const record = {
       id: existing?.id || uniqueId("call"),
+      dealership_id: existing?.dealership_id || dealershipId(input),
       lead_id: input.lead_id ?? null,
       provider: input.provider,
       provider_call_id: input.provider_call_id,
@@ -544,13 +561,14 @@ function createRingCentralRepository(db) {
     await db.execute(
       `
         INSERT INTO lead_calls (
-          id, lead_id, provider, provider_call_id, session_id, telephony_session_id, direction, from_number,
+          id, dealership_id, lead_id, provider, provider_call_id, session_id, telephony_session_id, direction, from_number,
           to_number, external_number, result, action, duration_seconds, start_time, end_time, crm_user_id,
           provider_extension_id, recording_id, recording_status, transcript_status, raw_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         record.id,
+        record.dealership_id,
         record.lead_id,
         record.provider,
         record.provider_call_id,
@@ -591,6 +609,7 @@ function createRingCentralRepository(db) {
       : await db.get("SELECT * FROM call_recordings WHERE lead_call_id = ?", [input.lead_call_id]);
     const record = {
       id: existing?.id || uniqueId("recording"),
+      dealership_id: existing?.dealership_id || dealershipId(input),
       lead_call_id: input.lead_call_id,
       provider: input.provider,
       provider_recording_id: input.provider_recording_id || null,
@@ -628,12 +647,13 @@ function createRingCentralRepository(db) {
     await db.execute(
       `
         INSERT INTO call_recordings (
-          id, lead_call_id, provider, provider_recording_id, content_uri, local_path,
+          id, dealership_id, lead_call_id, provider, provider_recording_id, content_uri, local_path,
           mime_type, fetched_at, transcript_status, raw_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         record.id,
+        record.dealership_id,
         record.lead_call_id,
         record.provider,
         record.provider_recording_id,
@@ -653,6 +673,7 @@ function createRingCentralRepository(db) {
   async function createCommunicationAnalysis(input) {
     const record = {
       id: uniqueId("analysis"),
+      dealership_id: dealershipId(input),
       lead_id: Number(input.lead_id),
       source_type: input.source_type,
       source_id: input.source_id,
@@ -682,14 +703,15 @@ function createRingCentralRepository(db) {
     await db.execute(
       `
         INSERT INTO communication_ai_analyses (
-          id, lead_id, source_type, source_id, provider, transcript_text, summary, intent, objections,
+          id, dealership_id, lead_id, source_type, source_id, provider, transcript_text, summary, intent, objections,
           appointment_intent, trade_in_mention, financing_mention, hot_lead_score, suggested_status,
           confidence, reasoning_summary, next_task, escalation_flag, auto_status_applied,
           recommendation_only, previous_status, new_status, raw_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         record.id,
+        record.dealership_id,
         record.lead_id,
         record.source_type,
         record.source_id,
@@ -722,6 +744,7 @@ function createRingCentralRepository(db) {
   async function createLeadStatusAudit(input) {
     const record = {
       id: uniqueId("statusaudit"),
+      dealership_id: dealershipId(input),
       lead_id: Number(input.lead_id),
       previous_status: input.previous_status || null,
       new_status: input.new_status || null,
@@ -736,12 +759,13 @@ function createRingCentralRepository(db) {
     await db.execute(
       `
         INSERT INTO lead_status_audits (
-          id, lead_id, previous_status, new_status, confidence, reasoning_summary,
+          id, dealership_id, lead_id, previous_status, new_status, confidence, reasoning_summary,
           source, auto_applied, recommendation_only, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         record.id,
+        record.dealership_id,
         record.lead_id,
         record.previous_status,
         record.new_status,

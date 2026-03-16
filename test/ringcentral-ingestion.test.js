@@ -53,6 +53,7 @@ test("findLeadByPhone matches leads stored directly on the lead record", async (
     const found = await db.findLeadByPhone("+1 647-555-0100");
     assert.ok(found);
     assert.equal(Number(found.id), Number(lead.id));
+    assert.equal(Number(found.dealership_id), 1);
   });
 });
 
@@ -119,6 +120,7 @@ test("RingCentral SMS webhook ingestion stores the message, queues AI, and updat
     );
     assert.ok(message);
     assert.equal(Number(message.lead_id), Number(lead.id));
+    assert.equal(Number(message.dealership_id), 1);
 
     const jobsBefore = await db.all("SELECT * FROM processing_jobs WHERE job_type = ?", ["analyze_sms_thread"]);
     assert.equal(jobsBefore.length, 1);
@@ -136,6 +138,7 @@ test("RingCentral SMS webhook ingestion stores the message, queues AI, and updat
     assert.ok(audit);
     assert.equal(audit.source, "ai_message_analysis");
     assert.equal(audit.new_status, "appointment");
+    assert.equal(Number(audit.dealership_id), 1);
 
     const analysis = await db.get(
       "SELECT * FROM communication_ai_analyses WHERE lead_id = ? ORDER BY created_at DESC LIMIT 1",
@@ -143,6 +146,7 @@ test("RingCentral SMS webhook ingestion stores the message, queues AI, and updat
     );
     assert.ok(analysis);
     assert.equal(analysis.source_type, "sms");
+    assert.equal(Number(analysis.dealership_id), 1);
 
     const activities = await db.all("SELECT * FROM activities WHERE lead_id = ? ORDER BY created_at DESC", [lead.id]);
     assert.ok(activities.some((activity) => String(activity.content).includes("appointment")));

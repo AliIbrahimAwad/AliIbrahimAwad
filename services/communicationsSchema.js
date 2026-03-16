@@ -1,7 +1,10 @@
+const { getDefaultDealershipId } = require("../src/config/dealership");
+
 const COMMUNICATION_SCHEMA_STATEMENTS = [
   `
     CREATE TABLE IF NOT EXISTS ringcentral_connections (
       id TEXT PRIMARY KEY,
+      dealership_id BIGINT NOT NULL DEFAULT 1,
       user_id BIGINT NOT NULL,
       ringcentral_account_id TEXT,
       ringcentral_extension_id TEXT,
@@ -25,6 +28,7 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
   `
     CREATE TABLE IF NOT EXISTS ringcentral_subscriptions (
       id TEXT PRIMARY KEY,
+      dealership_id BIGINT NOT NULL DEFAULT 1,
       connection_id TEXT NOT NULL,
       subscription_id TEXT NOT NULL,
       event_filters TEXT NOT NULL,
@@ -42,6 +46,7 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
   `
     CREATE TABLE IF NOT EXISTS ringcentral_webhook_events (
       id TEXT PRIMARY KEY,
+      dealership_id BIGINT NOT NULL DEFAULT 1,
       event_key TEXT NOT NULL,
       subscription_id TEXT,
       event_type TEXT,
@@ -62,6 +67,7 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
   `
     CREATE TABLE IF NOT EXISTS lead_messages (
       id TEXT PRIMARY KEY,
+      dealership_id BIGINT NOT NULL DEFAULT 1,
       lead_id BIGINT,
       provider TEXT NOT NULL,
       provider_message_id TEXT NOT NULL,
@@ -93,6 +99,7 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
   `
     CREATE TABLE IF NOT EXISTS lead_calls (
       id TEXT PRIMARY KEY,
+      dealership_id BIGINT NOT NULL DEFAULT 1,
       lead_id BIGINT,
       provider TEXT NOT NULL,
       provider_call_id TEXT NOT NULL,
@@ -128,6 +135,7 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
   `
     CREATE TABLE IF NOT EXISTS call_recordings (
       id TEXT PRIMARY KEY,
+      dealership_id BIGINT NOT NULL DEFAULT 1,
       lead_call_id TEXT NOT NULL,
       provider TEXT NOT NULL,
       provider_recording_id TEXT,
@@ -148,6 +156,7 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
   `
     CREATE TABLE IF NOT EXISTS communication_ai_analyses (
       id TEXT PRIMARY KEY,
+      dealership_id BIGINT NOT NULL DEFAULT 1,
       lead_id BIGINT NOT NULL,
       source_type TEXT NOT NULL,
       source_id TEXT NOT NULL,
@@ -181,6 +190,7 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
   `
     CREATE TABLE IF NOT EXISTS lead_status_audits (
       id TEXT PRIMARY KEY,
+      dealership_id BIGINT NOT NULL DEFAULT 1,
       lead_id BIGINT NOT NULL,
       previous_status TEXT,
       new_status TEXT,
@@ -199,6 +209,7 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
   `
     CREATE TABLE IF NOT EXISTS processing_jobs (
       id TEXT PRIMARY KEY,
+      dealership_id BIGINT NOT NULL DEFAULT 1,
       job_type TEXT NOT NULL,
       unique_key TEXT NOT NULL,
       payload_json TEXT NOT NULL,
@@ -222,10 +233,80 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
   `,
 ];
 
+async function ensureColumn(db, tableName, columnName, definition) {
+  let columns = [];
+
+  try {
+    columns = await db.all(`PRAGMA table_info(${tableName})`);
+  } catch (_error) {
+    try {
+      columns = await db.all(
+        `
+          SELECT column_name AS name
+          FROM information_schema.columns
+          WHERE table_name = ?
+        `,
+        [tableName]
+      );
+    } catch (_ignored) {
+      columns = [];
+    }
+  }
+
+  if (!columns.some((column) => column.name === columnName)) {
+    await db.execute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
 async function ensureCommunicationsSchema(db) {
+  const dealershipId = getDefaultDealershipId();
   for (const statement of COMMUNICATION_SCHEMA_STATEMENTS) {
     await db.execute(statement);
   }
+
+  await ensureColumn(db, "ringcentral_connections", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
+  await ensureColumn(db, "ringcentral_subscriptions", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
+  await ensureColumn(db, "ringcentral_webhook_events", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
+  await ensureColumn(db, "lead_messages", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
+  await ensureColumn(db, "lead_calls", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
+  await ensureColumn(db, "call_recordings", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
+  await ensureColumn(db, "communication_ai_analyses", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
+  await ensureColumn(db, "lead_status_audits", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
+  await ensureColumn(db, "processing_jobs", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
+
+  await db.execute(
+    "UPDATE ringcentral_connections SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
+    [dealershipId]
+  );
+  await db.execute(
+    "UPDATE ringcentral_subscriptions SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
+    [dealershipId]
+  );
+  await db.execute(
+    "UPDATE ringcentral_webhook_events SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
+    [dealershipId]
+  );
+  await db.execute("UPDATE lead_messages SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [
+    dealershipId,
+  ]);
+  await db.execute("UPDATE lead_calls SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [
+    dealershipId,
+  ]);
+  await db.execute(
+    "UPDATE call_recordings SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
+    [dealershipId]
+  );
+  await db.execute(
+    "UPDATE communication_ai_analyses SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
+    [dealershipId]
+  );
+  await db.execute(
+    "UPDATE lead_status_audits SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
+    [dealershipId]
+  );
+  await db.execute("UPDATE processing_jobs SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [
+    dealershipId,
+  ]);
 }
 
 module.exports = {
