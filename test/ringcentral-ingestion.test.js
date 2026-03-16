@@ -254,3 +254,60 @@ test("RingCentral call analysis deletes the local temp recording after success",
     assert.ok(analysis);
   });
 });
+
+test("RingCentral call analysis deletes temp recordings for unmatched calls too", async () => {
+  await withDb(async ({ db, temp }) => {
+    const service = await createRingCentralService(
+      {
+        recordingsDir: path.join(temp.dir, "recordings"),
+      },
+      { db }
+    );
+
+    const leadCall = await service.store.upsertLeadCall({
+      lead_id: null,
+      provider: "ringcentral",
+      provider_call_id: "call-provider-unmatched",
+      session_id: "session-unmatched",
+      telephony_session_id: "telephony-unmatched",
+      direction: "inbound",
+      from_number: "+16475559999",
+      to_number: "+16475551212",
+      external_number: "6475559999",
+      result: "Accepted",
+      duration_seconds: 31,
+      start_time: "2026-03-16T15:00:00.000Z",
+      crm_user_id: 1,
+      provider_extension_id: "ext-1",
+      recording_id: "recording-provider-unmatched",
+      recording_status: "available",
+      transcript_status: "pending",
+      raw: {},
+    });
+
+    const localPath = path.join(temp.dir, "recordings", "recording-provider-unmatched.mp3");
+    fs.mkdirSync(path.dirname(localPath), { recursive: true });
+    fs.writeFileSync(localPath, "fake-audio-data");
+
+    const recording = await service.store.upsertCallRecording({
+      lead_call_id: leadCall.record.id,
+      provider: "ringcentral",
+      provider_recording_id: "recording-provider-unmatched",
+      content_uri: "https://platform.ringcentral.com/recordings/unmatched",
+      local_path: localPath,
+      mime_type: "audio/mpeg",
+      fetched_at: "2026-03-16T15:01:00.000Z",
+      transcript_status: "pending",
+      raw: {},
+    });
+
+    const result = await service.analyzeCallRecording(recording.record);
+    assert.equal(result, null);
+    assert.equal(fs.existsSync(localPath), false);
+
+    const savedRecording = await db.get("SELECT * FROM call_recordings WHERE id = ?", [recording.record.id]);
+    assert.ok(savedRecording);
+    assert.equal(savedRecording.local_path, null);
+    assert.equal(savedRecording.transcript_status, "skipped");
+  });
+});

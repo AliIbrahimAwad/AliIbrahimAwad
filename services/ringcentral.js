@@ -518,6 +518,18 @@ class RingCentralService {
   async analyzeCallRecording(recordingRecord) {
     const leadCall = await this.db.get("SELECT * FROM lead_calls WHERE id = ?", [recordingRecord.lead_call_id]);
     if (!leadCall || !leadCall.lead_id) {
+      await this.store.upsertCallRecording({
+        lead_call_id: recordingRecord.lead_call_id,
+        provider: "ringcentral",
+        provider_recording_id: recordingRecord.provider_recording_id,
+        content_uri: recordingRecord.content_uri,
+        local_path: null,
+        mime_type: recordingRecord.mime_type,
+        fetched_at: recordingRecord.fetched_at,
+        transcript_status: "skipped",
+        raw: decodeJson(recordingRecord.raw_json, {}),
+      });
+      removeTemporaryRecordingFile(recordingRecord.local_path);
       return null;
     }
 
