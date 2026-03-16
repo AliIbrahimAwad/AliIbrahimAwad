@@ -275,36 +275,36 @@ async function ensureCommunicationsSchema(db) {
   await ensureColumn(db, "processing_jobs", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
 
   await db.execute(
-    "UPDATE ringcentral_connections SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
+    "UPDATE ringcentral_connections SET dealership_id = ? WHERE dealership_id IS NULL",
     [dealershipId]
   );
   await db.execute(
-    "UPDATE ringcentral_subscriptions SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
+    "UPDATE ringcentral_subscriptions SET dealership_id = ? WHERE dealership_id IS NULL",
     [dealershipId]
   );
   await db.execute(
-    "UPDATE ringcentral_webhook_events SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
+    "UPDATE ringcentral_webhook_events SET dealership_id = ? WHERE dealership_id IS NULL",
     [dealershipId]
   );
-  await db.execute("UPDATE lead_messages SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [
+  await db.execute("UPDATE lead_messages SET dealership_id = ? WHERE dealership_id IS NULL", [
     dealershipId,
   ]);
-  await db.execute("UPDATE lead_calls SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [
+  await db.execute("UPDATE lead_calls SET dealership_id = ? WHERE dealership_id IS NULL", [
     dealershipId,
   ]);
   await db.execute(
-    "UPDATE call_recordings SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
+    "UPDATE call_recordings SET dealership_id = ? WHERE dealership_id IS NULL",
     [dealershipId]
   );
   await db.execute(
-    "UPDATE communication_ai_analyses SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
+    "UPDATE communication_ai_analyses SET dealership_id = ? WHERE dealership_id IS NULL",
     [dealershipId]
   );
   await db.execute(
-    "UPDATE lead_status_audits SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
+    "UPDATE lead_status_audits SET dealership_id = ? WHERE dealership_id IS NULL",
     [dealershipId]
   );
-  await db.execute("UPDATE processing_jobs SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [
+  await db.execute("UPDATE processing_jobs SET dealership_id = ? WHERE dealership_id IS NULL", [
     dealershipId,
   ]);
 }
