@@ -152,3 +152,33 @@ test("RingCentral SMS webhook ingestion stores the message, queues AI, and updat
     assert.ok(activities.some((activity) => String(activity.content).includes("appointment")));
   });
 });
+
+test("RingCentral status omits live tokens from the returned connection payload", async () => {
+  await withDb(async ({ db, temp }) => {
+    const service = await createRingCentralService(
+      {
+        recordingsDir: path.join(temp.dir, "recordings"),
+      },
+      { db }
+    );
+
+    await service.store.upsertConnection({
+      user_id: 1,
+      ringcentral_account_id: "acct-1",
+      ringcentral_extension_id: "ext-1",
+      server_url: "https://platform.ringcentral.com",
+      access_token: "live-access-token",
+      refresh_token: "live-refresh-token",
+      token_type: "Bearer",
+      scope: "ReadMessages",
+      status: "active",
+    });
+
+    const status = await service.getConnectionStatusForUser(1);
+    assert.equal(status.connected, true);
+    assert.equal(status.connection.access_token, undefined);
+    assert.equal(status.connection.refresh_token, undefined);
+    assert.equal(status.connection.has_access_token, true);
+    assert.equal(status.connection.has_refresh_token, true);
+  });
+});

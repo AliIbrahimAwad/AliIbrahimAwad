@@ -100,6 +100,31 @@ function formatCallActivity(record) {
   return `${label} call ${record.result || "synced"}${duration ? ` (${duration}s)` : ""}`;
 }
 
+function sanitizeConnectionForStatus(connection) {
+  if (!connection) {
+    return null;
+  }
+
+  return {
+    id: connection.id,
+    user_id: connection.user_id,
+    ringcentral_account_id: connection.ringcentral_account_id,
+    ringcentral_extension_id: connection.ringcentral_extension_id,
+    server_url: connection.server_url,
+    token_type: connection.token_type,
+    scope: connection.scope,
+    expires_at: connection.expires_at,
+    refresh_expires_at: connection.refresh_expires_at,
+    webhook_address: connection.webhook_address,
+    status: connection.status,
+    created_at: connection.created_at,
+    updated_at: connection.updated_at,
+    dealership_id: connection.dealership_id,
+    has_access_token: Boolean(connection.access_token),
+    has_refresh_token: Boolean(connection.refresh_token),
+  };
+}
+
 class RingCentralService {
   constructor({ db, config = {}, fetchImpl = fetch }) {
     this.db = db;
@@ -172,7 +197,7 @@ class RingCentralService {
     const subscription = connection ? await this.store.getSubscriptionByConnectionId(connection.id) : null;
     return {
       connected: Boolean(connection && connection.status === "active"),
-      connection,
+      connection: sanitizeConnectionForStatus(connection),
       subscription: subscription
         ? {
             ...subscription,
