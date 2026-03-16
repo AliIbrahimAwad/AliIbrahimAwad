@@ -39,6 +39,13 @@ function normalizeHeaders(headers = {}) {
   return normalized;
 }
 
+function normalizeBooleanFlag(value, defaultValue = false) {
+  if (value === undefined || value === null || value === "") {
+    return defaultValue;
+  }
+  return value === true || value === "true" || value === "1" || value === 1;
+}
+
 function extractEventKey(envelope = {}) {
   const body = envelope.body || {};
   return (
@@ -120,6 +127,23 @@ function removeTemporaryRecordingFile(filePath) {
   return false;
 }
 
+function buildCallKeywordText(record = {}) {
+  const raw = record && typeof record === "object" ? record : {};
+  return [
+    raw.action,
+    raw.result,
+    raw.reason,
+    raw.direction,
+    raw.transport,
+    raw.telephonyStatus,
+    raw.availability,
+    raw.notes,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
 function sanitizeConnectionForStatus(connection) {
   if (!connection) {
     return null;
@@ -163,6 +187,13 @@ class RingCentralService {
       staticAccessToken: config.accessToken || process.env.RINGCENTRAL_ACCESS_TOKEN || "",
       recordingsDir: config.recordingsDir || process.env.RINGCENTRAL_RECORDINGS_DIR || DEFAULT_RECORDINGS_DIR,
       autoCreateSubscription: config.autoCreateSubscription !== false,
+      minStoredCallSeconds: Number(
+        config.minStoredCallSeconds ?? process.env.RINGCENTRAL_MIN_STORED_CALL_SECONDS ?? 10
+      ),
+      skipForwardedCalls: normalizeBooleanFlag(
+        config.skipForwardedCalls ?? process.env.RINGCENTRAL_SKIP_FORWARDED_CALLS,
+        true
+      ),
     };
     this.aiConfig = getAiConfig();
     this.store = db ? createRingCentralRepository(db) : null;
@@ -381,6 +412,30 @@ class RingCentralService {
     }
   }
 
+  shouldSkipCallRecord(record, lead) {
+    const durationSeconds = Number(record.duration || 0);
+    const keywordText = buildCallKeywordText(record);
+    const looksForwarded =
+      this.config.skipForwardedCalls &&
+      /\b(forward|forwarded|findme|find-me|followme|follow-me)\b/.test(keywordText);
+
+    if (looksForwarded) {
+      return {
+        skip: true,
+        reason: "forwarded_call",
+      };
+    }
+
+    if (!lead && durationSeconds < this.config.minStoredCallSeconds) {
+      return {
+        skip: true,
+        reason: "short_unmatched_call",
+      };
+    }
+
+    return { skip: false, reason: null };
+  }
+
   matchesSession(record, payload) {
     const payloadSession = String(payload.sessionId || "").trim();
     const payloadTelephonySession = String(payload.telephonySessionId || "").trim();
@@ -421,6 +476,20 @@ class RingCentralService {
       const toNumber = extractPhone(Array.isArray(record.to) ? record.to[0] : record.to);
       const externalNumber = normalizePhone(getCounterpartyPhone({ direction, fromNumber, toNumber }));
       const lead = externalNumber ? await this.db.findLeadByPhone(externalNumber) : null;
+      const skipDecision = this.shouldSkipCallRecord(record, lead);
+
+      if (skipDecision.skip) {
+        logStructured("info", "ringcentral_call_skipped", {
+          reason: skipDecision.reason,
+          external_number: externalNumber || null,
+          provider_call_id: record.id || null,
+          duration_seconds: Number(record.duration || 0),
+          action: record.action || null,
+          result: record.result || null,
+        });
+        continue;
+      }
+
       if (!lead) {
         logStructured("info", "ringcentral_unmatched_call_number", {
           external_number: externalNumber || null,

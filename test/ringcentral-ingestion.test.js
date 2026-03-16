@@ -311,3 +311,53 @@ test("RingCentral call analysis deletes temp recordings for unmatched calls too"
     assert.equal(savedRecording.transcript_status, "skipped");
   });
 });
+
+test("RingCentral skips very short unmatched calls during reconciliation", async () => {
+  await withDb(async ({ db, temp }) => {
+    const service = await createRingCentralService(
+      {
+        recordingsDir: path.join(temp.dir, "recordings"),
+        minStoredCallSeconds: 10,
+      },
+      { db }
+    );
+
+    const decision = service.shouldSkipCallRecord(
+      {
+        id: "short-1",
+        duration: 4,
+        direction: "Inbound",
+        result: "Accepted",
+      },
+      null
+    );
+
+    assert.equal(decision.skip, true);
+    assert.equal(decision.reason, "short_unmatched_call");
+  });
+});
+
+test("RingCentral skips forwarded calls during reconciliation", async () => {
+  await withDb(async ({ db, temp }) => {
+    const service = await createRingCentralService(
+      {
+        recordingsDir: path.join(temp.dir, "recordings"),
+        skipForwardedCalls: true,
+      },
+      { db }
+    );
+
+    const decision = service.shouldSkipCallRecord(
+      {
+        id: "forwarded-1",
+        duration: 45,
+        action: "Forwarded",
+        result: "Accepted",
+      },
+      { id: 123 }
+    );
+
+    assert.equal(decision.skip, true);
+    assert.equal(decision.reason, "forwarded_call");
+  });
+});

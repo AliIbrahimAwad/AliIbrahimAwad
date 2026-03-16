@@ -31,6 +31,8 @@ Important flags:
 
 - `RINGCENTRAL_AUTO_STATUS_UPDATES=true|false`
 - `RINGCENTRAL_AI_CONFIDENCE_THRESHOLD=0.78`
+- `RINGCENTRAL_MIN_STORED_CALL_SECONDS=10`
+- `RINGCENTRAL_SKIP_FORWARDED_CALLS=true`
 - `DEFAULT_DEALERSHIP_ID=1`
 
 ### Dealership ID foundation
@@ -61,6 +63,8 @@ If auto-updates are disabled or confidence is below threshold, the CRM stores on
 - Telephony session webhooks enqueue reconciliation jobs.
 - Call logs remain the authoritative completed-call record.
 - `session_id` / `telephony_session_id` are used to reconcile related call records.
+- Very short unmatched calls and forwarding hops can be filtered before they are stored.
+- Recordings are downloaded only as temporary working files and deleted after analysis or skip handling.
 
 ### Background jobs
 
