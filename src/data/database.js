@@ -1325,13 +1325,18 @@ class CrmDatabase {
 
     const leads = this.all(
       `
-        ${this.leadSelectSql()}
-        WHERE contacts.phone IS NOT NULL AND TRIM(contacts.phone) <> ''
+        ${this.apiLeadSelectSql()}
+        WHERE
+          (contacts.phone IS NOT NULL AND TRIM(contacts.phone) <> '')
+          OR (leads.phone IS NOT NULL AND TRIM(leads.phone) <> '')
         ORDER BY leads.updated_at DESC
       `
     );
 
-    return leads.find((lead) => normalizePhone(lead.contact_phone) === normalizedPhone) || null;
+    return leads.find((lead) => {
+      const leadPhone = normalizePhone(lead.phone || lead.contact_phone);
+      return leadPhone === normalizedPhone;
+    }) || null;
   }
 
   getDashboardMetrics(user) {

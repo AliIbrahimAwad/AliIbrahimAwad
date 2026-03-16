@@ -515,7 +515,9 @@ function registerWebRoutes(app) {
         return;
       }
 
-      await req.app.locals.ringcentral.sendSMS(lead.contact_phone, payload.message);
+      await req.app.locals.ringcentral.sendSMS(lead.contact_phone, payload.message, {
+        crmUserId: req.currentUser.id,
+      });
       await req.app.locals.db.recordLeadActivity({
         lead_id: id,
         user_id: req.currentUser.id,

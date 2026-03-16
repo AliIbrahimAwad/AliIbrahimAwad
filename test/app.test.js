@@ -17,6 +17,10 @@ function createTempDbPath() {
   };
 }
 
+function loadJsonFixture(...segments) {
+  return JSON.parse(fs.readFileSync(path.join(__dirname, ...segments), "utf8"));
+}
+
 function createClient(server) {
   let cookieHeader = "";
 
@@ -432,48 +436,95 @@ test("manager can assign an unassigned API lead", async () => {
 });
 
 test("RingCentral webhook logs phone activity and auto-updates lead status", async () => {
-  await withServer(async ({ app, server }) => {
-    const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
-    const contact = app.locals.db.createContact({
-      first_name: "Webhook",
-      last_name: "Lead",
+  const temp = createTempDbPath();
+  const previousThreshold = process.env.RINGCENTRAL_AI_CONFIDENCE_THRESHOLD;
+  const previousAuto = process.env.RINGCENTRAL_AUTO_STATUS_UPDATES;
+  process.env.RINGCENTRAL_AI_CONFIDENCE_THRESHOLD = "0.6";
+  process.env.RINGCENTRAL_AUTO_STATUS_UPDATES = "true";
+
+  const fetchImpl = async (url) => {
+    if (String(url).includes("/message-store/msg-1")) {
+      return new Response(
+        JSON.stringify({
+          id: "msg-1",
+          direction: "Inbound",
+          from: { phoneNumber: "+1 (647) 555-0102" },
+          to: [{ phoneNumber: "+1 (647) 555-1212" }],
+          subject: "I want to book a test drive appointment tomorrow afternoon.",
+          messageStatus: "Received",
+          creationTime: "2026-03-16T15:00:00.000Z",
+          lastModifiedTime: "2026-03-16T15:00:10.000Z",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  const app = await createApp({
+    dbPath: temp.dbPath,
+    uiMode: "legacy",
+    ringcentral: {
+      recordingsDir: path.join(temp.dir, "recordings"),
+      fetchImpl,
+    },
+  });
+  const server = app.listen(0);
+
+  try {
+    const lead = await app.locals.db.createApiLead({
+      source: "website",
+      customer_name: "Webhook Lead",
+      phone: "(647) 555-0102",
       email: "webhook@example.com",
-      phone: "(555) 0102",
-      company: null,
-      job_title: null,
-    });
-
-    const lead = app.locals.db.createLead({
-      contact_id: contact.id,
-      assigned_to: salesUser.id,
-      source: "manual",
+      vehicle_interest: "2024 SUV",
       status: "new",
-      priority: null,
-      follow_up_date: null,
-      next_action: "Wait for webhook",
     });
 
+    await app.locals.ringcentral.store.upsertConnection({
+      user_id: 1,
+      ringcentral_account_id: "acct-1",
+      ringcentral_extension_id: "ext-1",
+      server_url: "https://platform.ringcentral.com",
+      access_token: "token",
+      refresh_token: "refresh",
+      token_type: "Bearer",
+      scope: "ReadMessages",
+      status: "active",
+    });
+
+    const fixture = loadJsonFixture("fixtures", "ringcentral", "instant-sms.json");
     const client = createClient(server);
     const webhookResponse = await client.request({
       method: "POST",
-      path: "/api/ringcentral/webhook",
-      json: {
-        type: "sms",
-        fromPhoneNumber: "5550102",
-        content: "Inbound SMS from RingCentral",
-      },
+      path: "/api/ringcentral/webhooks",
+      json: fixture,
     });
 
     assert.equal(webhookResponse.statusCode, 200);
     const body = JSON.parse(webhookResponse.body);
-    assert.equal(body.matched, true);
-    assert.equal(body.lead_id, lead.id);
-    assert.equal(body.status, "contacted");
+    assert.equal(body.accepted, true);
 
-    const activities = app.locals.db.listLeadActivities(lead.id);
-    assert.equal(activities[0].type, "sms");
-    assert.match(activities[0].content, /Inbound SMS from RingCentral/);
-  });
+    await app.locals.ringcentral.processPendingJobs({ limit: 5 });
+
+    const updatedLead = await app.locals.db.getApiLead(Number(lead.id));
+    assert.equal(updatedLead.status, "appointment");
+
+    const activities = await app.locals.db.all(
+      "SELECT * FROM activities WHERE lead_id = ? ORDER BY created_at DESC",
+      [lead.id]
+    );
+    assert.ok(activities.some((activity) => /test drive appointment/i.test(String(activity.content))));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    process.env.RINGCENTRAL_AI_CONFIDENCE_THRESHOLD = previousThreshold;
+    process.env.RINGCENTRAL_AUTO_STATUS_UPDATES = previousAuto;
+    fs.rmSync(temp.dir, { recursive: true, force: true });
+  }
 });
 
 test("manager dashboard shows aggregate metrics and leads per salesperson", async () => {

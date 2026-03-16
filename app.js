@@ -10,6 +10,7 @@ const { initializeDatabase } = require("./src/data");
 const { attachCurrentUser } = require("./src/middleware/auth");
 const { registerApiRoutes } = require("./src/routes/api");
 const { registerAuthRoutes } = require("./src/routes/auth");
+const { registerRingCentralRoutes } = require("./src/routes/ringcentral");
 const { registerUserRoutes } = require("./src/routes/users");
 const { registerWebRoutes } = require("./src/routes/web");
 const { renderDocument } = require("./src/views/layout");
@@ -40,7 +41,13 @@ async function createApp(options = {}) {
     databaseSsl: options.databaseSsl,
     databaseUrl: options.databaseUrl,
   });
-  const ringcentral = createRingCentralService(options.ringcentral);
+  const ringcentralConfig = { ...(options.ringcentral || {}) };
+  const ringcentralFetchImpl = ringcentralConfig.fetchImpl;
+  delete ringcentralConfig.fetchImpl;
+  const ringcentral = await createRingCentralService(ringcentralConfig, {
+    db,
+    fetchImpl: ringcentralFetchImpl,
+  });
   const frontendDistPath = path.join(__dirname, "frontend", "dist");
   const serveReactApp = shouldServeReactApp(options) && fs.existsSync(frontendDistPath);
 
@@ -70,6 +77,7 @@ async function createApp(options = {}) {
 
   registerAuthRoutes(app);
   registerApiRoutes(app);
+  registerRingCentralRoutes(app);
   registerUserRoutes(app);
 
   if (serveReactApp) {
