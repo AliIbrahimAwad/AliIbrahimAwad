@@ -1,29 +1,33 @@
 import { startTransition, useDeferredValue, useEffect, useState } from "react";
 import { Menu, Search, SlidersHorizontal } from "lucide-react";
 
+import { AttentionLeadCard } from "./components/AttentionLeadCard";
 import { LeadCard } from "./components/LeadCard";
 import { LeadDetailsPanel } from "./components/LeadDetailsPanel";
 import { LoginPage } from "./components/LoginPage";
 import { MetricCard } from "./components/MetricCard";
+import { NotificationTray } from "./components/NotificationTray";
 import { Sidebar } from "./components/Sidebar";
 import { TeamManagementPanel } from "./components/TeamManagementPanel";
 import {
   assignLead,
+  completeTask,
   createUser,
   deleteUser,
   getAssignableUsers,
-  getDashboardMetrics,
+  getDashboardWorklist,
   getLead,
-  getLeads,
   getSession,
   getUsers,
   login,
   logout,
+  markNotificationRead,
   updateLeadStatus,
 } from "./lib/api";
 import { pipelineLabel } from "./lib/format";
 
-const tabs = ["All leads", "New Lead", "Contacted", "Appointment", "Negotiation", "Sold", "Lost"];
+const tabs = ["Needs Attention", "Organized Leads"];
+const organizedGroups = ["contacted", "engaged", "appointment", "negotiation", "sold", "lost"];
 
 function capitalizeSource(source) {
   return String(source || "")
@@ -82,7 +86,12 @@ function formatLead(lead) {
     createdAtLabel: formatRelative(lead.created_at),
     updatedAtLabel: formatRelative(lead.updated_at),
     listingUrl: lead.listing_url || "",
+    attentionReason: lead.attention_reason || "",
+    attentionReasonCode: lead.attention_reason_code || "",
+    aiSummary: lead.ai_summary || "",
+    openTasks: lead.open_tasks || [],
     activities: [],
+    tasks: [],
   };
 }
 
@@ -108,22 +117,40 @@ function formatTimelineItem(item) {
 }
 
 const emptyMetrics = {
-  new_leads_today: 0,
-  leads_this_week: 0,
-  appointments_scheduled: 0,
-  vehicles_sold: 0,
-  conversion_rate: 0,
+  needs_attention_count: 0,
+  overdue_task_count: 0,
+  unread_notification_count: 0,
 };
+
+function getFirstOrganizedLeadId(groups = {}) {
+  for (const group of organizedGroups) {
+    const candidate = groups[group]?.[0];
+    if (candidate) {
+      return candidate.id;
+    }
+  }
+
+  return null;
+}
 
 export default function App() {
   const [authStatus, setAuthStatus] = useState("loading");
   const [currentUser, setCurrentUser] = useState(null);
   const [leads, setLeads] = useState([]);
+  const [organizedLeadGroups, setOrganizedLeadGroups] = useState({
+    contacted: [],
+    engaged: [],
+    appointment: [],
+    negotiation: [],
+    sold: [],
+    lost: [],
+  });
+  const [notifications, setNotifications] = useState([]);
   const [metrics, setMetrics] = useState(emptyMetrics);
   const [selectedLeadId, setSelectedLeadId] = useState(null);
   const [selectedLeadDetails, setSelectedLeadDetails] = useState(null);
   const [activeSection, setActiveSection] = useState("Dashboard");
-  const [activeTab, setActiveTab] = useState("All leads");
+  const [activeTab, setActiveTab] = useState("Needs Attention");
   const [users, setUsers] = useState([]);
   const [assignees, setAssignees] = useState([]);
   const [query, setQuery] = useState("");
@@ -133,9 +160,11 @@ export default function App() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [assignmentUpdating, setAssignmentUpdating] = useState(false);
+  const [taskCompletingId, setTaskCompletingId] = useState(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [userSubmitting, setUserSubmitting] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [error, setError] = useState("");
   const [userForm, setUserForm] = useState({
     name: "",
@@ -144,6 +173,25 @@ export default function App() {
     role: "sales",
   });
   const deferredQuery = useDeferredValue(query);
+
+  async function refreshWorklist({ preserveSelection = true } = {}) {
+    const payload = await getDashboardWorklist();
+    const nextAttention = (payload.attention_items || []).map(formatLead);
+    const nextOrganized = Object.fromEntries(
+      organizedGroups.map((group) => [group, (payload.organized_groups?.[group] || []).map(formatLead)])
+    );
+    const nextSelectedId =
+      preserveSelection && selectedLeadId
+        ? selectedLeadId
+        : nextAttention[0]?.id || getFirstOrganizedLeadId(nextOrganized) || null;
+
+    setLeads(nextAttention);
+    setOrganizedLeadGroups(nextOrganized);
+    setMetrics(payload.summary || emptyMetrics);
+    setNotifications(payload.notifications || []);
+    setSelectedLeadId(nextSelectedId);
+    setError("");
+  }
 
   useEffect(() => {
     let active = true;
@@ -191,19 +239,21 @@ export default function App() {
     async function loadDashboard() {
       try {
         setLoading(true);
-        const [leadResponse, dashboardMetrics] = await Promise.all([
-          getLeads({ limit: 100 }),
-          getDashboardMetrics(),
-        ]);
+        const payload = await getDashboardWorklist();
 
         if (!active) {
           return;
         }
 
-        const nextLeads = leadResponse.items.map(formatLead);
-        setLeads(nextLeads);
-        setMetrics(dashboardMetrics);
-        setSelectedLeadId((current) => current ?? nextLeads[0]?.id ?? null);
+        const nextAttention = (payload.attention_items || []).map(formatLead);
+        const nextOrganized = Object.fromEntries(
+          organizedGroups.map((group) => [group, (payload.organized_groups?.[group] || []).map(formatLead)])
+        );
+        setLeads(nextAttention);
+        setOrganizedLeadGroups(nextOrganized);
+        setMetrics(payload.summary || emptyMetrics);
+        setNotifications(payload.notifications || []);
+        setSelectedLeadId((current) => current ?? nextAttention[0]?.id ?? getFirstOrganizedLeadId(nextOrganized) ?? null);
         setError("");
       } catch (loadError) {
         if (!active) {
@@ -332,6 +382,7 @@ export default function App() {
           ...formatLead(payload.lead),
           activities: payload.activities.map(formatActivity),
           timeline: (payload.timeline || []).map(formatTimelineItem),
+          tasks: payload.tasks || [],
         });
       } catch (loadError) {
         if (!active) {
@@ -359,27 +410,28 @@ export default function App() {
     };
   }, [authStatus, selectedLeadId]);
 
-  const visibleLeads = leads.filter((lead) => {
-    const matchesTab = activeTab === "All leads" ? true : lead.statusLabel === activeTab;
-    const search = deferredQuery.trim().toLowerCase();
+  const search = deferredQuery.trim().toLowerCase();
+  const matchesSearch = (lead) =>
+    !search ||
+    [lead.customerName, lead.vehicleInterest, lead.phone, lead.source, lead.messagePreview, lead.attentionReason, lead.aiSummary]
+      .join(" ")
+      .toLowerCase()
+      .includes(search);
 
-    if (!search) {
-      return matchesTab;
-    }
-
-    return (
-      matchesTab &&
-      [lead.customerName, lead.vehicleInterest, lead.phone, lead.source, lead.messagePreview]
-        .join(" ")
-        .toLowerCase()
-        .includes(search)
-    );
-  });
+  const visibleAttentionLeads = leads.filter(matchesSearch);
+  const visibleOrganizedGroups = Object.fromEntries(
+    organizedGroups.map((group) => [group, organizedLeadGroups[group].filter(matchesSearch)])
+  );
+  const flattenedOrganizedLeads = organizedGroups.flatMap((group) => visibleOrganizedGroups[group]);
 
   const selectedLead =
     selectedLeadDetails && selectedLeadDetails.id === selectedLeadId
       ? selectedLeadDetails
-      : visibleLeads.find((lead) => lead.id === selectedLeadId) ?? leads.find((lead) => lead.id === selectedLeadId) ?? null;
+      : visibleAttentionLeads.find((lead) => lead.id === selectedLeadId) ??
+        leads.find((lead) => lead.id === selectedLeadId) ??
+        flattenedOrganizedLeads.find((lead) => lead.id === selectedLeadId) ??
+        organizedGroups.flatMap((group) => organizedLeadGroups[group]).find((lead) => lead.id === selectedLeadId) ??
+        null;
 
   async function handleStatusChange(nextStatus) {
     if (!selectedLeadId) {
@@ -390,19 +442,13 @@ export default function App() {
       setStatusUpdating(true);
       const payload = await updateLeadStatus(selectedLeadId, nextStatus);
       const nextLead = formatLead(payload.lead);
-      setLeads((current) => current.map((lead) => (lead.id === nextLead.id ? { ...lead, ...nextLead } : lead)));
       setSelectedLeadDetails({
         ...nextLead,
         activities: (payload.activities || []).map(formatActivity),
         timeline: (payload.timeline || []).map(formatTimelineItem),
+        tasks: payload.tasks || [],
       });
-      setMetrics((current) => ({
-        ...current,
-        appointments_scheduled:
-          nextStatus === "appointment" || selectedLead?.status === "appointment"
-            ? current.appointments_scheduled + (nextStatus === "appointment" ? 1 : -1)
-            : current.appointments_scheduled,
-      }));
+      await refreshWorklist();
       setError("");
     } catch (updateError) {
       setError(updateError.message || "Unable to update lead status.");
@@ -420,15 +466,13 @@ export default function App() {
       setAssignmentUpdating(true);
       const payload = await assignLead(selectedLeadId, assignedTo);
       const updatedLead = formatLead(payload.lead);
-
-      setLeads((current) =>
-        current.map((lead) => (lead.id === updatedLead.id ? { ...lead, ...updatedLead } : lead))
-      );
       setSelectedLeadDetails({
         ...updatedLead,
         activities: payload.activities.map(formatActivity),
         timeline: (payload.timeline || []).map(formatTimelineItem),
+        tasks: payload.tasks || [],
       });
+      await refreshWorklist();
       setError("");
     } catch (assignError) {
       setError(assignError.message || "Unable to assign lead.");
@@ -463,9 +507,55 @@ export default function App() {
       setSelectedLeadDetails(null);
       setActiveSection("Dashboard");
       setLeads([]);
+      setOrganizedLeadGroups({
+        contacted: [],
+        engaged: [],
+        appointment: [],
+        negotiation: [],
+        sold: [],
+        lost: [],
+      });
       setMetrics(emptyMetrics);
       setUsers([]);
       setAssignees([]);
+      setNotifications([]);
+    }
+  }
+
+  async function handleCompleteTask(taskId) {
+    try {
+      setTaskCompletingId(taskId);
+      await completeTask(taskId);
+      if (selectedLeadId) {
+        const payload = await getLead(selectedLeadId);
+        setSelectedLeadDetails({
+          ...formatLead(payload.lead),
+          activities: payload.activities.map(formatActivity),
+          timeline: (payload.timeline || []).map(formatTimelineItem),
+          tasks: payload.tasks || [],
+        });
+      }
+      await refreshWorklist();
+      setError("");
+    } catch (taskError) {
+      setError(taskError.message || "Unable to complete task.");
+    } finally {
+      setTaskCompletingId(null);
+    }
+  }
+
+  async function handleMarkNotificationRead(notificationId) {
+    try {
+      await markNotificationRead(notificationId);
+      setNotifications((current) =>
+        current.map((item) => (item.id === notificationId ? { ...item, status: "read" } : item))
+      );
+      setMetrics((current) => ({
+        ...current,
+        unread_notification_count: Math.max(0, Number(current.unread_notification_count || 0) - 1),
+      }));
+    } catch (notificationError) {
+      setError(notificationError.message || "Unable to update notification.");
     }
   }
 
@@ -541,10 +631,10 @@ export default function App() {
               <div>
                 <p className="text-xs uppercase tracking-[0.34em] text-slate-500">Automotive command center</p>
                 <h1 className="mt-2 font-display text-3xl font-semibold text-white sm:text-4xl">
-                  Deal desk performance
+                  Sales execution
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">
-                  Monitor live shopper momentum, respond faster, and keep every lead moving toward an appointment.
+                  Focus the team on leads that need action now, and keep the rest of the pipeline organized in the background.
                 </p>
                 <p className="mt-3 text-xs uppercase tracking-[0.26em] text-slate-500">
                   Signed in as {currentUser?.name} • {currentUser?.role}
@@ -553,6 +643,13 @@ export default function App() {
             </div>
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <NotificationTray
+                notifications={notifications}
+                open={notificationsOpen}
+                unreadCount={metrics.unread_notification_count}
+                onToggle={() => setNotificationsOpen((current) => !current)}
+                onMarkRead={handleMarkNotificationRead}
+              />
               <button
                 type="button"
                 onClick={handleLogout}
@@ -590,35 +687,23 @@ export default function App() {
           ) : null}
 
           {!showTeam ? (
-            <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <MetricCard
-              eyebrow="New leads today"
-              value={String(metrics.new_leads_today).padStart(2, "0")}
-              detail="Fresh opportunities created since midnight."
+              eyebrow="Needs attention"
+              value={String(metrics.needs_attention_count).padStart(2, "0")}
+              detail="Leads that should be worked before anything else."
               accent="from-lime-500/20 to-transparent"
             />
             <MetricCard
-              eyebrow="This week"
-              value={String(metrics.leads_this_week).padStart(2, "0")}
-              detail="Total new shoppers captured in the last 7 days."
+              eyebrow="Overdue tasks"
+              value={String(metrics.overdue_task_count).padStart(2, "0")}
+              detail="Follow-ups already past due."
               accent="from-ice-500/20 to-transparent"
             />
             <MetricCard
-              eyebrow="Appointments"
-              value={String(metrics.appointments_scheduled).padStart(2, "0")}
-              detail="Pipeline records currently sitting in appointment."
-              accent="from-sky-500/20 to-transparent"
-            />
-            <MetricCard
-              eyebrow="Vehicles sold"
-              value={String(metrics.vehicles_sold).padStart(2, "0")}
-              detail="Closed deals sourced from the CRM pipeline."
-              accent="from-ember-500/20 to-transparent"
-            />
-            <MetricCard
-              eyebrow="Conversion rate"
-              value={`${metrics.conversion_rate}%`}
-              detail="Closed deals divided by total leads on file."
+              eyebrow="Unread alerts"
+              value={String(metrics.unread_notification_count).padStart(2, "0")}
+              detail="Assignments, overdue tasks, and flagged AI interactions."
               accent="from-fuchsia-500/20 to-transparent"
             />
             </section>
@@ -641,8 +726,10 @@ export default function App() {
             <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 sm:p-5">
               <div className="flex flex-col gap-4 border-b border-white/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Lead queue</p>
-                  <h2 className="mt-2 font-display text-2xl font-semibold text-white">Active shoppers</h2>
+                  <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Sales execution queue</p>
+                  <h2 className="mt-2 font-display text-2xl font-semibold text-white">
+                    {activeTab === "Needs Attention" ? "Needs attention" : "Organized leads"}
+                  </h2>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {tabs.map((tab) => (
@@ -671,9 +758,9 @@ export default function App() {
                   Array.from({ length: 4 }).map((_, index) => (
                     <div key={index} className="h-48 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
                   ))
-                ) : (
-                  visibleLeads.map((lead) => (
-                    <LeadCard
+                ) : activeTab === "Needs Attention" ? (
+                  visibleAttentionLeads.map((lead) => (
+                    <AttentionLeadCard
                       key={lead.id}
                       lead={lead}
                       selected={lead.id === selectedLead?.id}
@@ -684,10 +771,44 @@ export default function App() {
                       }}
                     />
                   ))
+                ) : (
+                  organizedGroups.map((group) =>
+                    visibleOrganizedGroups[group]?.length ? (
+                      <div key={group} className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
+                        <div className="mb-4 flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Organized</p>
+                            <h3 className="mt-1 font-display text-xl font-semibold text-white">{pipelineLabel(group)}</h3>
+                          </div>
+                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
+                            {visibleOrganizedGroups[group].length}
+                          </span>
+                        </div>
+                        <div className="grid gap-4">
+                          {visibleOrganizedGroups[group].map((lead) => (
+                            <LeadCard
+                              key={lead.id}
+                              lead={lead}
+                              selected={lead.id === selectedLead?.id}
+                              onSelect={() => {
+                                startTransition(() => {
+                                  setSelectedLeadId(lead.id);
+                                });
+                              }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ) : null
+                  )
                 )}
-                {!loading && visibleLeads.length === 0 ? (
+                {!loading &&
+                ((activeTab === "Needs Attention" && visibleAttentionLeads.length === 0) ||
+                  (activeTab === "Organized Leads" && flattenedOrganizedLeads.length === 0)) ? (
                   <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                    No leads match this filter. Try another status or search phrase.
+                    {activeTab === "Needs Attention"
+                      ? "No leads require attention right now."
+                      : "No organized leads match this filter."}
                   </div>
                 ) : null}
               </div>
@@ -704,6 +825,8 @@ export default function App() {
                 assigneesLoading={assigneesLoading}
                 assignmentUpdating={assignmentUpdating}
                 onAssignLead={handleAssignLead}
+                onCompleteTask={handleCompleteTask}
+                taskCompletingId={taskCompletingId}
               />
             </div>
           </section>

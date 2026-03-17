@@ -148,6 +148,13 @@ test("RingCentral SMS webhook ingestion stores the message, queues AI, and updat
     assert.equal(analysis.source_type, "sms");
     assert.equal(Number(analysis.dealership_id), 1);
 
+    const task = await db.get(
+      "SELECT * FROM tasks WHERE lead_id = ? AND type = ? ORDER BY created_at DESC LIMIT 1",
+      [lead.id, "ai_follow_up"]
+    );
+    assert.ok(task);
+    assert.match(String(task.title), /confirm appointment|follow up|appointment/i);
+
     const activities = await db.all("SELECT * FROM activities WHERE lead_id = ? ORDER BY created_at DESC", [lead.id]);
     assert.ok(activities.some((activity) => String(activity.content).includes("appointment")));
   });

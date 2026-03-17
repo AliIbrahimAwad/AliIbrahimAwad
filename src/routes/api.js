@@ -1,4 +1,4 @@
-const { canAssignLeads } = require("../models/user");
+const { canAssignLeads, canManageUsers } = require("../models/user");
 const { requireAuth } = require("../middleware/auth");
 const { ValidationError } = require("../data/database");
 const { asyncHandler } = require("./helpers");
@@ -135,6 +135,65 @@ function registerApiRoutes(app) {
     requireAuth,
     asyncHandler(async (req, res) => {
       res.json(await req.app.locals.db.getDashboardApiMetrics(req.currentUser));
+    })
+  );
+
+  app.get(
+    "/api/dashboard/worklist",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      res.json(await req.app.locals.db.getExecutionDashboard(req.currentUser));
+    })
+  );
+
+  app.get(
+    "/api/notifications",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 20));
+      res.json({
+        items: await req.app.locals.db.listNotificationsForApi(Number(req.currentUser.id), limit),
+      });
+    })
+  );
+
+  app.patch(
+    "/api/notifications/:id/read",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      await req.app.locals.db.markNotificationRead(Number(req.params.id), Number(req.currentUser.id));
+      res.status(204).end();
+    })
+  );
+
+  app.patch(
+    "/api/tasks/:id/complete",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      res.json({
+        task: await req.app.locals.db.completeTask(Number(req.params.id), req.currentUser),
+      });
+    })
+  );
+
+  app.get(
+    "/api/settings/execution",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      res.json(await req.app.locals.db.getExecutionSettings());
+    })
+  );
+
+  app.patch(
+    "/api/settings/execution",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canManageUsers(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      res.json(await req.app.locals.db.setExecutionSettings(req.body || {}));
     })
   );
 }

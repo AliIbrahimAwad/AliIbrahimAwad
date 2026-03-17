@@ -580,6 +580,88 @@ test("lead detail API returns unified timeline data", async () => {
   });
 });
 
+test("dashboard worklist separates attention leads from organized leads", async () => {
+  await withServer(async ({ app, server }) => {
+    const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
+
+    const newLead = app.locals.db.createApiLead({
+      source: "website",
+      customer_name: "Fresh Attention",
+      phone: "(647) 555-0131",
+      email: "fresh-attention@example.com",
+      vehicle_interest: "2024 SUV",
+      status: "new",
+    });
+    app.locals.db.assignLead(newLead.id, salesUser.id);
+
+    const engagedLead = app.locals.db.createApiLead({
+      source: "website",
+      customer_name: "Organized Contact",
+      phone: "(647) 555-0132",
+      email: "organized@example.com",
+      vehicle_interest: "2023 Sedan",
+      status: "contacted",
+    });
+    app.locals.db.assignLead(engagedLead.id, salesUser.id);
+    app.locals.db.createActivity({
+      lead_id: engagedLead.id,
+      type: "sms",
+      content: "Customer replied and is reviewing options.",
+      created_at: new Date().toISOString(),
+    });
+
+    const client = createClient(server);
+    await login(client, "sales@crm.local", "sales123");
+
+    const response = await client.request({ path: "/api/dashboard/worklist" });
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+
+    assert.ok(body.attention_items.some((lead) => lead.customer_name === "Fresh Attention"));
+    assert.ok(body.organized_groups.engaged.some((lead) => lead.customer_name === "Organized Contact"));
+  });
+});
+
+test("sales user can complete an assigned task through the API", async () => {
+  await withServer(async ({ app, server }) => {
+    const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
+    const lead = app.locals.db.createApiLead({
+      source: "website",
+      customer_name: "Task Lead",
+      phone: "(647) 555-0133",
+      email: "task@example.com",
+      vehicle_interest: "2022 Coupe",
+      status: "contacted",
+    });
+    app.locals.db.assignLead(lead.id, salesUser.id);
+    const task = app.locals.db.createOrRefreshTask({
+      lead_id: Number(lead.id),
+      user_id: Number(salesUser.id),
+      type: "follow_up",
+      title: "Call back the customer",
+      due_at: new Date().toISOString(),
+      source: "manual",
+      unique_key: "test-follow-up-task",
+      metadata: {},
+    });
+
+    const client = createClient(server);
+    await login(client, "sales@crm.local", "sales123");
+
+    const response = await client.request({
+      method: "PATCH",
+      path: `/api/tasks/${task.id}/complete`,
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.task.status, "completed");
+
+    const stored = app.locals.db.get("SELECT * FROM tasks WHERE id = ?", [task.id]);
+    assert.equal(stored.status, "completed");
+  });
+});
+
 test("RingCentral webhook logs phone activity and auto-updates lead status", async () => {
   const temp = createTempDbPath();
   const previousThreshold = process.env.RINGCENTRAL_AI_CONFIDENCE_THRESHOLD;

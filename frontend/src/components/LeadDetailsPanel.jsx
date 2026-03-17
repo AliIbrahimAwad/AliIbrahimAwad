@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CalendarDays, CarFront, ChevronDown, MessageSquareText, PhoneCall, ShieldCheck, Sparkles } from "lucide-react";
+import { CalendarDays, CarFront, CheckCircle2, ChevronDown, MessageSquareText, PhoneCall, ShieldCheck, Sparkles } from "lucide-react";
 
 import { pipelineLabel, sourceTone, statusTone } from "../lib/format";
 
@@ -40,6 +40,8 @@ export function LeadDetailsPanel({
   assigneesLoading = false,
   assignmentUpdating = false,
   onAssignLead,
+  onCompleteTask,
+  taskCompletingId = null,
 }) {
   const [assignmentValue, setAssignmentValue] = useState("");
 
@@ -168,6 +170,51 @@ export function LeadDetailsPanel({
           Lead message
         </div>
         <p className="mt-3 text-sm leading-7 text-slate-300">{lead.message || "No message captured yet."}</p>
+      </div>
+
+      <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+        <div className="flex items-center gap-2 text-sm font-semibold text-white">
+          <CheckCircle2 className="h-4 w-4 text-lime-400" />
+          Tasks
+        </div>
+        <div className="mt-4 space-y-3">
+          {lead.tasks?.length ? (
+            lead.tasks.map((task) => (
+              <div key={task.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold text-white">{task.title}</p>
+                      <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
+                        {task.status}
+                      </span>
+                      <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
+                        {task.source}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs uppercase tracking-[0.22em] text-slate-500">
+                      Due {task.due_at ? new Date(task.due_at).toLocaleString() : "as soon as possible"}
+                    </p>
+                  </div>
+                  {task.status !== "completed" ? (
+                    <button
+                      type="button"
+                      onClick={() => onCompleteTask?.(task.id)}
+                      disabled={taskCompletingId === task.id}
+                      className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {taskCompletingId === task.id ? "Completing..." : "Complete"}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-6 text-sm text-slate-400">
+              No open tasks for this lead.
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="mt-6 grid gap-3 sm:grid-cols-2">

@@ -30,6 +30,18 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function plusHours(dateString, hours) {
+  const date = new Date(dateString || Date.now());
+  date.setHours(date.getHours() + Number(hours || 0));
+  return date.toISOString();
+}
+
+function plusMinutes(dateString, minutes) {
+  const date = new Date(dateString || Date.now());
+  date.setMinutes(date.getMinutes() + Number(minutes || 0));
+  return date.toISOString();
+}
+
 function normalizeHeaders(headers = {}) {
   const entries = headers instanceof Headers ? headers.entries() : Object.entries(headers);
   const normalized = {};
@@ -142,6 +154,16 @@ function buildCallKeywordText(record = {}) {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+}
+
+function looksLikeMissedCall(record = {}) {
+  const direction = String(record.direction || "").toLowerCase();
+  const result = String(record.result || "").toLowerCase();
+  const action = String(record.action || "").toLowerCase();
+  return (
+    direction === "inbound" &&
+    /missed|no answer|received|voicemail/.test(`${result} ${action}`.trim())
+  );
 }
 
 function collectExtensionIds(...values) {
@@ -460,6 +482,65 @@ class RingCentralService {
     }
   }
 
+  async syncAiExecutionArtifacts({ lead, recommendation, sourceType, sourceId }) {
+    if (!lead) {
+      return;
+    }
+
+    const settings = await this.db.getExecutionSettings();
+    const assignedUserId = lead.assigned_to ? Number(lead.assigned_to) : null;
+    const now = nowIso();
+
+    if (recommendation.next_task) {
+      await this.db.createOrRefreshTask({
+        lead_id: Number(lead.id),
+        user_id: assignedUserId,
+        type: "ai_follow_up",
+        title: recommendation.next_task,
+        due_at: plusHours(now, settings.ai_task_due_hours),
+        source: "ai",
+        unique_key: `ai-follow-up:${sourceType}:${sourceId}`,
+        metadata: {
+          source_type: sourceType,
+          source_id: sourceId,
+          intent: recommendation.intent || "",
+        },
+      });
+    }
+
+    if (recommendation.appointment_intent) {
+      await this.db.createOrRefreshTask({
+        lead_id: Number(lead.id),
+        user_id: assignedUserId,
+        type: "appointment_follow_up",
+        title: "Confirm appointment details",
+        due_at: plusHours(now, settings.appointment_task_due_hours),
+        source: "ai",
+        unique_key: `appointment-follow-up:${sourceType}:${sourceId}`,
+        metadata: {
+          source_type: sourceType,
+          source_id: sourceId,
+        },
+      });
+    }
+
+    if (assignedUserId && (recommendation.escalation_flag || Number(recommendation.hot_lead_score || 0) >= 80)) {
+      await this.db.createNotification({
+        user_id: assignedUserId,
+        lead_id: Number(lead.id),
+        type: "ai_flagged_interaction",
+        title: "AI flagged important interaction",
+        body: recommendation.summary || recommendation.reasoning_summary || "A lead needs immediate review.",
+        unique_key: `ai-flag:${sourceType}:${sourceId}`,
+        metadata: {
+          source_type: sourceType,
+          source_id: sourceId,
+          hot_lead_score: Number(recommendation.hot_lead_score || 0),
+        },
+      });
+    }
+  }
+
   shouldSkipCallRecord(record, lead) {
     const durationSeconds = Number(record.duration || 0);
     const keywordText = buildCallKeywordText(record);
@@ -608,6 +689,23 @@ class RingCentralService {
         });
       }
 
+      if (lead && looksLikeMissedCall(record)) {
+        const settings = await this.db.getExecutionSettings();
+        await this.db.createOrRefreshTask({
+          lead_id: Number(lead.id),
+          user_id: lead.assigned_to ? Number(lead.assigned_to) : Number(connection.user_id),
+          type: "missed_call_callback",
+          title: "Return missed call",
+          due_at: plusMinutes(nowIso(), settings.missed_call_task_due_minutes),
+          source: "system",
+          unique_key: `missed-call:${savedCall.id}`,
+          metadata: {
+            provider_call_id: savedCall.provider_call_id,
+            external_number: savedCall.external_number,
+          },
+        });
+      }
+
       synced.push(savedCall);
     }
 
@@ -706,6 +804,13 @@ class RingCentralService {
       raw: recommendation.raw || {},
     });
 
+    await this.syncAiExecutionArtifacts({
+      lead,
+      recommendation,
+      sourceType: "call",
+      sourceId: leadCall.id,
+    });
+
     await this.store.upsertCallRecording({
       lead_call_id: recordingRecord.lead_call_id,
       provider: "ringcentral",
@@ -769,6 +874,12 @@ class RingCentralService {
         })),
         model_output: recommendation.raw || null,
       },
+    });
+    await this.syncAiExecutionArtifacts({
+      lead,
+      recommendation,
+      sourceType: "sms",
+      sourceId,
     });
     return { recommendation, audit };
   }

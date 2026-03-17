@@ -7,6 +7,7 @@ const { createRingCentralService } = require("../services/ringcentral");
 async function main() {
   const db = await initializeDatabase();
   const ringcentral = await createRingCentralService({}, { db });
+  await db.enforceFollowUpTasks();
   const hoursBack = Number(process.env.RINGCENTRAL_RECONCILE_HOURS || 24);
   const batchSize = Number(process.env.RINGCENTRAL_JOB_BATCH_SIZE || 10);
   const passes = Math.max(1, Number(process.env.RINGCENTRAL_MAINTENANCE_PASSES || 3));

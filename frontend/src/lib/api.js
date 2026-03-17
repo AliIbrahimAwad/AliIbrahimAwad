@@ -66,6 +66,26 @@ export function getDashboardMetrics() {
   return request("/api/dashboard/metrics");
 }
 
+export function getDashboardWorklist() {
+  return request("/api/dashboard/worklist");
+}
+
+export function completeTask(id) {
+  return request(`/api/tasks/${id}/complete`, {
+    method: "PATCH",
+  });
+}
+
+export function getNotifications(limit = 20) {
+  return request(`/api/notifications?limit=${limit}`);
+}
+
+export function markNotificationRead(id) {
+  return request(`/api/notifications/${id}/read`, {
+    method: "PATCH",
+  });
+}
+
 export function getUsers() {
   return request("/api/users");
 }

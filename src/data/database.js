@@ -4,6 +4,8 @@ const bcrypt = require("bcrypt");
 const initSqlJs = require("sql.js");
 
 const { getDefaultDealershipId } = require("../config/dealership");
+const { DEFAULT_EXECUTION_SETTINGS, normalizeExecutionSettings } = require("../config/executionSettings");
+const { categorizeOrganizedLead, evaluateLeadAttention } = require("../models/attention");
 const { canTransitionLeadStatus, CRM_LEAD_STATUSES } = require("../models/leadStatus");
 const { canViewAllLeads } = require("../models/user");
 const { LEAD_ACTIVITY_TYPES, LEAD_STATUSES } = require("../types/models");
@@ -38,6 +40,30 @@ function ensureNumber(value) {
 
 function normalizeLeadPhoneForStorage(value) {
   return normalizePhone(value) || null;
+}
+
+function parseJson(value, fallback = null) {
+  if (!value) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function plusHours(dateString, hours) {
+  const date = new Date(dateString || Date.now());
+  date.setHours(date.getHours() + Number(hours || 0));
+  return date.toISOString();
+}
+
+function plusMinutes(dateString, minutes) {
+  const date = new Date(dateString || Date.now());
+  date.setMinutes(date.getMinutes() + Number(minutes || 0));
+  return date.toISOString();
 }
 
 function titleCaseStatus(status) {
@@ -138,11 +164,58 @@ const SCHEMA_SQL = `
     FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE SET NULL
   );
 
+  CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dealership_id INTEGER NOT NULL DEFAULT 1,
+    lead_id INTEGER NOT NULL,
+    user_id INTEGER,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    due_at TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    source TEXT NOT NULL DEFAULT 'manual',
+    unique_key TEXT,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dealership_id INTEGER NOT NULL DEFAULT 1,
+    user_id INTEGER NOT NULL,
+    lead_id INTEGER,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT,
+    status TEXT NOT NULL DEFAULT 'unread',
+    unique_key TEXT,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL,
+    read_at TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS crm_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_leads_normalized_phone ON leads(normalized_phone);
   CREATE INDEX IF NOT EXISTS idx_contacts_normalized_phone ON contacts(normalized_phone);
   CREATE INDEX IF NOT EXISTS idx_activities_lead_id_created_at ON activities(lead_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_imported_messages_external_id ON imported_messages(external_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_unique_key ON tasks(unique_key) WHERE unique_key IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_tasks_user_status_due_at ON tasks(user_id, status, due_at);
+  CREATE INDEX IF NOT EXISTS idx_tasks_lead_status_due_at ON tasks(lead_id, status, due_at);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_unique_key ON notifications(unique_key) WHERE unique_key IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_notifications_user_status_created_at ON notifications(user_id, status, created_at DESC);
 `;
 
 class HttpError extends Error {
@@ -915,6 +988,566 @@ class CrmDatabase {
     });
   }
 
+  getExecutionSettings() {
+    const rows = this.all("SELECT key, value FROM crm_settings");
+    const stored = Object.fromEntries(rows.map((row) => [row.key, Number(row.value)]));
+    return normalizeExecutionSettings({
+      ...DEFAULT_EXECUTION_SETTINGS,
+      ...stored,
+    });
+  }
+
+  setExecutionSettings(input = {}) {
+    const settings = normalizeExecutionSettings({
+      ...this.getExecutionSettings(),
+      ...input,
+    });
+    const timestamp = new Date().toISOString();
+
+    Object.entries(settings).forEach(([key, value]) => {
+      const existing = this.get("SELECT key FROM crm_settings WHERE key = ?", [key]);
+      if (existing) {
+        this.execute("UPDATE crm_settings SET value = ?, updated_at = ? WHERE key = ?", [
+          String(value),
+          timestamp,
+          key,
+        ]);
+      } else {
+        this.execute("INSERT INTO crm_settings (key, value, updated_at) VALUES (?, ?, ?)", [
+          key,
+          String(value),
+          timestamp,
+        ]);
+      }
+    });
+
+    this.save();
+    return settings;
+  }
+
+  formatTaskForApi(row) {
+    return {
+      id: Number(row.id),
+      lead_id: Number(row.lead_id),
+      user_id: row.user_id == null ? null : Number(row.user_id),
+      type: row.type,
+      title: row.title,
+      due_at: row.due_at || null,
+      status: row.status,
+      source: row.source,
+      unique_key: row.unique_key || null,
+      metadata: parseJson(row.metadata_json, {}),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      completed_at: row.completed_at || null,
+      assigned_user_name: row.assigned_user_name || null,
+    };
+  }
+
+  listLeadTasksForApi(leadId) {
+    return this.all(
+      `
+        SELECT tasks.*, users.name AS assigned_user_name
+        FROM tasks
+        LEFT JOIN users ON users.id = tasks.user_id
+        WHERE tasks.lead_id = ?
+        ORDER BY
+          CASE tasks.status
+            WHEN 'overdue' THEN 1
+            WHEN 'pending' THEN 2
+            ELSE 3
+          END,
+          tasks.due_at ASC,
+          tasks.created_at DESC
+      `,
+      [leadId]
+    ).map((row) => this.formatTaskForApi(row));
+  }
+
+  listNotificationsForApi(userId, limit = 20) {
+    return this.all(
+      `
+        SELECT notifications.*, leads.customer_name
+        FROM notifications
+        LEFT JOIN leads ON leads.id = notifications.lead_id
+        WHERE notifications.user_id = ?
+        ORDER BY notifications.created_at DESC
+        LIMIT ?
+      `,
+      [userId, limit]
+    ).map((row) => ({
+      id: Number(row.id),
+      lead_id: row.lead_id == null ? null : Number(row.lead_id),
+      type: row.type,
+      title: row.title,
+      body: row.body || "",
+      status: row.status,
+      metadata: parseJson(row.metadata_json, {}),
+      created_at: row.created_at,
+      read_at: row.read_at || null,
+      lead_name: row.customer_name || null,
+    }));
+  }
+
+  createNotification({
+    user_id,
+    lead_id = null,
+    type,
+    title,
+    body = "",
+    unique_key = null,
+    metadata = {},
+  }) {
+    if (!user_id || !type || !title) {
+      return null;
+    }
+
+    const existing = unique_key
+      ? this.get("SELECT * FROM notifications WHERE unique_key = ?", [unique_key])
+      : null;
+
+    if (existing) {
+      return existing;
+    }
+
+    const timestamp = new Date().toISOString();
+    const dealershipId = getDefaultDealershipId();
+    this.execute(
+      `
+        INSERT INTO notifications (
+          dealership_id, user_id, lead_id, type, title, body, status, unique_key, metadata_json, created_at, read_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        dealershipId,
+        user_id,
+        lead_id,
+        type,
+        title,
+        body || null,
+        "unread",
+        unique_key,
+        JSON.stringify(metadata || {}),
+        timestamp,
+        null,
+      ]
+    );
+    const id = this.nextId();
+    this.save();
+    return this.get("SELECT * FROM notifications WHERE id = ?", [id]);
+  }
+
+  markNotificationRead(id, userId) {
+    const notification = this.get("SELECT * FROM notifications WHERE id = ? AND user_id = ?", [id, userId]);
+    if (!notification) {
+      throw new NotFoundError("Notification not found");
+    }
+
+    this.execute("UPDATE notifications SET status = ?, read_at = ? WHERE id = ?", [
+      "read",
+      new Date().toISOString(),
+      id,
+    ]);
+    this.save();
+  }
+
+  createOrRefreshTask({
+    lead_id,
+    user_id = null,
+    type,
+    title,
+    due_at = null,
+    source = "manual",
+    unique_key = null,
+    metadata = {},
+  }) {
+    const timestamp = new Date().toISOString();
+    const dealershipId = getDefaultDealershipId();
+    const status = due_at && new Date(due_at).getTime() <= Date.now() ? "overdue" : "pending";
+    const existing = unique_key ? this.get("SELECT * FROM tasks WHERE unique_key = ?", [unique_key]) : null;
+
+    if (existing && existing.status !== "completed") {
+      this.execute(
+        `
+          UPDATE tasks
+          SET user_id = ?, type = ?, title = ?, due_at = ?, status = ?, source = ?, metadata_json = ?, updated_at = ?
+          WHERE id = ?
+        `,
+        [
+          user_id,
+          type,
+          title,
+          due_at,
+          status,
+          source,
+          JSON.stringify(metadata || {}),
+          timestamp,
+          existing.id,
+        ]
+      );
+      this.save();
+      return this.formatTaskForApi(this.get("SELECT tasks.*, users.name AS assigned_user_name FROM tasks LEFT JOIN users ON users.id = tasks.user_id WHERE tasks.id = ?", [existing.id]));
+    }
+
+    this.execute(
+      `
+        INSERT INTO tasks (
+          dealership_id, lead_id, user_id, type, title, due_at, status, source, unique_key, metadata_json, created_at, updated_at, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        dealershipId,
+        lead_id,
+        user_id,
+        type,
+        title,
+        due_at,
+        status,
+        source,
+        unique_key,
+        JSON.stringify(metadata || {}),
+        timestamp,
+        timestamp,
+        null,
+      ]
+    );
+    const id = this.nextId();
+    const task = this.get(
+      "SELECT tasks.*, users.name AS assigned_user_name FROM tasks LEFT JOIN users ON users.id = tasks.user_id WHERE tasks.id = ?",
+      [id]
+    );
+    this.createNotification({
+      user_id,
+      lead_id,
+      type: "task_created",
+      title: "New task assigned",
+      body: title,
+      unique_key: unique_key ? `notification:${unique_key}` : `notification:task:${id}`,
+      metadata: {
+        task_id: id,
+        task_type: type,
+      },
+    });
+    this.save();
+    return this.formatTaskForApi(task);
+  }
+
+  completeTask(id, actor) {
+    const task = this.get("SELECT * FROM tasks WHERE id = ?", [id]);
+    if (!task) {
+      throw new NotFoundError("Task not found");
+    }
+
+    if (actor && !canViewAllLeads(actor) && Number(task.user_id) !== Number(actor.id)) {
+      throw new UnauthorizedError("You cannot complete this task.");
+    }
+
+    this.execute(
+      "UPDATE tasks SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?",
+      ["completed", new Date().toISOString(), new Date().toISOString(), id]
+    );
+    this.createLeadActivity({
+      lead_id: Number(task.lead_id),
+      user_id: actor?.id || null,
+      type: "note",
+      content: `Task completed: ${task.title}`,
+    });
+    this.save();
+    return this.formatTaskForApi(
+      this.get(
+        "SELECT tasks.*, users.name AS assigned_user_name FROM tasks LEFT JOIN users ON users.id = tasks.user_id WHERE tasks.id = ?",
+        [id]
+      )
+    );
+  }
+
+  refreshTaskStatuses() {
+    const now = new Date().toISOString();
+    const overdueTasks = this.all(
+      "SELECT * FROM tasks WHERE status = 'pending' AND due_at IS NOT NULL AND due_at <> '' AND due_at <= ?",
+      [now]
+    );
+
+    overdueTasks.forEach((task) => {
+      this.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?", ["overdue", now, task.id]);
+      this.createNotification({
+        user_id: task.user_id,
+        lead_id: task.lead_id,
+        type: "task_overdue",
+        title: "Task overdue",
+        body: task.title,
+        unique_key: `task-overdue:${task.id}`,
+        metadata: { task_id: Number(task.id) },
+      });
+    });
+
+    if (overdueTasks.length > 0) {
+      this.save();
+    }
+
+    return overdueTasks.length;
+  }
+
+  getLatestAnalysisMap(leadIds = []) {
+    if (!leadIds.length) {
+      return new Map();
+    }
+
+    const placeholders = leadIds.map(() => "?").join(", ");
+    const rows = this.all(
+      `
+        SELECT *
+        FROM communication_ai_analyses
+        WHERE lead_id IN (${placeholders})
+        ORDER BY created_at DESC
+      `,
+      leadIds
+    );
+
+    const map = new Map();
+    rows.forEach((row) => {
+      const key = Number(row.lead_id);
+      if (!map.has(key)) {
+        map.set(key, row);
+      }
+    });
+    return map;
+  }
+
+  getOpenTaskMap(leadIds = []) {
+    if (!leadIds.length) {
+      return new Map();
+    }
+
+    const placeholders = leadIds.map(() => "?").join(", ");
+    const rows = this.all(
+      `
+        SELECT tasks.*, users.name AS assigned_user_name
+        FROM tasks
+        LEFT JOIN users ON users.id = tasks.user_id
+        WHERE tasks.lead_id IN (${placeholders})
+          AND tasks.status IN ('pending', 'overdue')
+        ORDER BY tasks.due_at ASC, tasks.created_at DESC
+      `,
+      leadIds
+    );
+
+    const map = new Map();
+    rows.forEach((row) => {
+      const key = Number(row.lead_id);
+      const list = map.get(key) || [];
+      list.push(this.formatTaskForApi(row));
+      map.set(key, list);
+    });
+    return map;
+  }
+
+  getMissedCallMap(leadIds = []) {
+    if (!leadIds.length) {
+      return new Map();
+    }
+
+    const placeholders = leadIds.map(() => "?").join(", ");
+    const rows = this.all(
+      `
+        SELECT *
+        FROM lead_calls
+        WHERE lead_id IN (${placeholders})
+        ORDER BY start_time DESC, created_at DESC
+      `,
+      leadIds
+    );
+
+    const map = new Map();
+    rows.forEach((row) => {
+      const key = Number(row.lead_id);
+      const resultText = String(row.result || "").toLowerCase();
+      const isMissed =
+        String(row.direction || "").toLowerCase() === "inbound" &&
+        /missed|no answer|received|voicemail/.test(resultText);
+      const existing = map.get(key) || { lastMissedCallAt: null, lastFollowUpAt: null };
+
+      if (isMissed && !existing.lastMissedCallAt) {
+        existing.lastMissedCallAt = row.start_time || row.created_at;
+      }
+
+      if (!existing.lastFollowUpAt) {
+        const isFollowUp =
+          String(row.direction || "").toLowerCase() === "outbound" &&
+          (row.start_time || row.created_at);
+        if (isFollowUp) {
+          existing.lastFollowUpAt = row.start_time || row.created_at;
+        }
+      }
+
+      map.set(key, existing);
+    });
+
+    const messageRows = this.all(
+      `
+        SELECT lead_id, direction, COALESCE(received_at, sent_at, created_at) AS happened_at
+        FROM lead_messages
+        WHERE lead_id IN (${placeholders})
+        ORDER BY happened_at DESC
+      `,
+      leadIds
+    );
+
+    messageRows.forEach((row) => {
+      const key = Number(row.lead_id);
+      const existing = map.get(key) || { lastMissedCallAt: null, lastFollowUpAt: null };
+      if (!existing.lastFollowUpAt && String(row.direction || "").toLowerCase() === "outbound") {
+        existing.lastFollowUpAt = row.happened_at;
+      }
+      map.set(key, existing);
+    });
+
+    return map;
+  }
+
+  enforceFollowUpTasks() {
+    this.refreshTaskStatuses();
+    const settings = this.getExecutionSettings();
+    const now = new Date();
+    const rows = this.all(`${this.apiLeadSelectSql()} ORDER BY leads.updated_at DESC`);
+    const leads = rows.map((row) => this.formatApiLead(row));
+    const leadIds = leads.map((lead) => Number(lead.id));
+    const taskMap = this.getOpenTaskMap(leadIds);
+
+    leads.forEach((lead) => {
+      if (!["contacted", "appointment", "negotiation"].includes(String(lead.status))) {
+        return;
+      }
+
+      const lastActivityAt = lead.latest_activity_at ? new Date(lead.latest_activity_at) : null;
+      if (!lastActivityAt) {
+        return;
+      }
+
+      const idleHours = (now.getTime() - lastActivityAt.getTime()) / 3600000;
+      if (idleHours < settings.inactivity_threshold_hours) {
+        return;
+      }
+
+      const existing = (taskMap.get(Number(lead.id)) || []).some((task) => task.type === "follow_up");
+      if (existing) {
+        return;
+      }
+
+      this.createOrRefreshTask({
+        lead_id: Number(lead.id),
+        user_id: lead.assigned_to,
+        type: "follow_up",
+        title: "Follow up with inactive lead",
+        due_at: plusHours(now.toISOString(), 0),
+        source: "system",
+        unique_key: `follow-up:${lead.id}:${toDateOnlyString(now)}`,
+        metadata: {
+          reason: "no_recent_activity",
+        },
+      });
+    });
+
+    return settings;
+  }
+
+  getExecutionDashboard(user = null) {
+    this.enforceFollowUpTasks();
+    const settings = this.getExecutionSettings();
+    const access = this.accessClauseForUser(user);
+    const rows = this.all(
+      `
+        ${this.apiLeadSelectSql()}
+        WHERE ${access.clause}
+        ORDER BY leads.updated_at DESC, leads.id DESC
+      `,
+      access.params
+    );
+    const leads = rows.map((row) => this.formatApiLead(row));
+    const leadIds = leads.map((lead) => Number(lead.id));
+    const taskMap = this.getOpenTaskMap(leadIds);
+    const analysisMap = this.getLatestAnalysisMap(leadIds);
+    const missedCallMap = this.getMissedCallMap(leadIds);
+    const notifications = user ? this.listNotificationsForApi(Number(user.id), 25) : [];
+    const now = new Date();
+
+    const attention = [];
+    const organized = {
+      contacted: [],
+      engaged: [],
+      appointment: [],
+      negotiation: [],
+      sold: [],
+      lost: [],
+    };
+
+    leads.forEach((lead) => {
+      const latestAnalysis = analysisMap.get(Number(lead.id)) || null;
+      const missedCallState = missedCallMap.get(Number(lead.id)) || {};
+      const openTasks = taskMap.get(Number(lead.id)) || [];
+      const evaluation = evaluateLeadAttention({
+        lead,
+        tasks: openTasks,
+        latestAnalysis,
+        latestActivityAt: lead.latest_activity_at ? new Date(lead.latest_activity_at) : null,
+        lastMissedCallAt: missedCallState.lastMissedCallAt ? new Date(missedCallState.lastMissedCallAt) : null,
+        lastFollowUpAt: missedCallState.lastFollowUpAt ? new Date(missedCallState.lastFollowUpAt) : null,
+        settings,
+        now,
+      });
+
+      const payload = {
+        ...lead,
+        attention_reason: evaluation.primary_reason?.label || "",
+        attention_reason_code: evaluation.primary_reason?.code || "",
+        attention_reasons: evaluation.reasons,
+        urgency_score: evaluation.urgency_score,
+        ai_summary:
+          latestAnalysis?.summary ||
+          latestAnalysis?.reasoning_summary ||
+          latestAnalysis?.next_task ||
+          lead.message_preview,
+        open_tasks: openTasks,
+      };
+
+      if (evaluation.needs_attention) {
+        attention.push(payload);
+        return;
+      }
+
+      const category = categorizeOrganizedLead(
+        lead,
+        latestAnalysis,
+        lead.latest_activity_at ? new Date(lead.latest_activity_at) : null,
+        settings,
+        now
+      );
+      organized[category].push(payload);
+    });
+
+    attention.sort((left, right) => {
+      if (right.urgency_score !== left.urgency_score) {
+        return right.urgency_score - left.urgency_score;
+      }
+
+      const leftTime = new Date(left.latest_activity_at || left.updated_at || 0).getTime();
+      const rightTime = new Date(right.latest_activity_at || right.updated_at || 0).getTime();
+      return leftTime - rightTime;
+    });
+
+    return {
+      settings,
+      summary: {
+        needs_attention_count: attention.length,
+        overdue_task_count: attention.filter((lead) => lead.attention_reason_code === "overdue_task").length,
+        unread_notification_count: notifications.filter((item) => item.status === "unread").length,
+      },
+      attention_items: attention,
+      organized_groups: organized,
+      notifications,
+    };
+  }
+
   createActivity({ lead_id, type, content, created_at = null }) {
     const timestamp = created_at || new Date().toISOString();
     const dealershipId = getDefaultDealershipId();
@@ -1108,6 +1741,7 @@ class CrmDatabase {
       lead,
       activities: this.listLeadActivitiesForApi(id),
       timeline: this.listLeadTimelineForApi(id),
+      tasks: this.listLeadTasksForApi(id),
     };
   }
 
@@ -1529,6 +2163,15 @@ class CrmDatabase {
       lead_id: id,
       type: "note_added",
       content: `Lead assigned to ${assignee.name}.`,
+    });
+    this.createNotification({
+      user_id: assignedTo,
+      lead_id: id,
+      type: "lead_assigned",
+      title: "New lead assigned",
+      body: `You were assigned lead #${id}.`,
+      unique_key: `lead-assigned:${id}:${assignedTo}`,
+      metadata: { lead_id: Number(id) },
     });
     this.save();
     return this.getLead(id);
