@@ -1,12 +1,6 @@
 const { renderLoginPage } = require("../views/auth");
 const { asyncHandler } = require("./helpers");
 
-const DEMO_USERS = [
-  { role: "admin", email: "admin@crm.local", password: "admin123" },
-  { role: "manager", email: "manager@crm.local", password: "manager123" },
-  { role: "sales", email: "sales@crm.local", password: "sales123" },
-];
-
 function registerAuthRoutes(app) {
   app.get("/api/auth/session", (req, res) => {
     if (!req.currentUser) {
@@ -33,7 +27,6 @@ function registerAuthRoutes(app) {
     res.send(
       renderLoginPage({
         formData: { email: "" },
-        demoUsers: DEMO_USERS,
       })
     );
   });
@@ -73,7 +66,6 @@ function registerAuthRoutes(app) {
           renderLoginPage({
             formData: { email },
             errors: { form: error.message, email: "Invalid", password: "Invalid" },
-            demoUsers: DEMO_USERS,
           })
         );
       }

@@ -7,6 +7,7 @@
     "dev": "nodemon server.js",
     "import:leads": "node scripts/import-graph-leads.js",
     "migrate:postgres": "node scripts/migrate-sqlite-to-postgres.js",
+    "maintain:ringcentral": "node scripts/run-ringcentral-maintenance.js",
     "process:ringcentral": "node scripts/process-ringcentral-jobs.js",
     "reconcile:ringcentral": "node scripts/reconcile-ringcentral.js",
     "start": "node server.js",

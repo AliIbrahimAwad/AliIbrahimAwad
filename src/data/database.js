@@ -4,6 +4,7 @@ const bcrypt = require("bcrypt");
 const initSqlJs = require("sql.js");
 
 const { getDefaultDealershipId } = require("../config/dealership");
+const { canTransitionLeadStatus, CRM_LEAD_STATUSES } = require("../models/leadStatus");
 const { canViewAllLeads } = require("../models/user");
 const { LEAD_ACTIVITY_TYPES, LEAD_STATUSES } = require("../types/models");
 const { toDateOnlyString } = require("../utils/dates");
@@ -35,6 +36,10 @@ function ensureNumber(value) {
   return value == null || value === "" ? null : Number(value);
 }
 
+function normalizeLeadPhoneForStorage(value) {
+  return normalizePhone(value) || null;
+}
+
 function titleCaseStatus(status) {
   return String(status || "")
     .split("_")
@@ -63,6 +68,7 @@ const SCHEMA_SQL = `
     last_name TEXT NOT NULL DEFAULT '',
     email TEXT,
     phone TEXT,
+    normalized_phone TEXT,
     company TEXT,
     job_title TEXT,
     created_at TEXT NOT NULL,
@@ -81,6 +87,7 @@ const SCHEMA_SQL = `
     next_action TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    normalized_phone TEXT,
     FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL,
     FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL
   );
@@ -132,6 +139,8 @@ const SCHEMA_SQL = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_leads_normalized_phone ON leads(normalized_phone);
+  CREATE INDEX IF NOT EXISTS idx_contacts_normalized_phone ON contacts(normalized_phone);
   CREATE INDEX IF NOT EXISTS idx_activities_lead_id_created_at ON activities(lead_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_imported_messages_external_id ON imported_messages(external_id);
 `;
@@ -249,6 +258,7 @@ class CrmDatabase {
     this.ensureColumn("leads", "assigned_to", "INTEGER REFERENCES users(id) ON DELETE SET NULL");
     this.ensureColumn("leads", "customer_name", "TEXT");
     this.ensureColumn("leads", "phone", "TEXT");
+    this.ensureColumn("leads", "normalized_phone", "TEXT");
     this.ensureColumn("leads", "email", "TEXT");
     this.ensureColumn("leads", "vehicle_interest", "TEXT");
     this.ensureColumn("leads", "vehicle_id", "TEXT");
@@ -262,6 +272,7 @@ class CrmDatabase {
     this.ensureColumn("leads", "lead_type", "TEXT");
     this.ensureColumn("leads", "listing_url", "TEXT");
     this.ensureColumn("leads", "message", "TEXT");
+    this.ensureColumn("contacts", "normalized_phone", "TEXT");
     this.execute("UPDATE leads SET status = 'new' WHERE status IS NULL OR TRIM(status) = ''");
     this.execute("UPDATE leads SET status = 'appointment' WHERE status = 'qualified'");
     this.execute("UPDATE leads SET status = 'negotiation' WHERE status = 'proposal'");
@@ -277,6 +288,21 @@ class CrmDatabase {
       "UPDATE imported_messages SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
       [dealershipId]
     );
+    this.execute("UPDATE leads SET normalized_phone = ? WHERE phone IS NULL OR TRIM(phone) = ''", [null]);
+    this.execute("UPDATE contacts SET normalized_phone = ? WHERE phone IS NULL OR TRIM(phone) = ''", [null]);
+
+    const leadPhones = this.all("SELECT id, phone FROM leads WHERE phone IS NOT NULL AND TRIM(phone) <> ''");
+    for (const lead of leadPhones) {
+      this.execute("UPDATE leads SET normalized_phone = ? WHERE id = ?", [normalizePhone(lead.phone) || null, lead.id]);
+    }
+
+    const contactPhones = this.all("SELECT id, phone FROM contacts WHERE phone IS NOT NULL AND TRIM(phone) <> ''");
+    for (const contact of contactPhones) {
+      this.execute("UPDATE contacts SET normalized_phone = ? WHERE id = ?", [
+        normalizePhone(contact.phone) || null,
+        contact.id,
+      ]);
+    }
   }
 
   ensureColumn(tableName, columnName, definition) {
@@ -413,6 +439,7 @@ class CrmDatabase {
         leads.updated_at,
         leads.customer_name,
         leads.phone,
+        leads.normalized_phone,
         leads.email,
         leads.vehicle_interest,
         leads.vehicle_id,
@@ -430,6 +457,7 @@ class CrmDatabase {
         leads.contact_id,
         leads.assigned_to,
         contacts.phone AS contact_phone,
+        contacts.normalized_phone AS contact_normalized_phone,
         contacts.email AS contact_email,
         CASE
           WHEN leads.customer_name IS NOT NULL AND TRIM(leads.customer_name) <> '' THEN TRIM(leads.customer_name)
@@ -476,6 +504,7 @@ class CrmDatabase {
       customer_name: customerName,
       assigned_to: row.assigned_to == null ? null : Number(row.assigned_to),
       phone,
+      normalized_phone: row.normalized_phone || row.contact_normalized_phone || null,
       email,
       vehicle_interest: row.vehicle_interest || row.next_action || "Vehicle inquiry",
       vehicle_id: row.vehicle_id || null,
@@ -648,6 +677,244 @@ class CrmDatabase {
     }));
   }
 
+  recordLeadStatusAudit({
+    lead_id,
+    user_id = null,
+    previous_status = null,
+    new_status,
+    confidence = null,
+    reasoning_summary = null,
+    source = "manual_status_update",
+    auto_applied = false,
+    recommendation_only = false,
+    created_at = null,
+  }) {
+    const timestamp = created_at || new Date().toISOString();
+    const dealershipId = getDefaultDealershipId();
+
+    this.execute(
+      `
+        INSERT INTO lead_status_audits (
+          id,
+          dealership_id,
+          lead_id,
+          user_id,
+          previous_status,
+          new_status,
+          confidence,
+          reasoning_summary,
+          source,
+          auto_applied,
+          recommendation_only,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        `statusaudit_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`,
+        dealershipId,
+        lead_id,
+        user_id,
+        previous_status,
+        new_status,
+        confidence,
+        reasoning_summary,
+        source,
+        auto_applied ? 1 : 0,
+        recommendation_only ? 1 : 0,
+        timestamp,
+      ]
+    );
+  }
+
+  listLeadStatusAuditsForApi(leadId) {
+    return this.all(
+      `
+        SELECT
+          audits.id,
+          audits.lead_id,
+          audits.user_id,
+          audits.previous_status,
+          audits.new_status,
+          audits.confidence,
+          audits.reasoning_summary,
+          audits.source,
+          audits.auto_applied,
+          audits.recommendation_only,
+          audits.created_at,
+          users.name AS actor_name
+        FROM lead_status_audits AS audits
+        LEFT JOIN users ON users.id = audits.user_id
+        WHERE audits.lead_id = ?
+        ORDER BY audits.created_at DESC, audits.id DESC
+      `,
+      [leadId]
+    ).map((row) => ({
+      id: String(row.id),
+      lead_id: Number(row.lead_id),
+      user_id: row.user_id == null ? null : Number(row.user_id),
+      actor_name: row.actor_name || null,
+      previous_status: row.previous_status || null,
+      new_status: row.new_status || null,
+      confidence: row.confidence == null ? null : Number(row.confidence),
+      reasoning_summary: row.reasoning_summary || null,
+      source: row.source,
+      auto_applied: Boolean(row.auto_applied),
+      recommendation_only: Boolean(row.recommendation_only),
+      created_at: row.created_at,
+    }));
+  }
+
+  listLeadMessagesForApi(leadId) {
+    return this.all(
+      `
+        SELECT
+          lead_messages.id,
+          lead_messages.lead_id,
+          lead_messages.direction,
+          lead_messages.from_number,
+          lead_messages.to_number,
+          lead_messages.external_number,
+          lead_messages.body_text,
+          lead_messages.message_status,
+          lead_messages.sent_at,
+          lead_messages.received_at,
+          lead_messages.crm_user_id,
+          lead_messages.provider_extension_id,
+          users.name AS actor_name
+        FROM lead_messages
+        LEFT JOIN users ON users.id = lead_messages.crm_user_id
+        WHERE lead_messages.lead_id = ?
+        ORDER BY COALESCE(lead_messages.received_at, lead_messages.sent_at, lead_messages.created_at) DESC, lead_messages.id DESC
+      `,
+      [leadId]
+    ).map((row) => ({
+      id: String(row.id),
+      lead_id: Number(row.lead_id),
+      direction: row.direction || "unknown",
+      from_number: row.from_number || null,
+      to_number: row.to_number || null,
+      external_number: row.external_number || null,
+      body_text: row.body_text || "",
+      message_status: row.message_status || null,
+      crm_user_id: row.crm_user_id == null ? null : Number(row.crm_user_id),
+      provider_extension_id: row.provider_extension_id || null,
+      actor_name: row.actor_name || null,
+      happened_at: row.received_at || row.sent_at || null,
+    }));
+  }
+
+  listLeadCallsForApi(leadId) {
+    const rows = this.all(
+      `
+        SELECT
+          lead_calls.id,
+          lead_calls.lead_id,
+          lead_calls.direction,
+          lead_calls.from_number,
+          lead_calls.to_number,
+          lead_calls.external_number,
+          lead_calls.result,
+          lead_calls.action,
+          lead_calls.duration_seconds,
+          lead_calls.start_time,
+          lead_calls.end_time,
+          lead_calls.crm_user_id,
+          lead_calls.provider_extension_id,
+          lead_calls.recording_status,
+          lead_calls.transcript_status,
+          call_recordings.provider_recording_id,
+          call_recordings.content_uri,
+          analyses.summary AS ai_summary,
+          analyses.intent AS ai_intent,
+          analyses.objections AS ai_objections,
+          analyses.next_task AS ai_next_task,
+          analyses.confidence AS ai_confidence,
+          analyses.reasoning_summary AS ai_reasoning_summary,
+          users.name AS actor_name
+        FROM lead_calls
+        LEFT JOIN call_recordings ON call_recordings.lead_call_id = lead_calls.id
+        LEFT JOIN communication_ai_analyses AS analyses
+          ON analyses.source_type = 'call' AND analyses.source_id = lead_calls.id
+        LEFT JOIN users ON users.id = lead_calls.crm_user_id
+        WHERE lead_calls.lead_id = ?
+        ORDER BY lead_calls.start_time DESC, lead_calls.id DESC
+      `,
+      [leadId]
+    );
+
+    const seen = new Set();
+    return rows
+      .filter((row) => {
+        if (seen.has(String(row.id))) {
+          return false;
+        }
+        seen.add(String(row.id));
+        return true;
+      })
+      .map((row) => ({
+        id: String(row.id),
+        lead_id: Number(row.lead_id),
+        direction: row.direction || "unknown",
+        from_number: row.from_number || null,
+        to_number: row.to_number || null,
+        external_number: row.external_number || null,
+        result: row.result || null,
+        action: row.action || null,
+        duration_seconds: Number(row.duration_seconds || 0),
+        start_time: row.start_time || null,
+        end_time: row.end_time || null,
+        crm_user_id: row.crm_user_id == null ? null : Number(row.crm_user_id),
+        provider_extension_id: row.provider_extension_id || null,
+        actor_name: row.actor_name || null,
+        recording_available: Boolean(row.provider_recording_id || row.content_uri),
+        transcript_status: row.transcript_status || null,
+        ai_insights:
+          row.ai_summary || row.ai_reasoning_summary || row.ai_next_task
+            ? {
+                summary: row.ai_summary || "",
+                intent: row.ai_intent || "",
+                objections: row.ai_objections || "",
+                next_action: row.ai_next_task || "",
+                confidence: row.ai_confidence == null ? null : Number(row.ai_confidence),
+                reasoning_summary: row.ai_reasoning_summary || "",
+              }
+            : null,
+        happened_at: row.start_time || row.end_time || null,
+      }));
+  }
+
+  listLeadTimelineForApi(leadId) {
+    const callEvents = this.listLeadCallsForApi(leadId).map((call) => ({
+      id: `call:${call.id}`,
+      type: "call",
+      timestamp: call.happened_at,
+      user_name: call.actor_name,
+      payload: call,
+    }));
+
+    const smsEvents = this.listLeadMessagesForApi(leadId).map((message) => ({
+      id: `sms:${message.id}`,
+      type: "sms",
+      timestamp: message.happened_at,
+      user_name: message.actor_name,
+      payload: message,
+    }));
+
+    const statusEvents = this.listLeadStatusAuditsForApi(leadId).map((audit) => ({
+      id: `status:${audit.id}`,
+      type: "status_change",
+      timestamp: audit.created_at,
+      user_name: audit.actor_name,
+      payload: audit,
+    }));
+
+    return [...callEvents, ...smsEvents, ...statusEvents].sort((left, right) => {
+      const leftTime = new Date(left.timestamp || 0).getTime();
+      const rightTime = new Date(right.timestamp || 0).getTime();
+      return rightTime - leftTime;
+    });
+  }
+
   createActivity({ lead_id, type, content, created_at = null }) {
     const timestamp = created_at || new Date().toISOString();
     const dealershipId = getDefaultDealershipId();
@@ -665,6 +932,7 @@ class CrmDatabase {
     const now = new Date().toISOString();
     const storedStatus = toStoredStatus(input.status || "new");
     const dealershipId = getDefaultDealershipId();
+    const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
 
     this.execute(
       `
@@ -675,6 +943,7 @@ class CrmDatabase {
           assigned_to,
           customer_name,
           phone,
+          normalized_phone,
           email,
           vehicle_interest,
           vehicle_id,
@@ -690,31 +959,32 @@ class CrmDatabase {
           message,
           created_at,
           updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         [
           dealershipId,
           input.source || "website",
           storedStatus || "new",
           null,
-        input.customer_name || null,
-        input.phone || null,
-        input.email || null,
-        input.vehicle_interest || null,
-        input.vehicle_id || null,
-        input.stock_number || null,
-        input.vehicle_year || null,
-        input.vehicle_make || null,
-        input.vehicle_model || null,
-        input.vehicle_trim || null,
-        input.vehicle_condition || null,
-        input.vehicle_price || null,
-        input.lead_type || null,
-        input.listing_url || null,
-        input.message || null,
-        now,
-        now,
-      ]
+          input.customer_name || null,
+          input.phone || null,
+          normalizedPhone,
+          input.email || null,
+          input.vehicle_interest || null,
+          input.vehicle_id || null,
+          input.stock_number || null,
+          input.vehicle_year || null,
+          input.vehicle_make || null,
+          input.vehicle_model || null,
+          input.vehicle_trim || null,
+          input.vehicle_condition || null,
+          input.vehicle_price || null,
+          input.lead_type || null,
+          input.listing_url || null,
+          input.message || null,
+          now,
+          now,
+        ]
     );
 
     const id = this.nextId();
@@ -733,6 +1003,7 @@ class CrmDatabase {
     this.getApiLead(id);
     const now = new Date().toISOString();
     const storedStatus = input.status ? toStoredStatus(input.status) : null;
+    const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
 
     this.execute(
       `
@@ -742,6 +1013,7 @@ class CrmDatabase {
           status = COALESCE(?, status),
           customer_name = ?,
           phone = ?,
+          normalized_phone = ?,
           email = ?,
           vehicle_interest = ?,
           vehicle_id = ?,
@@ -763,6 +1035,7 @@ class CrmDatabase {
         storedStatus,
         input.customer_name || null,
         input.phone || null,
+        normalizedPhone,
         input.email || null,
         input.vehicle_interest || null,
         input.vehicle_id || null,
@@ -785,12 +1058,17 @@ class CrmDatabase {
     return this.getApiLead(id);
   }
 
-  updateApiLeadStatus(id, status) {
+  updateApiLeadStatus(id, status, actor = null, options = {}) {
     const existingLead = this.getApiLead(id);
     const storedStatus = toStoredStatus(status);
+    const nextStatus = fromStoredStatus(storedStatus);
 
     if (!DEALER_PIPELINE_STATUSES.includes(fromStoredStatus(storedStatus))) {
       throw new ValidationError("Invalid lead status.");
+    }
+
+    if (!canTransitionLeadStatus(existingLead.status, nextStatus)) {
+      throw new ValidationError(`Invalid status transition: ${existingLead.status} -> ${nextStatus}.`);
     }
 
     this.execute(
@@ -805,7 +1083,18 @@ class CrmDatabase {
     this.createActivity({
       lead_id: id,
       type: "status_changed",
-      content: `${existingLead.status_label} -> ${titleCaseStatus(fromStoredStatus(storedStatus))}`,
+      content: `${existingLead.status_label} -> ${titleCaseStatus(nextStatus)}`,
+    });
+    this.recordLeadStatusAudit({
+      lead_id: id,
+      user_id: actor?.id || null,
+      previous_status: existingLead.status,
+      new_status: nextStatus,
+      confidence: options.confidence == null ? 1 : Number(options.confidence),
+      reasoning_summary: options.reasoning_summary || "Manual CRM status update.",
+      source: options.source || "manual_status_update",
+      auto_applied: Boolean(options.auto_applied),
+      recommendation_only: Boolean(options.recommendation_only),
     });
     this.save();
 
@@ -818,6 +1107,7 @@ class CrmDatabase {
     return {
       lead,
       activities: this.listLeadActivitiesForApi(id),
+      timeline: this.listLeadTimelineForApi(id),
     };
   }
 
@@ -1046,6 +1336,7 @@ class CrmDatabase {
   createContact(input) {
     const now = new Date().toISOString();
     const dealershipId = getDefaultDealershipId();
+    const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
     this.execute(
       `
         INSERT INTO contacts (
@@ -1054,21 +1345,23 @@ class CrmDatabase {
           last_name,
           email,
           phone,
+          normalized_phone,
           company,
           job_title,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        dealershipId,
-        input.first_name,
-        input.last_name,
-        input.email,
-        input.phone,
-        input.company,
-        input.job_title,
-        now,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          dealershipId,
+          input.first_name,
+          input.last_name,
+          input.email,
+          input.phone,
+          normalizedPhone,
+          input.company,
+          input.job_title,
+          now,
         now,
       ]
     );
@@ -1079,6 +1372,7 @@ class CrmDatabase {
 
   updateContact(id, input) {
     this.getContact(id);
+    const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
     this.execute(
       `
         UPDATE contacts
@@ -1087,6 +1381,7 @@ class CrmDatabase {
           last_name = ?,
           email = ?,
           phone = ?,
+          normalized_phone = ?,
           company = ?,
           job_title = ?,
           updated_at = ?
@@ -1097,6 +1392,7 @@ class CrmDatabase {
         input.last_name,
         input.email,
         input.phone,
+        normalizedPhone,
         input.company,
         input.job_title,
         new Date().toISOString(),
@@ -1367,20 +1663,16 @@ class CrmDatabase {
       return null;
     }
 
-    const leads = this.all(
+    const matched = this.get(
       `
         ${this.apiLeadSelectSql()}
-        WHERE
-          (contacts.phone IS NOT NULL AND TRIM(contacts.phone) <> '')
-          OR (leads.phone IS NOT NULL AND TRIM(leads.phone) <> '')
-        ORDER BY leads.updated_at DESC
-      `
+        WHERE leads.normalized_phone = ? OR contacts.normalized_phone = ?
+        ORDER BY leads.updated_at DESC, leads.id DESC
+      `,
+      [normalizedPhone, normalizedPhone]
     );
 
-    return leads.find((lead) => {
-      const leadPhone = normalizePhone(lead.phone || lead.contact_phone);
-      return leadPhone === normalizedPhone;
-    }) || null;
+    return matched ? this.formatApiLead(matched) : null;
   }
 
   getDashboardMetrics(user) {

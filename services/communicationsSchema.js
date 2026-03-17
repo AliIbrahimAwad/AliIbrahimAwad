@@ -26,6 +26,10 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
     ON ringcentral_connections(user_id)
   `,
   `
+    CREATE INDEX IF NOT EXISTS idx_ringcentral_connections_extension_id
+    ON ringcentral_connections(ringcentral_extension_id, status)
+  `,
+  `
     CREATE TABLE IF NOT EXISTS ringcentral_subscriptions (
       id TEXT PRIMARY KEY,
       dealership_id BIGINT NOT NULL DEFAULT 1,
@@ -97,6 +101,10 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
     ON lead_messages(lead_id, created_at)
   `,
   `
+    CREATE INDEX IF NOT EXISTS idx_lead_messages_external_number
+    ON lead_messages(external_number, received_at)
+  `,
+  `
     CREATE TABLE IF NOT EXISTS lead_calls (
       id TEXT PRIMARY KEY,
       dealership_id BIGINT NOT NULL DEFAULT 1,
@@ -133,6 +141,14 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
     ON lead_calls(session_id, telephony_session_id)
   `,
   `
+    CREATE INDEX IF NOT EXISTS idx_lead_calls_external_number
+    ON lead_calls(external_number, start_time)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS idx_lead_calls_extension_id
+    ON lead_calls(provider_extension_id, start_time)
+  `,
+  `
     CREATE TABLE IF NOT EXISTS call_recordings (
       id TEXT PRIMARY KEY,
       dealership_id BIGINT NOT NULL DEFAULT 1,
@@ -152,6 +168,10 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
   `
     CREATE UNIQUE INDEX IF NOT EXISTS idx_call_recordings_provider_recording_id
     ON call_recordings(provider, provider_recording_id)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS idx_call_recordings_lead_call_id
+    ON call_recordings(lead_call_id, fetched_at)
   `,
   `
     CREATE TABLE IF NOT EXISTS communication_ai_analyses (
@@ -192,6 +212,7 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
       id TEXT PRIMARY KEY,
       dealership_id BIGINT NOT NULL DEFAULT 1,
       lead_id BIGINT NOT NULL,
+      user_id BIGINT,
       previous_status TEXT,
       new_status TEXT,
       confidence REAL,
@@ -205,6 +226,10 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
   `
     CREATE INDEX IF NOT EXISTS idx_lead_status_audits_lead_id_created_at
     ON lead_status_audits(lead_id, created_at)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS idx_communication_ai_analyses_source
+    ON communication_ai_analyses(source_type, source_id, created_at)
   `,
   `
     CREATE TABLE IF NOT EXISTS processing_jobs (
@@ -272,6 +297,7 @@ async function ensureCommunicationsSchema(db) {
   await ensureColumn(db, "call_recordings", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
   await ensureColumn(db, "communication_ai_analyses", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
   await ensureColumn(db, "lead_status_audits", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
+  await ensureColumn(db, "lead_status_audits", "user_id", "BIGINT");
   await ensureColumn(db, "processing_jobs", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
 
   await db.execute(

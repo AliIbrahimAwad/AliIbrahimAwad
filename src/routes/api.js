@@ -90,8 +90,8 @@ function registerApiRoutes(app) {
         throw new ValidationError("A lead status is required.");
       }
 
-      const lead = await req.app.locals.db.updateApiLeadStatus(Number(req.params.id), status);
-      res.json(lead);
+      await req.app.locals.db.updateApiLeadStatus(Number(req.params.id), status, req.currentUser);
+      res.json(await req.app.locals.db.getApiLeadWithActivities(Number(req.params.id), req.currentUser));
     })
   );
 

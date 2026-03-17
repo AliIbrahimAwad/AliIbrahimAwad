@@ -1,19 +1,7 @@
 const { escapeHtml, fieldClass, when } = require("./helpers");
 const { renderDocument } = require("./layout");
 
-function renderLoginPage({ formData, errors = {}, demoUsers = [] }) {
-  const demoRows = demoUsers
-    .map(
-      (user) => `
-        <tr>
-          <td>${escapeHtml(user.role)}</td>
-          <td>${escapeHtml(user.email)}</td>
-          <td>${escapeHtml(user.password)}</td>
-        </tr>
-      `
-    )
-    .join("");
-
+function renderLoginPage({ formData, errors = {} }) {
   return renderDocument({
     title: "Login",
     activePath: "/login",
@@ -38,22 +26,6 @@ function renderLoginPage({ formData, errors = {}, demoUsers = [] }) {
             <button class="button" type="submit">Login</button>
           </div>
         </form>
-      </section>
-
-      <section class="panel stack">
-        <div class="section-heading">
-          <h2>Seeded local users</h2>
-        </div>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Role</th>
-              <th>Email</th>
-              <th>Password</th>
-            </tr>
-          </thead>
-          <tbody>${demoRows}</tbody>
-        </table>
       </section>
     `,
   });

@@ -37,6 +37,17 @@ function createRingCentralRepository(db) {
     return db.get("SELECT * FROM ringcentral_connections WHERE id = ?", [id]);
   }
 
+  async function getConnectionByExtensionId(extensionId) {
+    if (!extensionId) {
+      return null;
+    }
+
+    return db.get(
+      "SELECT * FROM ringcentral_connections WHERE ringcentral_extension_id = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1",
+      [String(extensionId)]
+    );
+  }
+
   async function upsertConnection(input) {
     const existing = await getConnectionByUserId(input.user_id);
     const timestamp = nowIso();
@@ -376,6 +387,17 @@ function createRingCentralRepository(db) {
         WHERE id = ?
       `,
       ["failed", error.message || String(error), plusMinutes(nowIso(), retryMinutes), nowIso(), id]
+    );
+  }
+
+  async function summarizeJobs() {
+    return db.all(
+      `
+        SELECT job_type, status, COUNT(*) AS count, MAX(updated_at) AS last_updated_at
+        FROM processing_jobs
+        GROUP BY job_type, status
+        ORDER BY job_type ASC, status ASC
+      `
     );
   }
 
@@ -746,6 +768,7 @@ function createRingCentralRepository(db) {
       id: uniqueId("statusaudit"),
       dealership_id: dealershipId(input),
       lead_id: Number(input.lead_id),
+      user_id: input.user_id == null ? null : Number(input.user_id),
       previous_status: input.previous_status || null,
       new_status: input.new_status || null,
       confidence: Number(input.confidence || 0),
@@ -759,14 +782,15 @@ function createRingCentralRepository(db) {
     await db.execute(
       `
         INSERT INTO lead_status_audits (
-          id, dealership_id, lead_id, previous_status, new_status, confidence, reasoning_summary,
+          id, dealership_id, lead_id, user_id, previous_status, new_status, confidence, reasoning_summary,
           source, auto_applied, recommendation_only, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         record.id,
         record.dealership_id,
         record.lead_id,
+        record.user_id,
         record.previous_status,
         record.new_status,
         record.confidence,
@@ -791,6 +815,7 @@ function createRingCentralRepository(db) {
     failJob,
     getCallRecordingByProviderId,
     getConnectionById,
+    getConnectionByExtensionId,
     getConnectionByUserId,
     getLeadCallByProviderId,
     getLeadMessageByProviderId,
@@ -800,6 +825,7 @@ function createRingCentralRepository(db) {
     markWebhookEventFailed,
     markWebhookEventProcessed,
     saveSubscription,
+    summarizeJobs,
     upsertCallRecording,
     upsertConnection,
     upsertLeadCall,

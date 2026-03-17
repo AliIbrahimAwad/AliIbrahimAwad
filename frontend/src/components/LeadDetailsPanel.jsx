@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CalendarDays, CarFront, MessageSquareText, PhoneCall, ShieldCheck, Sparkles } from "lucide-react";
+import { CalendarDays, CarFront, ChevronDown, MessageSquareText, PhoneCall, ShieldCheck, Sparkles } from "lucide-react";
 
 import { pipelineLabel, sourceTone, statusTone } from "../lib/format";
 
@@ -12,6 +12,22 @@ function InfoBlock({ label, value }) {
       <p className="mt-2 text-sm font-medium text-slate-100">{value || "Not available"}</p>
     </div>
   );
+}
+
+function renderTimelineHeadline(event) {
+  if (event.type === "sms") {
+    return event.payload.direction === "outbound" ? "Outbound SMS" : "Inbound SMS";
+  }
+
+  if (event.type === "call") {
+    return event.payload.direction === "outbound" ? "Outbound Call" : "Inbound Call";
+  }
+
+  if (event.type === "status_change") {
+    return "Lead Status Changed";
+  }
+
+  return "Activity";
 }
 
 export function LeadDetailsPanel({
@@ -55,7 +71,7 @@ export function LeadDetailsPanel({
     );
   }
 
-  const activities = lead.activities || [];
+  const timeline = lead.timeline || [];
 
   return (
     <aside className="rounded-[2rem] border border-white/10 bg-ink-900/85 p-6 shadow-card backdrop-blur">
@@ -172,7 +188,7 @@ export function LeadDetailsPanel({
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
-              {activities.length} recorded touchpoints
+              {timeline.length} recorded touchpoints
             </span>
             <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
               Status: {lead.statusLabel}
@@ -187,14 +203,93 @@ export function LeadDetailsPanel({
           Timeline
         </div>
         <ol className="mt-4 space-y-4">
-          {activities.length ? (
-            activities.map((event) => (
+          {timeline.length ? (
+            timeline.map((event) => (
               <li key={`${lead.id}-${event.id}`} className="flex gap-4">
                 <div className="mt-1 h-2.5 w-2.5 rounded-full bg-ice-400" />
-                <div>
-                  <p className="text-sm font-semibold text-white">{pipelineLabel(event.type)}</p>
-                  <p className="text-xs uppercase tracking-[0.24em] text-slate-500">{event.createdAtLabel}</p>
-                  <p className="mt-1 text-sm leading-6 text-slate-300">{event.content}</p>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-white">{renderTimelineHeadline(event)}</p>
+                    <p className="text-xs uppercase tracking-[0.24em] text-slate-500">{event.timestampLabel}</p>
+                  </div>
+                  {event.userName ? (
+                    <p className="mt-1 text-xs uppercase tracking-[0.22em] text-slate-500">User: {event.userName}</p>
+                  ) : null}
+
+                  {event.type === "sms" ? (
+                    <div className="mt-2 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                      <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                        {event.payload.direction === "outbound" ? "Sent SMS" : "Received SMS"}
+                      </p>
+                      <p className="mt-2 text-sm leading-6 text-slate-300">{event.payload.body_text || "No message body."}</p>
+                    </div>
+                  ) : null}
+
+                  {event.type === "call" ? (
+                    <div className="mt-2 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                      <div className="flex flex-wrap gap-2">
+                        <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
+                          {event.payload.direction === "outbound" ? "Outbound" : "Inbound"}
+                        </span>
+                        <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
+                          {event.payload.duration_seconds || 0}s
+                        </span>
+                        <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
+                          {event.payload.result || "Synced"}
+                        </span>
+                        <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
+                          Recording {event.payload.recording_available ? "Available" : "Unavailable"}
+                        </span>
+                      </div>
+
+                      {event.payload.ai_insights ? (
+                        <details className="mt-3 overflow-hidden rounded-2xl border border-amber-400/15 bg-amber-400/5">
+                          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-white">
+                            AI insights
+                            <ChevronDown className="h-4 w-4 text-amber-300" />
+                          </summary>
+                          <div className="grid gap-3 border-t border-white/10 px-4 py-4 sm:grid-cols-2">
+                            <InfoBlock label="Summary" value={event.payload.ai_insights.summary} />
+                            <InfoBlock label="Intent" value={event.payload.ai_insights.intent} />
+                            <InfoBlock label="Objections" value={event.payload.ai_insights.objections} />
+                            <InfoBlock label="Next action" value={event.payload.ai_insights.next_action} />
+                            <InfoBlock
+                              label="Confidence"
+                              value={
+                                event.payload.ai_insights.confidence == null
+                                  ? "Not available"
+                                  : `${Math.round(event.payload.ai_insights.confidence * 100)}%`
+                              }
+                            />
+                            <InfoBlock label="Reasoning" value={event.payload.ai_insights.reasoning_summary} />
+                          </div>
+                        </details>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {event.type === "status_change" ? (
+                    <div className="mt-2 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                      <div className="flex flex-wrap gap-2">
+                        <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
+                          {pipelineLabel(event.payload.previous_status || "new")}
+                          {" -> "}
+                          {pipelineLabel(event.payload.new_status || "new")}
+                        </span>
+                        <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
+                          Source: {String(event.payload.source || "manual").replace(/_/g, " ")}
+                        </span>
+                        {event.payload.confidence != null ? (
+                          <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
+                            Confidence {Math.round(event.payload.confidence * 100)}%
+                          </span>
+                        ) : null}
+                      </div>
+                      {event.payload.reasoning_summary ? (
+                        <p className="mt-3 text-sm leading-6 text-slate-300">{event.payload.reasoning_summary}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               </li>
             ))

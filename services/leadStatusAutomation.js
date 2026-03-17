@@ -1,5 +1,6 @@
 const fs = require("fs");
 
+const { canTransitionLeadStatus } = require("../src/models/leadStatus");
 const { logStructured } = require("./structuredLogger");
 
 const STATUS_CANONICAL_VALUES = [
@@ -23,7 +24,7 @@ const DEFAULT_STATUS_MAPPING = {
   appointment_set: "appointment",
   follow_up_needed: "contacted",
   negotiating: "negotiation",
-  sold: "won",
+  sold: "sold",
   lost: "lost",
   do_not_contact: "lost",
 };
@@ -322,6 +323,7 @@ function buildAuditDecision(currentStatus, recommendation, config = getAiConfig(
   const mappedStatus = mapCanonicalStatusToCrmStatus(recommendation.suggested_status);
   const confidence = Number(recommendation.confidence) || 0;
   const autoAllowed = config.autoStatusUpdates && confidence >= config.confidenceThreshold;
+  const transitionAllowed = canTransitionLeadStatus(currentStatus, mappedStatus);
 
   if (!autoAllowed) {
     return {
@@ -331,6 +333,19 @@ function buildAuditDecision(currentStatus, recommendation, config = getAiConfig(
       new_status: mappedStatus,
       confidence,
       reasoning_summary: recommendation.reasoning_summary || recommendation.summary || "",
+    };
+  }
+
+  if (!transitionAllowed) {
+    return {
+      autoApply: false,
+      recommendationOnly: true,
+      previous_status: currentStatus,
+      new_status: mappedStatus,
+      confidence,
+      reasoning_summary: `Blocked invalid transition ${currentStatus} -> ${mappedStatus}. ${
+        recommendation.reasoning_summary || recommendation.summary || ""
+      }`.trim(),
     };
   }
 

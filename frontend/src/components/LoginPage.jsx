@@ -1,15 +1,9 @@
 import { ArrowRight, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 
-const demoUsers = [
-  { role: "Admin", email: "admin@crm.local", password: "admin123" },
-  { role: "Manager", email: "manager@crm.local", password: "manager123" },
-  { role: "Sales", email: "sales@crm.local", password: "sales123" },
-];
-
 export function LoginPage({ onSubmit, error = "", loading = false }) {
-  const [email, setEmail] = useState("manager@crm.local");
-  const [password, setPassword] = useState("manager123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
   return (
     <div className="min-h-screen bg-ink-950 bg-dashboard px-4 py-6 font-body text-slate-100 sm:px-6 lg:px-8">
@@ -74,7 +68,8 @@ export function LoginPage({ onSubmit, error = "", loading = false }) {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none transition placeholder:text-slate-500 focus:border-ice-400/40 focus:bg-white/10"
-                placeholder="manager@crm.local"
+                autoComplete="username"
+                placeholder="you@dealership.com"
                 required
               />
             </label>
@@ -88,6 +83,7 @@ export function LoginPage({ onSubmit, error = "", loading = false }) {
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none transition placeholder:text-slate-500 focus:border-ice-400/40 focus:bg-white/10"
+                autoComplete="current-password"
                 placeholder="Enter your password"
                 required
               />
@@ -104,29 +100,6 @@ export function LoginPage({ onSubmit, error = "", loading = false }) {
               <ArrowRight className="h-4 w-4" />
             </button>
           </form>
-
-          <div className="mt-8 rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-5">
-            <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Seeded local users</p>
-            <div className="mt-4 space-y-3">
-              {demoUsers.map((user) => (
-                <button
-                  key={user.email}
-                  type="button"
-                  onClick={() => {
-                    setEmail(user.email);
-                    setPassword(user.password);
-                  }}
-                  className="flex w-full items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left transition hover:bg-white/[0.08]"
-                >
-                  <div>
-                    <p className="text-sm font-semibold text-white">{user.role}</p>
-                    <p className="text-xs uppercase tracking-[0.22em] text-slate-500">{user.email}</p>
-                  </div>
-                  <span className="text-sm text-slate-300">{user.password}</span>
-                </button>
-              ))}
-            </div>
-          </div>
         </section>
       </div>
     </div>

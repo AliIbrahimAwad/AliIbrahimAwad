@@ -144,6 +144,53 @@ function buildCallKeywordText(record = {}) {
     .toLowerCase();
 }
 
+function collectExtensionIds(...values) {
+  return values
+    .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+}
+
+function extractExtensionCandidatesFromEnvelope(envelope = {}) {
+  const body = envelope.body || {};
+  return collectExtensionIds(
+    envelope.ownerId,
+    body.ownerId,
+    body.extensionId,
+    body.owner?.id,
+    body.extension?.id,
+    body.from?.extensionId,
+    body.to?.extensionId,
+    (body.parties || []).map((party) => party?.extensionId || party?.extension?.id)
+  );
+}
+
+function extractExtensionIdFromMessagePayload(payload = {}, connection = null) {
+  return (
+    collectExtensionIds(
+      payload.ownerId,
+      payload.extensionId,
+      payload.from?.extensionId,
+      (payload.to || []).map((entry) => entry?.extensionId)
+    )[0] ||
+    connection?.ringcentral_extension_id ||
+    null
+  );
+}
+
+function extractExtensionIdFromCallRecord(record = {}, connection = null) {
+  return (
+    collectExtensionIds(
+      record.extension?.id,
+      record.extensionId,
+      record.from?.extensionId,
+      (record.to || []).map((entry) => entry?.extensionId)
+    )[0] ||
+    connection?.ringcentral_extension_id ||
+    null
+  );
+}
+
 function sanitizeConnectionForStatus(connection) {
   if (!connection) {
     return null;
@@ -370,6 +417,7 @@ class RingCentralService {
     const fromNumber = extractPhone(message.from || payload.from);
     const toNumber = extractPhone(Array.isArray(message.to) ? message.to[0] : message.to || payload.to);
     const externalNumber = normalizePhone(getCounterpartyPhone({ direction, fromNumber, toNumber }));
+    const providerExtensionId = extractExtensionIdFromMessagePayload(message, connection);
     const lead = externalNumber ? await this.db.findLeadByPhone(externalNumber) : null;
 
     if (!lead) {
@@ -394,7 +442,7 @@ class RingCentralService {
       sent_at: message.creationTime || payload.creationTime || null,
       received_at: message.lastModifiedTime || payload.lastModifiedTime || message.creationTime || null,
       crm_user_id: Number(connection.user_id),
-      provider_extension_id: connection.ringcentral_extension_id || null,
+      provider_extension_id: providerExtensionId,
       raw: message,
     });
 
@@ -434,6 +482,20 @@ class RingCentralService {
     }
 
     return { skip: false, reason: null };
+  }
+
+  async resolveConnectionForEnvelope(envelope) {
+    const candidates = extractExtensionCandidatesFromEnvelope(envelope);
+
+    for (const candidate of candidates) {
+      const connection = await this.store.getConnectionByExtensionId(candidate);
+      if (connection) {
+        return connection;
+      }
+    }
+
+    const connections = await this.store.listActiveConnections();
+    return connections.length === 1 ? connections[0] : null;
   }
 
   matchesSession(record, payload) {
@@ -476,6 +538,7 @@ class RingCentralService {
       const toNumber = extractPhone(Array.isArray(record.to) ? record.to[0] : record.to);
       const externalNumber = normalizePhone(getCounterpartyPhone({ direction, fromNumber, toNumber }));
       const lead = externalNumber ? await this.db.findLeadByPhone(externalNumber) : null;
+      const providerExtensionId = extractExtensionIdFromCallRecord(record, connection);
       const skipDecision = this.shouldSkipCallRecord(record, lead);
 
       if (skipDecision.skip) {
@@ -514,7 +577,7 @@ class RingCentralService {
         start_time: record.startTime || eventTime,
         end_time: record.lastModifiedTime || null,
         crm_user_id: Number(connection.user_id),
-        provider_extension_id: connection.ringcentral_extension_id || null,
+        provider_extension_id: providerExtensionId,
         recording_id: recording?.id || null,
         recording_status: recording ? "available" : "none",
         transcript_status: recording ? "pending" : "not_requested",
@@ -726,11 +789,7 @@ class RingCentralService {
     }
 
     try {
-      const connections = await this.store.listActiveConnections();
-      const connection =
-        connections.find(
-          (item) => String(item.ringcentral_extension_id || "") === String(envelope.ownerId || envelope.body?.extensionId || "")
-        ) || connections[0];
+      const connection = await this.resolveConnectionForEnvelope(envelope);
 
       if (eventType === "sms" && connection) {
         await this.processSmsPayload(connection, envelope.body);

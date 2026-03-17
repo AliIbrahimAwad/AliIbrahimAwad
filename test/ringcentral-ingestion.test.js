@@ -132,8 +132,8 @@ test("RingCentral SMS webhook ingestion stores the message, queues AI, and updat
     assert.equal(updatedLead.status, "appointment");
 
     const audit = await db.get(
-      "SELECT * FROM lead_status_audits WHERE lead_id = ? ORDER BY created_at DESC LIMIT 1",
-      [lead.id]
+      "SELECT * FROM lead_status_audits WHERE lead_id = ? AND source = ? ORDER BY created_at DESC LIMIT 1",
+      [lead.id, "ai_message_analysis"]
     );
     assert.ok(audit);
     assert.equal(audit.source, "ai_message_analysis");
@@ -150,6 +150,95 @@ test("RingCentral SMS webhook ingestion stores the message, queues AI, and updat
 
     const activities = await db.all("SELECT * FROM activities WHERE lead_id = ? ORDER BY created_at DESC", [lead.id]);
     assert.ok(activities.some((activity) => String(activity.content).includes("appointment")));
+  });
+});
+
+test("RingCentral webhook resolves the correct CRM user by extension id", async () => {
+  await withDb(async ({ db, temp }) => {
+    const lead = await db.createApiLead({
+      source: "website",
+      customer_name: "Extension Match",
+      phone: "+1 (647) 555-0198",
+      email: "extension@example.com",
+      vehicle_interest: "2024 Sedan",
+      status: "new",
+    });
+
+    const fetchImpl = async (url) => {
+      if (String(url).includes("/message-store/msg-extension")) {
+        return new Response(
+          JSON.stringify({
+            id: "msg-extension",
+            ownerId: "ext-2",
+            direction: "Inbound",
+            from: { phoneNumber: "+1 (647) 555-0198" },
+            to: [{ phoneNumber: "+1 (647) 555-1212", extensionId: "ext-2" }],
+            subject: "Please text me the details.",
+            messageStatus: "Received",
+            creationTime: "2026-03-16T17:00:00.000Z",
+            lastModifiedTime: "2026-03-16T17:00:10.000Z",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    };
+
+    const service = await createRingCentralService(
+      {
+        recordingsDir: path.join(temp.dir, "recordings"),
+      },
+      { db, fetchImpl }
+    );
+
+    await service.store.upsertConnection({
+      user_id: 1,
+      ringcentral_account_id: "acct-1",
+      ringcentral_extension_id: "ext-1",
+      server_url: "https://platform.ringcentral.com",
+      access_token: "token-1",
+      refresh_token: "refresh-1",
+      token_type: "Bearer",
+      scope: "ReadMessages",
+      status: "active",
+    });
+
+    await service.store.upsertConnection({
+      user_id: 2,
+      ringcentral_account_id: "acct-1",
+      ringcentral_extension_id: "ext-2",
+      server_url: "https://platform.ringcentral.com",
+      access_token: "token-2",
+      refresh_token: "refresh-2",
+      token_type: "Bearer",
+      scope: "ReadMessages",
+      status: "active",
+    });
+
+    const envelope = service.getEventEnvelope({
+      event: "/restapi/v1.0/account/~/extension/~/message-store/instant?type=SMS",
+      ownerId: "ext-2",
+      body: {
+        id: "msg-extension",
+        ownerId: "ext-2",
+      },
+    });
+
+    const result = await service.processWebhookEnvelope(envelope);
+    assert.equal(result.accepted, true);
+
+    const message = await db.get(
+      "SELECT crm_user_id, provider_extension_id, lead_id FROM lead_messages WHERE provider_message_id = ?",
+      ["msg-extension"]
+    );
+    assert.ok(message);
+    assert.equal(Number(message.crm_user_id), 2);
+    assert.equal(message.provider_extension_id, "ext-2");
+    assert.equal(Number(message.lead_id), Number(lead.id));
   });
 });
 

@@ -113,6 +113,21 @@ function registerRingCentralRoutes(app) {
     })
   );
 
+  app.get(
+    "/api/ringcentral/jobs",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.currentUser || req.currentUser.role === "sales") {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      res.json({
+        items: await req.app.locals.ringcentral.store.summarizeJobs(),
+      });
+    })
+  );
+
   app.post(
     "/api/ringcentral/reconcile",
     requireAuth,

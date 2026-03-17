@@ -18,9 +18,10 @@ The integration expects these scopes:
 
 - `ReadAccounts`
 - `ReadCallLog`
+- `ReadCallRecording`
 - `ReadMessages`
+- `ReadPresence`
 - `SMS`
-- `RingOut`
 - `WebhookSubscriptions`
 
 ### Environment
@@ -33,6 +34,7 @@ Important flags:
 - `RINGCENTRAL_AI_CONFIDENCE_THRESHOLD=0.78`
 - `RINGCENTRAL_MIN_STORED_CALL_SECONDS=10`
 - `RINGCENTRAL_SKIP_FORWARDED_CALLS=true`
+- `RINGCENTRAL_MAINTENANCE_PASSES=3`
 - `DEFAULT_DEALERSHIP_ID=1`
 
 ### Dealership ID foundation
@@ -80,7 +82,30 @@ Run reconciliation for recent call logs:
 npm run reconcile:ringcentral
 ```
 
+Run one maintenance pass that reconciles recent calls and then drains several job batches:
+
+```bash
+npm run maintain:ringcentral
+```
+
 In production, schedule both with cron or a worker process.
+
+Suggested cron pattern:
+
+```bash
+*/5 * * * * cd /var/www/crm && /usr/bin/npm run reconcile:ringcentral >> /var/log/crm-ringcentral-reconcile.log 2>&1
+*/10 * * * * cd /var/www/crm && /usr/bin/npm run process:ringcentral >> /var/log/crm-ringcentral-process.log 2>&1
+```
+
+Or use the combined maintenance script every 5 minutes:
+
+```bash
+*/5 * * * * cd /var/www/crm && /usr/bin/npm run maintain:ringcentral >> /var/log/crm-ringcentral-maintenance.log 2>&1
+```
+
+Managers and admins can inspect async job visibility through:
+
+- `GET /api/ringcentral/jobs`
 
 ### AI lead status behavior
 

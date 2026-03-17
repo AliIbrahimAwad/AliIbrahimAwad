@@ -139,6 +139,16 @@ test("root redirects to login until the user authenticates", async () => {
   });
 });
 
+test("login page does not expose demo credentials", async () => {
+  await withServer(async ({ server }) => {
+    const client = createClient(server);
+    const response = await client.request({ path: "/login" });
+    assert.equal(response.statusCode, 200);
+    assert.doesNotMatch(response.body, /Seeded local users/i);
+    assert.doesNotMatch(response.body, /admin123|manager123|sales123/);
+  });
+});
+
 test("admin can access user management and create a new salesperson", async () => {
   await withServer(async ({ app, server }) => {
     const client = createClient(server);
@@ -432,6 +442,141 @@ test("manager can assign an unassigned API lead", async () => {
     assert.ok(
       assignedBody.activities.some((activity) => /Lead assigned to CRM Sales\./.test(activity.content))
     );
+  });
+});
+
+test("manual lead status updates reject invalid jumps", async () => {
+  await withServer(async ({ server }) => {
+    const client = createClient(server);
+    const createResponse = await client.request({
+      method: "POST",
+      path: "/api/leads",
+      json: {
+        name: "Status Shopper",
+        phone: "(647) 555-0199",
+        email: "status@example.com",
+        vehicle: "2022 Audi A4",
+        source: "website",
+      },
+    });
+
+    const createdLead = JSON.parse(createResponse.body);
+    await login(client, "manager@crm.local", "manager123");
+
+    const updateResponse = await client.request({
+      method: "PATCH",
+      path: `/api/leads/${createdLead.id}/status`,
+      json: { status: "sold" },
+    });
+
+    assert.equal(updateResponse.statusCode, 400);
+    assert.match(updateResponse.body, /Invalid status transition/i);
+  });
+});
+
+test("lead detail API returns unified timeline data", async () => {
+  await withServer(async ({ app, server }) => {
+    const lead = app.locals.db.createApiLead({
+      source: "website",
+      customer_name: "Timeline Shopper",
+      phone: "(647) 555-0100",
+      email: "timeline@example.com",
+      vehicle_interest: "2024 SUV",
+      status: "new",
+    });
+
+    await app.locals.ringcentral.store.upsertLeadMessage({
+      lead_id: Number(lead.id),
+      provider: "ringcentral",
+      provider_message_id: "msg-timeline-1",
+      direction: "inbound",
+      from_number: "(647) 555-0100",
+      to_number: "+1 647-555-1212",
+      external_number: "+16475550100",
+      body_text: "Can I come in tomorrow?",
+      message_status: "Received",
+      received_at: "2026-03-16T15:00:00.000Z",
+      crm_user_id: 2,
+      provider_extension_id: "246552024",
+      raw: {},
+    });
+
+    const call = await app.locals.ringcentral.store.upsertLeadCall({
+      lead_id: Number(lead.id),
+      provider: "ringcentral",
+      provider_call_id: "call-timeline-1",
+      direction: "outbound",
+      from_number: "+16475551212",
+      to_number: "(647) 555-0100",
+      external_number: "+16475550100",
+      result: "Accepted",
+      action: "Phone Call",
+      duration_seconds: 42,
+      start_time: "2026-03-16T16:00:00.000Z",
+      crm_user_id: 2,
+      provider_extension_id: "246552024",
+      recording_status: "available",
+      transcript_status: "completed",
+      raw: {},
+    });
+
+    await app.locals.ringcentral.store.upsertCallRecording({
+      lead_call_id: call.record.id,
+      provider: "ringcentral",
+      provider_recording_id: "recording-timeline-1",
+      content_uri: "https://platform.ringcentral.com/recordings/1",
+      transcript_status: "completed",
+      raw: {},
+    });
+
+    await app.locals.ringcentral.store.createCommunicationAnalysis({
+      lead_id: Number(lead.id),
+      source_type: "call",
+      source_id: call.record.id,
+      provider: "ringcentral",
+      transcript_text: "Customer wants to book a visit.",
+      summary: "Customer is ready to come in.",
+      intent: "appointment",
+      objections: "",
+      appointment_intent: true,
+      trade_in_mention: false,
+      financing_mention: false,
+      hot_lead_score: 88,
+      suggested_status: "appointment",
+      confidence: 0.91,
+      reasoning_summary: "Customer asked to come tomorrow.",
+      next_task: "Confirm appointment time.",
+      escalation_flag: false,
+      auto_status_applied: false,
+      recommendation_only: true,
+      previous_status: "contacted",
+      new_status: "appointment",
+      raw: {},
+    });
+
+    await app.locals.db.recordLeadStatusAudit({
+      lead_id: Number(lead.id),
+      user_id: 2,
+      previous_status: "new",
+      new_status: "contacted",
+      confidence: 1,
+      reasoning_summary: "Manager updated after first response.",
+      source: "manual_status_update",
+      auto_applied: false,
+      recommendation_only: false,
+      created_at: "2026-03-16T14:00:00.000Z",
+    });
+
+    const client = createClient(server);
+    await login(client, "manager@crm.local", "manager123");
+
+    const response = await client.request({ path: `/api/leads/${lead.id}` });
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.ok(Array.isArray(body.timeline));
+    assert.ok(body.timeline.some((item) => item.type === "sms"));
+    assert.ok(body.timeline.some((item) => item.type === "call"));
+    assert.ok(body.timeline.some((item) => item.type === "status_change"));
   });
 });
 

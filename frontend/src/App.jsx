@@ -95,6 +95,18 @@ function formatActivity(activity) {
   };
 }
 
+function formatTimelineItem(item) {
+  const timestamp = item.timestamp || item.payload?.created_at || item.payload?.happened_at || null;
+  return {
+    id: item.id,
+    type: item.type,
+    timestamp,
+    timestampLabel: formatRelative(timestamp),
+    userName: item.user_name || item.payload?.actor_name || null,
+    payload: item.payload || {},
+  };
+}
+
 const emptyMetrics = {
   new_leads_today: 0,
   leads_this_week: 0,
@@ -319,6 +331,7 @@ export default function App() {
         setSelectedLeadDetails({
           ...formatLead(payload.lead),
           activities: payload.activities.map(formatActivity),
+          timeline: (payload.timeline || []).map(formatTimelineItem),
         });
       } catch (loadError) {
         if (!active) {
@@ -375,14 +388,14 @@ export default function App() {
 
     try {
       setStatusUpdating(true);
-      const updatedLead = formatLead(await updateLeadStatus(selectedLeadId, nextStatus));
-
-      setLeads((current) =>
-        current.map((lead) => (lead.id === updatedLead.id ? { ...lead, ...updatedLead } : lead))
-      );
-      setSelectedLeadDetails((current) =>
-        current && current.id === updatedLead.id ? { ...current, ...updatedLead } : current
-      );
+      const payload = await updateLeadStatus(selectedLeadId, nextStatus);
+      const nextLead = formatLead(payload.lead);
+      setLeads((current) => current.map((lead) => (lead.id === nextLead.id ? { ...lead, ...nextLead } : lead)));
+      setSelectedLeadDetails({
+        ...nextLead,
+        activities: (payload.activities || []).map(formatActivity),
+        timeline: (payload.timeline || []).map(formatTimelineItem),
+      });
       setMetrics((current) => ({
         ...current,
         appointments_scheduled:
@@ -414,6 +427,7 @@ export default function App() {
       setSelectedLeadDetails({
         ...updatedLead,
         activities: payload.activities.map(formatActivity),
+        timeline: (payload.timeline || []).map(formatTimelineItem),
       });
       setError("");
     } catch (assignError) {
