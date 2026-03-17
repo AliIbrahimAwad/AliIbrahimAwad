@@ -29,7 +29,7 @@ import {
   sendLeadSms,
   updateLeadStatus,
 } from "./lib/api";
-import { pipelineLabel } from "./lib/format";
+import { formatPhoneNumber, pipelineLabel } from "./lib/format";
 
 const organizedGroups = ["contacted", "engaged", "appointment", "negotiation", "sold", "lost"];
 
@@ -67,7 +67,7 @@ function formatLead(lead) {
     id: lead.id,
     customerName: lead.customer_name,
     assignedTo: lead.assigned_to ?? null,
-    phone: lead.phone || "No phone on file",
+    phone: lead.phone ? formatPhoneNumber(lead.phone) : "Not available",
     email: lead.email || "No email on file",
     vehicleInterest: lead.vehicle_interest || "Vehicle inquiry",
     source: capitalizeSource(lead.source),
@@ -256,6 +256,7 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [assignees, setAssignees] = useState([]);
   const [query, setQuery] = useState("");
+  const [leadStatusFilter, setLeadStatusFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [conversationLoading, setConversationLoading] = useState(false);
@@ -609,7 +610,13 @@ export default function App() {
   const visibleOrganizedGroups = Object.fromEntries(
     organizedGroups.map((group) => [group, organizedLeadGroups[group].filter(matchesSearch)])
   );
-  const flattenedOrganizedLeads = organizedGroups.flatMap((group) => visibleOrganizedGroups[group]);
+  const filteredOrganizedGroups = Object.fromEntries(
+    organizedGroups.map((group) => [
+      group,
+      visibleOrganizedGroups[group].filter((lead) => leadStatusFilter === "all" || lead.status === leadStatusFilter),
+    ])
+  );
+  const flattenedOrganizedLeads = organizedGroups.flatMap((group) => filteredOrganizedGroups[group]);
   const visibleConversationFeed = conversationFeed.filter((item) =>
     !search ||
     [
@@ -1149,12 +1156,31 @@ export default function App() {
 
                 {showLeads ? (
                   <>
-                    <div className="border-b border-white/10 pb-4">
-                      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Organized pipeline</p>
-                      <h2 className="mt-2 font-display text-2xl font-semibold text-white">Lead library</h2>
-                      <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
-                        Everything not demanding immediate action lives here, grouped by stage so the desk can work cleanly.
-                      </p>
+                    <div className="flex flex-col gap-4 border-b border-white/10 pb-4 lg:flex-row lg:items-end lg:justify-between">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Organized pipeline</p>
+                        <h2 className="mt-2 font-display text-2xl font-semibold text-white">Lead library</h2>
+                        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
+                          Everything not demanding immediate action lives here, grouped by stage so the desk can work cleanly.
+                        </p>
+                      </div>
+                      <label className="grid gap-2 lg:min-w-[220px]">
+                        <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Status filter</span>
+                        <select
+                          value={leadStatusFilter}
+                          onChange={(event) => setLeadStatusFilter(event.target.value)}
+                          className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+                        >
+                          <option value="all" className="bg-ink-900">
+                            All organized leads
+                          </option>
+                          {organizedGroups.map((status) => (
+                            <option key={status} value={status} className="bg-ink-900">
+                              {pipelineLabel(status)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                     </div>
                     <div className="mt-4 grid gap-4">
                       {libraryLoading ? (
@@ -1163,7 +1189,7 @@ export default function App() {
                         ))
                       ) : flattenedOrganizedLeads.length ? (
                         organizedGroups.map((group) =>
-                          visibleOrganizedGroups[group]?.length ? (
+                          filteredOrganizedGroups[group]?.length ? (
                             <div key={group} className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
                               <div className="mb-4 flex items-center justify-between gap-3">
                                 <div>
@@ -1171,11 +1197,11 @@ export default function App() {
                                   <h3 className="mt-1 font-display text-xl font-semibold text-white">{pipelineLabel(group)}</h3>
                                 </div>
                                 <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
-                                  {visibleOrganizedGroups[group].length}
+                                  {filteredOrganizedGroups[group].length}
                                 </span>
                               </div>
                               <div className="grid gap-4">
-                                {visibleOrganizedGroups[group].map((lead) => (
+                                {filteredOrganizedGroups[group].map((lead) => (
                                   <LeadCard
                                     key={lead.id}
                                     lead={lead}
@@ -1307,6 +1333,7 @@ export default function App() {
                 <div className="2xl:sticky 2xl:top-6 2xl:self-start">
                   <LeadDetailsPanel
                     lead={selectedLead}
+                    currentUserRole={currentUser?.role}
                     loading={detailLoading}
                     onStatusChange={handleStatusChange}
                     statusUpdating={statusUpdating}

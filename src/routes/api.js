@@ -1,4 +1,4 @@
-const { canAssignLeads, canManageUsers } = require("../models/user");
+const { canAssignLeads, canManageUsers, canUpdateLeadStatus } = require("../models/user");
 const { requireAuth } = require("../middleware/auth");
 const { ValidationError } = require("../data/database");
 const { normalizePhone } = require("../utils/phones");
@@ -87,6 +87,11 @@ function registerApiRoutes(app) {
     "/api/leads/:id/status",
     requireAuth,
     asyncHandler(async (req, res) => {
+      if (!canUpdateLeadStatus(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
       const status = String(req.body.status || "").trim().toLowerCase();
       if (!status) {
         throw new ValidationError("A lead status is required.");

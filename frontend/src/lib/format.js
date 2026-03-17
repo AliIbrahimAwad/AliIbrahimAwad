@@ -68,3 +68,14 @@ export function pipelineLabel(status) {
         .join(" ");
   }
 }
+
+export function formatPhoneNumber(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  const normalized = digits.length === 11 && digits.startsWith("1") ? digits : digits.length === 10 ? `1${digits}` : "";
+
+  if (normalized.length !== 11) {
+    return value || "Not available";
+  }
+
+  return `+${normalized[0]} (${normalized.slice(1, 4)}) ${normalized.slice(4, 7)}-${normalized.slice(7)}`;
+}

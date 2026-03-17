@@ -42,6 +42,7 @@ function renderTimelineHeadline(event) {
 
 export function LeadDetailsPanel({
   lead,
+  currentUserRole = "sales",
   loading = false,
   onStatusChange,
   statusUpdating = false,
@@ -109,6 +110,8 @@ export function LeadDetailsPanel({
   }
 
   const timeline = lead.timeline || [];
+  const isSalesUser = currentUserRole === "sales";
+  const canEditStatus = !isSalesUser;
 
   return (
     <aside className="rounded-[2rem] border border-white/10 bg-ink-900/85 p-6 shadow-card backdrop-blur">
@@ -128,23 +131,25 @@ export function LeadDetailsPanel({
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        {pipelineStatuses.map((status) => (
-          <button
-            key={status}
-            type="button"
-            onClick={() => onStatusChange?.(status)}
-            disabled={statusUpdating || status === lead.status}
-            className={`rounded-full px-3 py-2 text-xs font-semibold transition ${
-              status === lead.status
-                ? "bg-white text-ink-950"
-                : "border border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white"
-            } ${statusUpdating ? "cursor-wait opacity-70" : ""}`}
-          >
-            {pipelineLabel(status)}
-          </button>
-        ))}
-      </div>
+      {canEditStatus ? (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {pipelineStatuses.map((status) => (
+            <button
+              key={status}
+              type="button"
+              onClick={() => onStatusChange?.(status)}
+              disabled={statusUpdating || status === lead.status}
+              className={`rounded-full px-3 py-2 text-xs font-semibold transition ${
+                status === lead.status
+                  ? "bg-white text-ink-950"
+                  : "border border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white"
+              } ${statusUpdating ? "cursor-wait opacity-70" : ""}`}
+            >
+              {pipelineLabel(status)}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {canAssign ? (
         <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-5">
@@ -186,17 +191,17 @@ export function LeadDetailsPanel({
 
       <div className="mt-6 grid gap-3 sm:grid-cols-2">
         <InfoBlock label="Phone" value={lead.phone} />
-        <InfoBlock label="Assigned Rep" value={lead.assignedRep} />
         <InfoBlock label="Email" value={lead.email} />
-        <InfoBlock label="Listing URL" value={lead.listingUrl || "Direct inventory inquiry"} />
         <InfoBlock label="Stock Number" value={lead.stockNumber} />
-        <InfoBlock label="Lead Type" value={lead.leadType} />
         <InfoBlock label="Year" value={lead.vehicleYear} />
         <InfoBlock label="Make" value={lead.vehicleMake} />
         <InfoBlock label="Model" value={lead.vehicleModel} />
         <InfoBlock label="Trim" value={lead.vehicleTrim} />
         <InfoBlock label="Condition" value={lead.vehicleCondition} />
         <InfoBlock label="Price" value={lead.vehiclePrice} />
+        {!isSalesUser ? <InfoBlock label="Assigned Rep" value={lead.assignedRep} /> : null}
+        {!isSalesUser ? <InfoBlock label="Listing URL" value={lead.listingUrl || "Direct inventory inquiry"} /> : null}
+        {!isSalesUser ? <InfoBlock label="Lead Type" value={lead.leadType} /> : null}
       </div>
 
       <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-gradient-to-br from-white/8 to-white/[0.03] p-5">
@@ -252,41 +257,44 @@ export function LeadDetailsPanel({
         </div>
       </div>
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-5">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <CalendarDays className="h-4 w-4 text-ice-300" />
-            Lead snapshot
+      {!isSalesUser ? (
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-white">
+              <CalendarDays className="h-4 w-4 text-ice-300" />
+              Lead snapshot
+            </div>
+            <p className="mt-3 text-sm leading-6 text-slate-300">
+              Captured {lead.createdAtLabel}. Last updated {lead.updatedAtLabel}. Source channel is{" "}
+              {lead.source.toLowerCase()}.
+            </p>
           </div>
-          <p className="mt-3 text-sm leading-6 text-slate-300">
-            Captured {lead.createdAtLabel}. Last updated {lead.updatedAtLabel}. Source channel is{" "}
-            {lead.source.toLowerCase()}.
-          </p>
+          <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-white">
+              <ShieldCheck className="h-4 w-4 text-lime-400" />
+              Activity count
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
+                {timeline.length} recorded touchpoints
+              </span>
+              <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
+                Status: {lead.statusLabel}
+              </span>
+            </div>
+          </div>
         </div>
-        <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-5">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <ShieldCheck className="h-4 w-4 text-lime-400" />
-            Activity count
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
-              {timeline.length} recorded touchpoints
-            </span>
-            <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
-              Status: {lead.statusLabel}
-            </span>
-          </div>
-        </div>
-      </div>
+      ) : null}
 
-      <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-        <div className="flex items-center gap-2 text-sm font-semibold text-white">
-          <MessageSquareText className="h-4 w-4 text-ember-400" />
-          Timeline
-        </div>
-        <ol className="mt-4 space-y-4">
-          {timeline.length ? (
-            timeline.map((event) => (
+      {!isSalesUser ? (
+        <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+          <div className="flex items-center gap-2 text-sm font-semibold text-white">
+            <MessageSquareText className="h-4 w-4 text-ember-400" />
+            Timeline
+          </div>
+          <ol className="mt-4 space-y-4">
+            {timeline.length ? (
+              timeline.map((event) => (
               <li key={`${lead.id}-${event.id}`} className="flex gap-4">
                 <div className="mt-1 h-2.5 w-2.5 rounded-full bg-ice-400" />
                 <div className="min-w-0 flex-1">
@@ -374,12 +382,13 @@ export function LeadDetailsPanel({
                   ) : null}
                 </div>
               </li>
-            ))
-          ) : (
-            <p className="text-sm text-slate-400">No activity has been recorded yet.</p>
-          )}
-        </ol>
-      </div>
+              ))
+            ) : (
+              <p className="text-sm text-slate-400">No activity has been recorded yet.</p>
+            )}
+          </ol>
+        </div>
+      ) : null}
 
       <div className="mt-6 grid gap-3 sm:grid-cols-3">
         <button

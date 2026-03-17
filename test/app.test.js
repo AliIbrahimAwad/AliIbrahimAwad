@@ -474,6 +474,33 @@ test("manual lead status updates reject invalid jumps", async () => {
   });
 });
 
+test("sales users cannot manually update lead status through the API", async () => {
+  await withServer(async ({ app, server }) => {
+    const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
+    const lead = app.locals.db.createApiLead({
+      source: "website",
+      customer_name: "Sales Status Lock",
+      phone: "(647) 555-0144",
+      email: "sales-lock@example.com",
+      vehicle_interest: "2024 SUV",
+      status: "contacted",
+    });
+    app.locals.db.assignLead(lead.id, salesUser.id);
+
+    const client = createClient(server);
+    await login(client, "sales@crm.local", "sales123");
+
+    const response = await client.request({
+      method: "PATCH",
+      path: `/api/leads/${lead.id}/status`,
+      json: { status: "appointment" },
+    });
+
+    assert.equal(response.statusCode, 403);
+    assert.match(response.body, /Forbidden/);
+  });
+});
+
 test("lead detail API returns unified timeline data", async () => {
   await withServer(async ({ app, server }) => {
     const lead = app.locals.db.createApiLead({

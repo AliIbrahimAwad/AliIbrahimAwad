@@ -16,6 +16,10 @@ function canAssignLeads(user) {
   return Boolean(user && (user.role === "admin" || user.role === "manager"));
 }
 
+function canUpdateLeadStatus(user) {
+  return Boolean(user && (user.role === "admin" || user.role === "manager"));
+}
+
 function canViewAllLeads(user) {
   return Boolean(user && (user.role === "admin" || user.role === "manager"));
 }
@@ -23,6 +27,7 @@ function canViewAllLeads(user) {
 module.exports = {
   canAssignLeads,
   canManageUsers,
+  canUpdateLeadStatus,
   canViewAllLeads,
   isValidUserRole,
   normalizeUserRole,
