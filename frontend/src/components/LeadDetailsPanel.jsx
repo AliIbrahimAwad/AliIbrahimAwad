@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CalendarDays,
   CarFront,
@@ -62,6 +62,8 @@ export function LeadDetailsPanel({
   const [assignmentValue, setAssignmentValue] = useState("");
   const [smsDraft, setSmsDraft] = useState("");
   const [smsComposerOpen, setSmsComposerOpen] = useState(false);
+  const [actionNotice, setActionNotice] = useState("");
+  const smsComposerRef = useRef(null);
 
   useEffect(() => {
     setAssignmentValue(lead?.assignedTo ? String(lead.assignedTo) : "");
@@ -70,7 +72,17 @@ export function LeadDetailsPanel({
   useEffect(() => {
     setSmsDraft("");
     setSmsComposerOpen(false);
+    setActionNotice("");
   }, [lead?.id]);
+
+  useEffect(() => {
+    if (!smsComposerOpen || !smsComposerRef.current) {
+      return;
+    }
+
+    smsComposerRef.current.focus();
+    smsComposerRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [smsComposerOpen]);
 
   if (loading) {
     return (
@@ -373,9 +385,14 @@ export function LeadDetailsPanel({
         <button
           type="button"
           onClick={async () => {
-            await onLogCall?.();
-            if (lead.phone && typeof window !== "undefined") {
-              window.location.href = `tel:${lead.phone}`;
+            try {
+              await onLogCall?.();
+              setActionNotice("Call logged. If this device supports phone links, your dialer should open now.");
+              if (lead.phone && typeof window !== "undefined") {
+                window.location.href = `tel:${lead.phone}`;
+              }
+            } catch (_error) {
+              // The parent surfaces API errors, so we only avoid clearing the current UI state here.
             }
           }}
           disabled={!lead.phone || callLogging}
@@ -390,16 +407,26 @@ export function LeadDetailsPanel({
         </button>
         <button
           type="button"
-          onClick={() => setSmsComposerOpen((current) => !current)}
+          onClick={() => {
+            setSmsComposerOpen(true);
+            setActionNotice("SMS composer ready.");
+          }}
           disabled={!lead.phone}
           className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
         >
           <MessageSquareText className="h-4 w-4" />
-          Send SMS
+          Compose SMS
         </button>
         <button
           type="button"
-          onClick={() => onHoldVehicle?.()}
+          onClick={async () => {
+            try {
+              await onHoldVehicle?.();
+              setActionNotice("Hold request task created for this lead.");
+            } catch (_error) {
+              // The parent surfaces API errors, so we only avoid clearing the current UI state here.
+            }
+          }}
           disabled={holdSubmitting}
           className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
         >
@@ -408,6 +435,12 @@ export function LeadDetailsPanel({
         </button>
       </div>
 
+      {actionNotice ? (
+        <div className="mt-4 rounded-2xl border border-ice-400/25 bg-ice-400/10 px-4 py-3 text-sm text-ice-100">
+          {actionNotice}
+        </div>
+      ) : null}
+
       {smsComposerOpen ? (
         <div className="mt-4 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
           <div className="flex items-center gap-2 text-sm font-semibold text-white">
@@ -415,6 +448,7 @@ export function LeadDetailsPanel({
             Compose SMS
           </div>
           <textarea
+            ref={smsComposerRef}
             value={smsDraft}
             onChange={(event) => setSmsDraft(event.target.value)}
             rows={4}
@@ -431,6 +465,7 @@ export function LeadDetailsPanel({
                 onClick={() => {
                   setSmsComposerOpen(false);
                   setSmsDraft("");
+                  setActionNotice("");
                 }}
                 className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
               >
@@ -443,9 +478,14 @@ export function LeadDetailsPanel({
                   if (!trimmed) {
                     return;
                   }
-                  await onSendSms?.(trimmed);
-                  setSmsDraft("");
-                  setSmsComposerOpen(false);
+                  try {
+                    await onSendSms?.(trimmed);
+                    setSmsDraft("");
+                    setSmsComposerOpen(false);
+                    setActionNotice("SMS sent through RingCentral.");
+                  } catch (_error) {
+                    // The parent surfaces API errors.
+                  }
                 }}
                 disabled={smsSending || !smsDraft.trim()}
                 className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-ink-950 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"

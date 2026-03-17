@@ -31,7 +31,6 @@ import {
 } from "./lib/api";
 import { pipelineLabel } from "./lib/format";
 
-const tabs = ["Needs Attention", "Organized Leads"];
 const organizedGroups = ["contacted", "engaged", "appointment", "negotiation", "sold", "lost"];
 
 function capitalizeSource(source) {
@@ -254,7 +253,6 @@ export default function App() {
   const [selectedLeadId, setSelectedLeadId] = useState(null);
   const [selectedLeadDetails, setSelectedLeadDetails] = useState(null);
   const [activeSection, setActiveSection] = useState("Dashboard");
-  const [activeTab, setActiveTab] = useState("Needs Attention");
   const [users, setUsers] = useState([]);
   const [assignees, setAssignees] = useState([]);
   const [query, setQuery] = useState("");
@@ -933,15 +931,15 @@ export default function App() {
   const showAnalytics = activeSection === "Analytics";
   const sectionTitle = {
     Dashboard: "Sales execution",
-    Leads: "Lead library",
+    Leads: "Lead pipeline",
     Conversations: "Conversations",
     Inventory: "Inventory focus",
     Analytics: "Pipeline analytics",
     Team: "Team management",
   }[activeSection];
   const sectionDescription = {
-    Dashboard: "Focus the team on leads that need action now, and keep the rest of the pipeline organized in the background.",
-    Leads: "Review every lead in the pipeline without losing the manager detail panel on the right.",
+    Dashboard: "Show only the leads that need a rep or manager to act right now.",
+    Leads: "Review the organized pipeline after urgent work is handled.",
     Conversations: "See the latest inbound and outbound communication in one place and jump straight into the lead record.",
     Inventory: "Group open opportunities by vehicle so the desk can see what stock is driving demand.",
     Analytics: "Track where leads sit, which sources are feeding the desk, and how much of the pipeline is actionable.",
@@ -1111,32 +1109,13 @@ export default function App() {
               <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 sm:p-5">
                 {showDashboard ? (
                   <>
-                    <div className="flex flex-col gap-4 border-b border-white/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="border-b border-white/10 pb-4">
                       <div>
                         <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Sales execution queue</p>
-                        <h2 className="mt-2 font-display text-2xl font-semibold text-white">
-                          {activeTab === "Needs Attention" ? "Needs attention" : "Organized leads"}
-                        </h2>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {tabs.map((tab) => (
-                          <button
-                            key={tab}
-                            type="button"
-                            onClick={() => {
-                              startTransition(() => {
-                                setActiveTab(tab);
-                              });
-                            }}
-                            className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                              activeTab === tab
-                                ? "bg-white text-ink-950"
-                                : "bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white"
-                            }`}
-                          >
-                            {tab}
-                          </button>
-                        ))}
+                        <h2 className="mt-2 font-display text-2xl font-semibold text-white">Needs attention</h2>
+                        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
+                          Only leads that need follow-up, callback, task completion, or manager action belong here.
+                        </p>
                       </div>
                     </div>
 
@@ -1145,7 +1124,7 @@ export default function App() {
                         Array.from({ length: 4 }).map((_, index) => (
                           <div key={index} className="h-48 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
                         ))
-                      ) : activeTab === "Needs Attention" ? (
+                      ) : (
                         visibleAttentionLeads.map((lead) => (
                           <AttentionLeadCard
                             key={lead.id}
@@ -1158,13 +1137,37 @@ export default function App() {
                             }}
                           />
                         ))
-                      ) : (
+                      )}
+                      {!loading && visibleAttentionLeads.length === 0 ? (
+                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
+                          No leads require attention right now.
+                        </div>
+                      ) : null}
+                    </div>
+                  </>
+                ) : null}
+
+                {showLeads ? (
+                  <>
+                    <div className="border-b border-white/10 pb-4">
+                      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Organized pipeline</p>
+                      <h2 className="mt-2 font-display text-2xl font-semibold text-white">Lead library</h2>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
+                        Everything not demanding immediate action lives here, grouped by stage so the desk can work cleanly.
+                      </p>
+                    </div>
+                    <div className="mt-4 grid gap-4">
+                      {libraryLoading ? (
+                        Array.from({ length: 4 }).map((_, index) => (
+                          <div key={index} className="h-44 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
+                        ))
+                      ) : flattenedOrganizedLeads.length ? (
                         organizedGroups.map((group) =>
                           visibleOrganizedGroups[group]?.length ? (
                             <div key={group} className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
                               <div className="mb-4 flex items-center justify-between gap-3">
                                 <div>
-                                  <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Organized</p>
+                                  <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Stage</p>
                                   <h3 className="mt-1 font-display text-xl font-semibold text-white">{pipelineLabel(group)}</h3>
                                 </div>
                                 <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
@@ -1188,47 +1191,9 @@ export default function App() {
                             </div>
                           ) : null
                         )
-                      )}
-                      {!loading &&
-                      ((activeTab === "Needs Attention" && visibleAttentionLeads.length === 0) ||
-                        (activeTab === "Organized Leads" && flattenedOrganizedLeads.length === 0)) ? (
-                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                          {activeTab === "Needs Attention"
-                            ? "No leads require attention right now."
-                            : "No organized leads match this filter."}
-                        </div>
-                      ) : null}
-                    </div>
-                  </>
-                ) : null}
-
-                {showLeads ? (
-                  <>
-                    <div className="border-b border-white/10 pb-4">
-                      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">All leads</p>
-                      <h2 className="mt-2 font-display text-2xl font-semibold text-white">Lead library</h2>
-                    </div>
-                    <div className="mt-4 grid gap-4">
-                      {libraryLoading ? (
-                        Array.from({ length: 4 }).map((_, index) => (
-                          <div key={index} className="h-44 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
-                        ))
-                      ) : visibleLeadLibrary.length ? (
-                        visibleLeadLibrary.map((lead) => (
-                          <LeadCard
-                            key={lead.id}
-                            lead={lead}
-                            selected={lead.id === selectedLead?.id}
-                            onSelect={() => {
-                              startTransition(() => {
-                                setSelectedLeadId(lead.id);
-                              });
-                            }}
-                          />
-                        ))
                       ) : (
                         <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                          No leads matched this search.
+                          No organized leads match this search.
                         </div>
                       )}
                     </div>
