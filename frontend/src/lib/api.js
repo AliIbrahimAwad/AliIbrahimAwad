@@ -70,6 +70,29 @@ export function getDashboardWorklist() {
   return request("/api/dashboard/worklist");
 }
 
+export function getConversations(limit = 50) {
+  return request(`/api/conversations?limit=${limit}`);
+}
+
+export function sendLeadSms(id, message) {
+  return request(`/api/leads/${id}/sms`, {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+}
+
+export function logLeadCall(id) {
+  return request(`/api/leads/${id}/call`, {
+    method: "POST",
+  });
+}
+
+export function holdLeadVehicle(id) {
+  return request(`/api/leads/${id}/hold`, {
+    method: "POST",
+  });
+}
+
 export function completeTask(id) {
   return request(`/api/tasks/${id}/complete`, {
     method: "PATCH",

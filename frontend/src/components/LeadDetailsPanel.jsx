@@ -1,5 +1,15 @@
 import { useEffect, useState } from "react";
-import { CalendarDays, CarFront, CheckCircle2, ChevronDown, MessageSquareText, PhoneCall, ShieldCheck, Sparkles } from "lucide-react";
+import {
+  CalendarDays,
+  CarFront,
+  CheckCircle2,
+  ChevronDown,
+  MessageSquareText,
+  PhoneCall,
+  Send,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
 
 import { pipelineLabel, sourceTone, statusTone } from "../lib/format";
 
@@ -42,12 +52,25 @@ export function LeadDetailsPanel({
   onAssignLead,
   onCompleteTask,
   taskCompletingId = null,
+  onSendSms,
+  smsSending = false,
+  onLogCall,
+  callLogging = false,
+  onHoldVehicle,
+  holdSubmitting = false,
 }) {
   const [assignmentValue, setAssignmentValue] = useState("");
+  const [smsDraft, setSmsDraft] = useState("");
+  const [smsComposerOpen, setSmsComposerOpen] = useState(false);
 
   useEffect(() => {
     setAssignmentValue(lead?.assignedTo ? String(lead.assignedTo) : "");
   }, [lead?.assignedTo, lead?.id]);
+
+  useEffect(() => {
+    setSmsDraft("");
+    setSmsComposerOpen(false);
+  }, [lead?.id]);
 
   if (loading) {
     return (
@@ -349,13 +372,26 @@ export function LeadDetailsPanel({
       <div className="mt-6 grid gap-3 sm:grid-cols-3">
         <button
           type="button"
-          className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-slate-100"
+          onClick={async () => {
+            await onLogCall?.();
+            if (lead.phone && typeof window !== "undefined") {
+              window.location.href = `tel:${lead.phone}`;
+            }
+          }}
+          disabled={!lead.phone || callLogging}
+          className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
+            lead.phone
+              ? "bg-white text-ink-950 hover:bg-slate-100 disabled:cursor-wait disabled:opacity-70"
+              : "cursor-not-allowed bg-white/10 text-slate-500"
+          }`}
         >
           <PhoneCall className="h-4 w-4" />
-          Call Lead
+          {callLogging ? "Starting..." : "Call Lead"}
         </button>
         <button
           type="button"
+          onClick={() => setSmsComposerOpen((current) => !current)}
+          disabled={!lead.phone}
           className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
         >
           <MessageSquareText className="h-4 w-4" />
@@ -363,12 +399,63 @@ export function LeadDetailsPanel({
         </button>
         <button
           type="button"
+          onClick={() => onHoldVehicle?.()}
+          disabled={holdSubmitting}
           className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
         >
           <CarFront className="h-4 w-4" />
-          Hold Vehicle
+          {holdSubmitting ? "Creating..." : "Hold Vehicle"}
         </button>
       </div>
+
+      {smsComposerOpen ? (
+        <div className="mt-4 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+          <div className="flex items-center gap-2 text-sm font-semibold text-white">
+            <Send className="h-4 w-4 text-ice-300" />
+            Compose SMS
+          </div>
+          <textarea
+            value={smsDraft}
+            onChange={(event) => setSmsDraft(event.target.value)}
+            rows={4}
+            placeholder="Write a quick follow-up..."
+            className="mt-4 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
+          />
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+              Sending to {lead.phone || "No phone number"}
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSmsComposerOpen(false);
+                  setSmsDraft("");
+                }}
+                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const trimmed = smsDraft.trim();
+                  if (!trimmed) {
+                    return;
+                  }
+                  await onSendSms?.(trimmed);
+                  setSmsDraft("");
+                  setSmsComposerOpen(false);
+                }}
+                disabled={smsSending || !smsDraft.trim()}
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-ink-950 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {smsSending ? "Sending..." : "Send message"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </aside>
   );
 }

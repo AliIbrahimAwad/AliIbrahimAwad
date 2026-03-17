@@ -19,6 +19,8 @@ const sections = [
 ];
 
 export function Sidebar({ activeSection = "Dashboard", onSelectSection, currentUser }) {
+  const visibleSections = currentUser?.role === "admin" ? sections : sections.filter((section) => section.label !== "Team");
+
   return (
     <aside className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-ink-900/85 p-5 shadow-card backdrop-blur xl:min-h-[calc(100vh-3rem)]">
       <div className="pointer-events-none absolute inset-x-6 top-0 h-36 rounded-b-[3rem] bg-gradient-to-b from-ice-400/10 to-transparent" />
@@ -34,7 +36,7 @@ export function Sidebar({ activeSection = "Dashboard", onSelectSection, currentU
       </div>
 
       <nav className="relative mt-6 space-y-2">
-        {sections.map(({ label, icon: Icon }) => {
+        {visibleSections.map(({ label, icon: Icon }) => {
           const active = label === activeSection;
 
           return (

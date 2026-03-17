@@ -580,6 +580,206 @@ test("lead detail API returns unified timeline data", async () => {
   });
 });
 
+test("conversations API returns recent calls and SMS items", async () => {
+  await withServer(async ({ app, server }) => {
+    const lead = app.locals.db.createApiLead({
+      source: "website",
+      customer_name: "Conversation Shopper",
+      phone: "(647) 555-0105",
+      email: "conversation@example.com",
+      vehicle_interest: "2021 Sedan",
+      status: "contacted",
+    });
+
+    await app.locals.ringcentral.store.upsertLeadMessage({
+      lead_id: Number(lead.id),
+      provider: "ringcentral",
+      provider_message_id: "msg-feed-1",
+      direction: "inbound",
+      from_number: "(647) 555-0105",
+      to_number: "+1 647-555-1212",
+      external_number: "+16475550105",
+      body_text: "Is the car still available?",
+      message_status: "Received",
+      received_at: "2026-03-16T15:00:00.000Z",
+      crm_user_id: 2,
+      provider_extension_id: "246552024",
+      raw: {},
+    });
+
+    await app.locals.ringcentral.store.upsertLeadCall({
+      lead_id: Number(lead.id),
+      provider: "ringcentral",
+      provider_call_id: "call-feed-1",
+      direction: "outbound",
+      from_number: "+16475551212",
+      to_number: "(647) 555-0105",
+      external_number: "+16475550105",
+      result: "Accepted",
+      action: "Phone Call",
+      duration_seconds: 31,
+      start_time: "2026-03-16T16:00:00.000Z",
+      crm_user_id: 2,
+      provider_extension_id: "246552024",
+      recording_status: "none",
+      transcript_status: "not_requested",
+      raw: {},
+    });
+
+    const client = createClient(server);
+    await login(client, "manager@crm.local", "manager123");
+
+    const response = await client.request({ path: "/api/conversations?limit=10" });
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.ok(body.items.some((item) => item.type === "sms"));
+    assert.ok(body.items.some((item) => item.type === "call"));
+  });
+});
+
+test("API SMS endpoint sends a CRM message and returns refreshed lead detail", async () => {
+  const temp = createTempDbPath();
+  const fetchImpl = async (url) => {
+    if (String(url).includes("/sms")) {
+      return new Response(
+        JSON.stringify({
+          id: "msg-api-sms-1",
+          messageStatus: "Queued",
+          creationTime: "2026-03-16T15:00:00.000Z",
+          from: { phoneNumber: "+16475551212" },
+          conversationId: "thread-1",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  const app = await createApp({
+    dbPath: temp.dbPath,
+    uiMode: "legacy",
+    ringcentral: {
+      fetchImpl,
+    },
+  });
+  const server = app.listen(0);
+
+  try {
+    const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
+    const lead = app.locals.db.createApiLead({
+      source: "website",
+      customer_name: "API SMS Lead",
+      phone: "(647) 555-0111",
+      email: "api-sms@example.com",
+      vehicle_interest: "2023 SUV",
+      status: "new",
+    });
+    app.locals.db.assignLead(lead.id, salesUser.id);
+
+    await app.locals.ringcentral.store.upsertConnection({
+      user_id: salesUser.id,
+      ringcentral_account_id: "acct-1",
+      ringcentral_extension_id: "ext-1",
+      server_url: "https://platform.ringcentral.com",
+      access_token: "token",
+      refresh_token: "refresh",
+      token_type: "Bearer",
+      scope: "SMS",
+      status: "active",
+    });
+
+    const client = createClient(server);
+    await login(client, "sales@crm.local", "sales123");
+
+    const response = await client.request({
+      method: "POST",
+      path: `/api/leads/${lead.id}/sms`,
+      json: { message: "Still interested in the SUV?" },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.lead.status, "contacted");
+    assert.ok(body.timeline.some((item) => item.type === "sms"));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(temp.dir, { recursive: true, force: true });
+  }
+});
+
+test("API call endpoint logs an outbound CRM call and returns refreshed lead detail", async () => {
+  await withServer(async ({ app, server }) => {
+    const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
+    const lead = app.locals.db.createApiLead({
+      source: "website",
+      customer_name: "API Call Lead",
+      phone: "(647) 555-0112",
+      email: "api-call@example.com",
+      vehicle_interest: "2024 Truck",
+      status: "new",
+    });
+    app.locals.db.assignLead(lead.id, salesUser.id);
+
+    await app.locals.ringcentral.store.upsertConnection({
+      user_id: salesUser.id,
+      ringcentral_account_id: "acct-1",
+      ringcentral_extension_id: "ext-1",
+      server_url: "https://platform.ringcentral.com",
+      access_token: "token",
+      refresh_token: "refresh",
+      token_type: "Bearer",
+      scope: "ReadCallLog",
+      status: "active",
+    });
+
+    const client = createClient(server);
+    await login(client, "sales@crm.local", "sales123");
+
+    const response = await client.request({
+      method: "POST",
+      path: `/api/leads/${lead.id}/call`,
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.lead.status, "contacted");
+    assert.ok(body.timeline.some((item) => item.type === "call"));
+  });
+});
+
+test("API hold endpoint creates a hold task and note for the lead", async () => {
+  await withServer(async ({ app, server }) => {
+    const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
+    const lead = app.locals.db.createApiLead({
+      source: "website",
+      customer_name: "Hold Lead",
+      phone: "(647) 555-0113",
+      email: "hold@example.com",
+      vehicle_interest: "2022 Coupe",
+      stock_number: "D9977",
+      status: "contacted",
+    });
+    app.locals.db.assignLead(lead.id, salesUser.id);
+
+    const client = createClient(server);
+    await login(client, "sales@crm.local", "sales123");
+
+    const response = await client.request({
+      method: "POST",
+      path: `/api/leads/${lead.id}/hold`,
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.ok(body.tasks.some((task) => task.type === "hold_vehicle"));
+    assert.ok(body.activities.some((activity) => /Vehicle hold requested/i.test(activity.content)));
+  });
+});
+
 test("dashboard worklist separates attention leads from organized leads", async () => {
   await withServer(async ({ app, server }) => {
     const salesUser = app.locals.db.getUserByEmail("sales@crm.local");

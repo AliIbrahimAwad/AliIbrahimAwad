@@ -988,6 +988,127 @@ class CrmDatabase {
     });
   }
 
+  listConversationFeedForApi(user = null, limit = 50) {
+    const access = this.accessClauseForUser(user);
+    const displayNameSql = `
+      CASE
+        WHEN leads.customer_name IS NOT NULL AND TRIM(leads.customer_name) <> '' THEN TRIM(leads.customer_name)
+        WHEN TRIM(contacts.first_name || ' ' || contacts.last_name) <> '' THEN TRIM(contacts.first_name || ' ' || contacts.last_name)
+        WHEN contacts.company IS NOT NULL AND TRIM(contacts.company) <> '' THEN contacts.company
+        WHEN leads.email IS NOT NULL AND TRIM(leads.email) <> '' THEN leads.email
+        WHEN contacts.email IS NOT NULL AND TRIM(contacts.email) <> '' THEN contacts.email
+        WHEN leads.phone IS NOT NULL AND TRIM(leads.phone) <> '' THEN leads.phone
+        WHEN contacts.phone IS NOT NULL AND TRIM(contacts.phone) <> '' THEN contacts.phone
+        ELSE 'Lead #' || leads.id
+      END
+    `;
+    const messageRows = this.all(
+      `
+        SELECT
+          lead_messages.id,
+          lead_messages.lead_id,
+          lead_messages.direction,
+          lead_messages.external_number,
+          lead_messages.body_text,
+          lead_messages.message_status,
+          lead_messages.provider_extension_id,
+          lead_messages.crm_user_id,
+          COALESCE(lead_messages.received_at, lead_messages.sent_at, lead_messages.created_at) AS happened_at,
+          users.name AS actor_name,
+          sales_user.name AS assigned_user_name,
+          leads.status AS lead_status,
+          leads.vehicle_interest,
+          leads.stock_number,
+          ${displayNameSql} AS lead_name
+        FROM lead_messages
+        INNER JOIN leads ON leads.id = lead_messages.lead_id
+        LEFT JOIN contacts ON contacts.id = leads.contact_id
+        LEFT JOIN users ON users.id = lead_messages.crm_user_id
+        LEFT JOIN users AS sales_user ON sales_user.id = leads.assigned_to
+        WHERE ${access.clause}
+        ORDER BY happened_at DESC, lead_messages.id DESC
+        LIMIT ?
+      `,
+      [...access.params, limit]
+    ).map((row) => ({
+      id: `sms:${row.id}`,
+      type: "sms",
+      lead_id: Number(row.lead_id),
+      lead_name: row.lead_name,
+      lead_status: fromStoredStatus(row.lead_status || "new"),
+      vehicle_interest: row.vehicle_interest || "Vehicle inquiry",
+      stock_number: row.stock_number || null,
+      assigned_user_name: row.assigned_user_name || "Unassigned",
+      actor_name: row.actor_name || null,
+      direction: row.direction || "unknown",
+      external_number: row.external_number || null,
+      preview: row.body_text || "No message text.",
+      message_status: row.message_status || null,
+      provider_extension_id: row.provider_extension_id || null,
+      happened_at: row.happened_at || null,
+    }));
+
+    const callRows = this.all(
+      `
+        SELECT
+          lead_calls.id,
+          lead_calls.lead_id,
+          lead_calls.direction,
+          lead_calls.external_number,
+          lead_calls.result,
+          lead_calls.duration_seconds,
+          lead_calls.provider_extension_id,
+          lead_calls.crm_user_id,
+          COALESCE(lead_calls.start_time, lead_calls.end_time, lead_calls.created_at) AS happened_at,
+          users.name AS actor_name,
+          sales_user.name AS assigned_user_name,
+          leads.status AS lead_status,
+          leads.vehicle_interest,
+          leads.stock_number,
+          call_recordings.provider_recording_id,
+          call_recordings.content_uri,
+          analyses.summary AS ai_summary,
+          ${displayNameSql} AS lead_name
+        FROM lead_calls
+        INNER JOIN leads ON leads.id = lead_calls.lead_id
+        LEFT JOIN contacts ON contacts.id = leads.contact_id
+        LEFT JOIN users ON users.id = lead_calls.crm_user_id
+        LEFT JOIN users AS sales_user ON sales_user.id = leads.assigned_to
+        LEFT JOIN call_recordings ON call_recordings.lead_call_id = lead_calls.id
+        LEFT JOIN communication_ai_analyses AS analyses
+          ON analyses.source_type = 'call' AND analyses.source_id = lead_calls.id
+        WHERE ${access.clause}
+        ORDER BY happened_at DESC, lead_calls.id DESC
+        LIMIT ?
+      `,
+      [...access.params, limit]
+    )
+      .filter((row, index, rows) => rows.findIndex((candidate) => String(candidate.id) === String(row.id)) === index)
+      .map((row) => ({
+        id: `call:${row.id}`,
+        type: "call",
+        lead_id: Number(row.lead_id),
+        lead_name: row.lead_name,
+        lead_status: fromStoredStatus(row.lead_status || "new"),
+        vehicle_interest: row.vehicle_interest || "Vehicle inquiry",
+        stock_number: row.stock_number || null,
+        assigned_user_name: row.assigned_user_name || "Unassigned",
+        actor_name: row.actor_name || null,
+        direction: row.direction || "unknown",
+        external_number: row.external_number || null,
+        preview: row.ai_summary || row.result || "Call synced",
+        result: row.result || null,
+        duration_seconds: Number(row.duration_seconds || 0),
+        provider_extension_id: row.provider_extension_id || null,
+        recording_available: Boolean(row.provider_recording_id || row.content_uri),
+        happened_at: row.happened_at || null,
+      }));
+
+    return [...callRows, ...messageRows]
+      .sort((left, right) => new Date(right.happened_at || 0).getTime() - new Date(left.happened_at || 0).getTime())
+      .slice(0, limit);
+  }
+
   getExecutionSettings() {
     const rows = this.all("SELECT key, value FROM crm_settings");
     const stored = Object.fromEntries(rows.map((row) => [row.key, Number(row.value)]));

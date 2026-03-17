@@ -1,6 +1,8 @@
 const { canAssignLeads, canManageUsers } = require("../models/user");
 const { requireAuth } = require("../middleware/auth");
 const { ValidationError } = require("../data/database");
+const { normalizePhone } = require("../utils/phones");
+const { toDateOnlyString } = require("../utils/dates");
 const { asyncHandler } = require("./helpers");
 
 function toPagination(query = {}) {
@@ -154,6 +156,160 @@ function registerApiRoutes(app) {
       res.json({
         items: await req.app.locals.db.listNotificationsForApi(Number(req.currentUser.id), limit),
       });
+    })
+  );
+
+  app.get(
+    "/api/conversations",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 50));
+      res.json({
+        items: await req.app.locals.db.listConversationFeedForApi(req.currentUser, limit),
+      });
+    })
+  );
+
+  app.post(
+    "/api/leads/:id/sms",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const leadId = Number(req.params.id);
+      const body = String(req.body.message || "").trim();
+      if (!body) {
+        throw new ValidationError("A message is required.");
+      }
+
+      const lead = await req.app.locals.db.getApiLead(leadId, req.currentUser);
+      const phone = lead.phone || null;
+      if (!phone) {
+        throw new ValidationError("This lead does not have a phone number.");
+      }
+
+      const connection = await req.app.locals.ringcentral.getActiveConnectionForUser(req.currentUser.id);
+      if (!connection && !req.app.locals.ringcentral.config?.staticAccessToken) {
+        throw new ValidationError("Connect RingCentral before sending SMS from the CRM.");
+      }
+
+      const response = await req.app.locals.ringcentral.sendSMS(phone, body, {
+        crmUserId: req.currentUser.id,
+      });
+
+      if (req.app.locals.ringcentral.store) {
+        await req.app.locals.ringcentral.store.upsertLeadMessage({
+          lead_id: leadId,
+          provider: "ringcentral",
+          provider_message_id: String(response?.id || `manual-${Date.now()}`),
+          thread_id: response?.conversation?.id || response?.conversationId || null,
+          direction: "outbound",
+          from_number: response?.from?.phoneNumber || null,
+          to_number: phone,
+          external_number: normalizePhone(phone),
+          body_text: body,
+          message_status: response?.messageStatus || "Queued",
+          sent_at: response?.creationTime || new Date().toISOString(),
+          crm_user_id: Number(req.currentUser.id),
+          provider_extension_id: connection?.ringcentral_extension_id || null,
+          raw: response || {},
+        });
+      }
+
+      await req.app.locals.db.recordLeadActivity({
+        lead_id: leadId,
+        user_id: req.currentUser.id,
+        type: "sms",
+        content: body,
+      });
+
+      res.json(await req.app.locals.db.getApiLeadWithActivities(leadId, req.currentUser));
+    })
+  );
+
+  app.post(
+    "/api/leads/:id/call",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const leadId = Number(req.params.id);
+      const lead = await req.app.locals.db.getApiLead(leadId, req.currentUser);
+      const phone = lead.phone || null;
+      if (!phone) {
+        throw new ValidationError("This lead does not have a phone number.");
+      }
+
+      const connection = await req.app.locals.ringcentral.getActiveConnectionForUser(req.currentUser.id);
+      const call = req.app.locals.ringcentral.logCall(phone, 0);
+
+      if (req.app.locals.ringcentral.store) {
+        await req.app.locals.ringcentral.store.upsertLeadCall({
+          lead_id: leadId,
+          provider: "ringcentral",
+          provider_call_id: String(call.id),
+          session_id: null,
+          telephony_session_id: null,
+          direction: "outbound",
+          from_number: null,
+          to_number: phone,
+          external_number: normalizePhone(phone),
+          result: "Initiated",
+          action: "CRM click-to-call",
+          duration_seconds: 0,
+          start_time: call.createdAt,
+          end_time: null,
+          crm_user_id: Number(req.currentUser.id),
+          provider_extension_id: connection?.ringcentral_extension_id || null,
+          recording_status: "none",
+          transcript_status: "not_requested",
+          raw: { source: "crm_action" },
+        });
+      }
+
+      await req.app.locals.db.recordLeadActivity({
+        lead_id: leadId,
+        user_id: req.currentUser.id,
+        type: "call",
+        content: "Call initiated from CRM.",
+      });
+
+      res.json(await req.app.locals.db.getApiLeadWithActivities(leadId, req.currentUser));
+    })
+  );
+
+  app.post(
+    "/api/leads/:id/hold",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const leadId = Number(req.params.id);
+      const lead = await req.app.locals.db.getApiLead(leadId, req.currentUser);
+      const todayKey = toDateOnlyString(new Date());
+
+      await req.app.locals.db.createOrRefreshTask({
+        lead_id: leadId,
+        user_id: lead.assigned_to || Number(req.currentUser.id),
+        type: "hold_vehicle",
+        title: lead.stock_number
+          ? `Hold vehicle request for stock ${lead.stock_number}`
+          : "Hold vehicle request",
+        due_at: new Date().toISOString(),
+        source: "manual",
+        unique_key: `hold-request:${leadId}:${todayKey}`,
+        metadata: {
+          stock_number: lead.stock_number || null,
+          vehicle_interest: lead.vehicle_interest || null,
+          requested_by_user_id: Number(req.currentUser.id),
+        },
+      });
+
+      // The detail API still exposes legacy `activities`, so write the hold note there
+      // to keep the confirmation visible immediately after the action completes.
+      await req.app.locals.db.createActivity({
+        lead_id: leadId,
+        type: "note",
+        content: lead.stock_number
+          ? `Vehicle hold requested for stock ${lead.stock_number}.`
+          : "Vehicle hold requested.",
+      });
+
+      res.json(await req.app.locals.db.getApiLeadWithActivities(leadId, req.currentUser));
     })
   );
 

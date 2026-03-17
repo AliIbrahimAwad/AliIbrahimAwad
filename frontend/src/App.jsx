@@ -15,13 +15,18 @@ import {
   createUser,
   deleteUser,
   getAssignableUsers,
+  getConversations,
   getDashboardWorklist,
   getLead,
+  getLeads,
+  holdLeadVehicle,
   getSession,
   getUsers,
   login,
+  logLeadCall,
   logout,
   markNotificationRead,
+  sendLeadSms,
   updateLeadStatus,
 } from "./lib/api";
 import { pipelineLabel } from "./lib/format";
@@ -85,6 +90,8 @@ function formatLead(lead) {
     lastActivity: formatRelative(lead.latest_activity_at || lead.updated_at),
     createdAtLabel: formatRelative(lead.created_at),
     updatedAtLabel: formatRelative(lead.updated_at),
+    created_at: lead.created_at,
+    updated_at: lead.updated_at,
     listingUrl: lead.listing_url || "",
     attentionReason: lead.attention_reason || "",
     attentionReasonCode: lead.attention_reason_code || "",
@@ -116,6 +123,101 @@ function formatTimelineItem(item) {
   };
 }
 
+function formatConversationItem(item) {
+  return {
+    id: item.id,
+    type: item.type,
+    leadId: item.lead_id,
+    leadName: item.lead_name,
+    leadStatus: item.lead_status,
+    leadStatusLabel: pipelineLabel(item.lead_status),
+    vehicleInterest: item.vehicle_interest || "Vehicle inquiry",
+    stockNumber: item.stock_number || "",
+    assignedRep: item.assigned_user_name || "Unassigned",
+    actorName: item.actor_name || null,
+    direction: item.direction || "unknown",
+    externalNumber: item.external_number || "",
+    preview: item.preview || "",
+    happenedAt: item.happened_at || null,
+    happenedAtLabel: formatRelative(item.happened_at),
+    result: item.result || null,
+    durationSeconds: Number(item.duration_seconds || 0),
+    recordingAvailable: Boolean(item.recording_available),
+  };
+}
+
+function buildInventoryRows(leads = []) {
+  const groups = new Map();
+
+  leads.forEach((lead) => {
+    const key = [
+      lead.stockNumber || "",
+      lead.vehicleYear || "",
+      lead.vehicleMake || "",
+      lead.vehicleModel || "",
+      lead.vehicleTrim || "",
+      lead.listingUrl || "",
+    ].join("|");
+
+    if (!key.replace(/\|/g, "")) {
+      return;
+    }
+
+    const existing = groups.get(key) || {
+      key,
+      stockNumber: lead.stockNumber || "No stock",
+      title:
+        [lead.vehicleYear, lead.vehicleMake, lead.vehicleModel, lead.vehicleTrim].filter(Boolean).join(" ") ||
+        lead.vehicleInterest,
+      condition: lead.vehicleCondition || "",
+      price: lead.vehiclePrice || "",
+      listingUrl: lead.listingUrl || "",
+      leadCount: 0,
+      latestActivityAt: null,
+      latestLeadId: null,
+      latestLeadName: "",
+      latestLeadStatus: "",
+    };
+
+    existing.leadCount += 1;
+    const currentTime = new Date(lead.updated_at || 0).getTime();
+    const previousTime = new Date(existing.latestActivityAt || 0).getTime();
+    if (!existing.latestActivityAt || currentTime >= previousTime) {
+      existing.latestActivityAt = lead.updated_at || null;
+      existing.latestLeadId = lead.id;
+      existing.latestLeadName = lead.customerName;
+      existing.latestLeadStatus = lead.statusLabel;
+    }
+
+    groups.set(key, existing);
+  });
+
+  return [...groups.values()].sort(
+    (left, right) => new Date(right.latestActivityAt || 0).getTime() - new Date(left.latestActivityAt || 0).getTime()
+  );
+}
+
+function buildAnalyticsSnapshot({ leadLibrary = [], attentionLeads = [], organizedLeadGroups = {}, conversationFeed = [] }) {
+  const statusCounts = {};
+  const sourceCounts = {};
+
+  leadLibrary.forEach((lead) => {
+    statusCounts[lead.status] = (statusCounts[lead.status] || 0) + 1;
+    sourceCounts[lead.source] = (sourceCounts[lead.source] || 0) + 1;
+  });
+
+  return {
+    totalLeads: leadLibrary.length,
+    needsAttention: attentionLeads.length,
+    organizedCount: Object.values(organizedLeadGroups).reduce((sum, items) => sum + items.length, 0),
+    unassignedCount: leadLibrary.filter((lead) => !lead.assignedTo).length,
+    conversationsCount: conversationFeed.length,
+    inventoryCount: buildInventoryRows(leadLibrary).length,
+    statusCounts,
+    sourceCounts,
+  };
+}
+
 const emptyMetrics = {
   needs_attention_count: 0,
   overdue_task_count: 0,
@@ -137,6 +239,7 @@ export default function App() {
   const [authStatus, setAuthStatus] = useState("loading");
   const [currentUser, setCurrentUser] = useState(null);
   const [leads, setLeads] = useState([]);
+  const [leadLibrary, setLeadLibrary] = useState([]);
   const [organizedLeadGroups, setOrganizedLeadGroups] = useState({
     contacted: [],
     engaged: [],
@@ -145,6 +248,7 @@ export default function App() {
     sold: [],
     lost: [],
   });
+  const [conversationFeed, setConversationFeed] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [metrics, setMetrics] = useState(emptyMetrics);
   const [selectedLeadId, setSelectedLeadId] = useState(null);
@@ -155,16 +259,23 @@ export default function App() {
   const [assignees, setAssignees] = useState([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [conversationLoading, setConversationLoading] = useState(false);
   const [usersLoading, setUsersLoading] = useState(false);
   const [assigneesLoading, setAssigneesLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [assignmentUpdating, setAssignmentUpdating] = useState(false);
+  const [callLogging, setCallLogging] = useState(false);
+  const [holdSubmitting, setHoldSubmitting] = useState(false);
+  const [smsSending, setSmsSending] = useState(false);
   const [taskCompletingId, setTaskCompletingId] = useState(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [userSubmitting, setUserSubmitting] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [leadLibraryLoaded, setLeadLibraryLoaded] = useState(false);
+  const [conversationFeedLoaded, setConversationFeedLoaded] = useState(false);
   const [error, setError] = useState("");
   const [userForm, setUserForm] = useState({
     name: "",
@@ -191,6 +302,42 @@ export default function App() {
     setNotifications(payload.notifications || []);
     setSelectedLeadId(nextSelectedId);
     setError("");
+  }
+
+  async function loadLeadLibrary({ preserveSelection = true } = {}) {
+    setLibraryLoading(true);
+    try {
+      const payload = await getLeads({ limit: 250 });
+      const nextLeads = (payload.items || []).map(formatLead);
+      setLeadLibrary(nextLeads);
+      setLeadLibraryLoaded(true);
+      if ((!preserveSelection || !selectedLeadId) && nextLeads[0]) {
+        setSelectedLeadId(nextLeads[0].id);
+      }
+      if (selectedLeadId && !nextLeads.some((lead) => lead.id === selectedLeadId)) {
+        setSelectedLeadId(nextLeads[0]?.id || null);
+      }
+    } finally {
+      setLibraryLoading(false);
+    }
+  }
+
+  async function loadConversationFeed({ preserveSelection = true } = {}) {
+    setConversationLoading(true);
+    try {
+      const payload = await getConversations(80);
+      const items = (payload.items || []).map(formatConversationItem);
+      setConversationFeed(items);
+      setConversationFeedLoaded(true);
+      if ((!preserveSelection || !selectedLeadId) && items[0]?.leadId) {
+        setSelectedLeadId(items[0].leadId);
+      }
+      if (selectedLeadId && !items.some((item) => Number(item.leadId) === Number(selectedLeadId))) {
+        setSelectedLeadId(items[0]?.leadId || null);
+      }
+    } finally {
+      setConversationLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -282,6 +429,47 @@ export default function App() {
       active = false;
     };
   }, [authStatus]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadSectionData() {
+      try {
+        if (["Leads", "Inventory", "Analytics"].includes(activeSection) && !leadLibraryLoaded) {
+          await loadLeadLibrary();
+        }
+
+        if (["Conversations", "Analytics"].includes(activeSection) && !conversationFeedLoaded) {
+          await loadConversationFeed();
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError.message || "Unable to load CRM section.");
+        }
+      }
+    }
+
+    loadSectionData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, authStatus, conversationFeedLoaded, leadLibraryLoaded]);
+
+  useEffect(() => {
+    if (!selectedLeadId && ["Leads", "Inventory"].includes(activeSection) && leadLibrary[0]) {
+      setSelectedLeadId(leadLibrary[0].id);
+      return;
+    }
+
+    if (!selectedLeadId && activeSection === "Conversations" && conversationFeed[0]?.leadId) {
+      setSelectedLeadId(conversationFeed[0].leadId);
+    }
+  }, [activeSection, conversationFeed, leadLibrary, selectedLeadId]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || currentUser?.role !== "admin") {
@@ -419,16 +607,40 @@ export default function App() {
       .includes(search);
 
   const visibleAttentionLeads = leads.filter(matchesSearch);
+  const visibleLeadLibrary = leadLibrary.filter(matchesSearch);
   const visibleOrganizedGroups = Object.fromEntries(
     organizedGroups.map((group) => [group, organizedLeadGroups[group].filter(matchesSearch)])
   );
   const flattenedOrganizedLeads = organizedGroups.flatMap((group) => visibleOrganizedGroups[group]);
+  const visibleConversationFeed = conversationFeed.filter((item) =>
+    !search ||
+    [
+      item.leadName,
+      item.vehicleInterest,
+      item.externalNumber,
+      item.preview,
+      item.assignedRep,
+      item.leadStatusLabel,
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(search)
+  );
+  const inventoryRows = buildInventoryRows(visibleLeadLibrary);
+  const analytics = buildAnalyticsSnapshot({
+    leadLibrary: visibleLeadLibrary,
+    attentionLeads: visibleAttentionLeads,
+    organizedLeadGroups: visibleOrganizedGroups,
+    conversationFeed: visibleConversationFeed,
+  });
 
   const selectedLead =
     selectedLeadDetails && selectedLeadDetails.id === selectedLeadId
       ? selectedLeadDetails
       : visibleAttentionLeads.find((lead) => lead.id === selectedLeadId) ??
         leads.find((lead) => lead.id === selectedLeadId) ??
+        visibleLeadLibrary.find((lead) => lead.id === selectedLeadId) ??
+        leadLibrary.find((lead) => lead.id === selectedLeadId) ??
         flattenedOrganizedLeads.find((lead) => lead.id === selectedLeadId) ??
         organizedGroups.flatMap((group) => organizedLeadGroups[group]).find((lead) => lead.id === selectedLeadId) ??
         null;
@@ -449,6 +661,12 @@ export default function App() {
         tasks: payload.tasks || [],
       });
       await refreshWorklist();
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary();
+      }
+      if (conversationFeedLoaded) {
+        await loadConversationFeed();
+      }
       setError("");
     } catch (updateError) {
       setError(updateError.message || "Unable to update lead status.");
@@ -473,6 +691,12 @@ export default function App() {
         tasks: payload.tasks || [],
       });
       await refreshWorklist();
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary();
+      }
+      if (conversationFeedLoaded) {
+        await loadConversationFeed();
+      }
       setError("");
     } catch (assignError) {
       setError(assignError.message || "Unable to assign lead.");
@@ -507,6 +731,7 @@ export default function App() {
       setSelectedLeadDetails(null);
       setActiveSection("Dashboard");
       setLeads([]);
+      setLeadLibrary([]);
       setOrganizedLeadGroups({
         contacted: [],
         engaged: [],
@@ -515,10 +740,13 @@ export default function App() {
         sold: [],
         lost: [],
       });
+      setConversationFeed([]);
       setMetrics(emptyMetrics);
       setUsers([]);
       setAssignees([]);
       setNotifications([]);
+      setLeadLibraryLoaded(false);
+      setConversationFeedLoaded(false);
     }
   }
 
@@ -536,11 +764,98 @@ export default function App() {
         });
       }
       await refreshWorklist();
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary();
+      }
       setError("");
     } catch (taskError) {
       setError(taskError.message || "Unable to complete task.");
     } finally {
       setTaskCompletingId(null);
+    }
+  }
+
+  async function handleSendSms(message) {
+    if (!selectedLeadId) {
+      return;
+    }
+
+    try {
+      setSmsSending(true);
+      const payload = await sendLeadSms(selectedLeadId, message);
+      setSelectedLeadDetails({
+        ...formatLead(payload.lead),
+        activities: payload.activities.map(formatActivity),
+        timeline: (payload.timeline || []).map(formatTimelineItem),
+        tasks: payload.tasks || [],
+      });
+      await refreshWorklist();
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary();
+      }
+      await loadConversationFeed();
+      setError("");
+    } catch (smsError) {
+      setError(smsError.message || "Unable to send SMS.");
+      throw smsError;
+    } finally {
+      setSmsSending(false);
+    }
+  }
+
+  async function handleLogCall() {
+    if (!selectedLeadId) {
+      return;
+    }
+
+    try {
+      setCallLogging(true);
+      const payload = await logLeadCall(selectedLeadId);
+      setSelectedLeadDetails({
+        ...formatLead(payload.lead),
+        activities: payload.activities.map(formatActivity),
+        timeline: (payload.timeline || []).map(formatTimelineItem),
+        tasks: payload.tasks || [],
+      });
+      await refreshWorklist();
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary();
+      }
+      if (conversationFeedLoaded) {
+        await loadConversationFeed();
+      }
+      setError("");
+    } catch (callError) {
+      setError(callError.message || "Unable to start the call.");
+      throw callError;
+    } finally {
+      setCallLogging(false);
+    }
+  }
+
+  async function handleHoldVehicle() {
+    if (!selectedLeadId) {
+      return;
+    }
+
+    try {
+      setHoldSubmitting(true);
+      const payload = await holdLeadVehicle(selectedLeadId);
+      setSelectedLeadDetails({
+        ...formatLead(payload.lead),
+        activities: payload.activities.map(formatActivity),
+        timeline: (payload.timeline || []).map(formatTimelineItem),
+        tasks: payload.tasks || [],
+      });
+      await refreshWorklist();
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary();
+      }
+      setError("");
+    } catch (holdError) {
+      setError(holdError.message || "Unable to create the vehicle hold request.");
+    } finally {
+      setHoldSubmitting(false);
     }
   }
 
@@ -611,12 +926,41 @@ export default function App() {
   }
 
   const showTeam = activeSection === "Team" && currentUser?.role === "admin";
+  const showDashboard = activeSection === "Dashboard";
+  const showLeads = activeSection === "Leads";
+  const showConversations = activeSection === "Conversations";
+  const showInventory = activeSection === "Inventory";
+  const showAnalytics = activeSection === "Analytics";
+  const sectionTitle = {
+    Dashboard: "Sales execution",
+    Leads: "Lead library",
+    Conversations: "Conversations",
+    Inventory: "Inventory focus",
+    Analytics: "Pipeline analytics",
+    Team: "Team management",
+  }[activeSection];
+  const sectionDescription = {
+    Dashboard: "Focus the team on leads that need action now, and keep the rest of the pipeline organized in the background.",
+    Leads: "Review every lead in the pipeline without losing the manager detail panel on the right.",
+    Conversations: "See the latest inbound and outbound communication in one place and jump straight into the lead record.",
+    Inventory: "Group open opportunities by vehicle so the desk can see what stock is driving demand.",
+    Analytics: "Track where leads sit, which sources are feeding the desk, and how much of the pipeline is actionable.",
+    Team: "Manage CRM access for the dealership team.",
+  }[activeSection];
 
   return (
     <div className="min-h-screen bg-ink-950 bg-dashboard px-4 py-4 font-body text-slate-100 sm:px-6 lg:px-8">
       <div className="mx-auto grid max-w-[1800px] gap-4 xl:grid-cols-[290px_minmax(0,1fr)]">
         <div className="xl:block">
-          <Sidebar activeSection={activeSection} onSelectSection={setActiveSection} currentUser={currentUser} />
+          <Sidebar
+            activeSection={activeSection}
+            onSelectSection={(section) => {
+              startTransition(() => {
+                setActiveSection(section);
+              });
+            }}
+            currentUser={currentUser}
+          />
         </div>
 
         <main className="rounded-[2rem] border border-white/10 bg-ink-900/70 p-4 shadow-card backdrop-blur sm:p-6">
@@ -630,14 +974,10 @@ export default function App() {
               </button>
               <div>
                 <p className="text-xs uppercase tracking-[0.34em] text-slate-500">Automotive command center</p>
-                <h1 className="mt-2 font-display text-3xl font-semibold text-white sm:text-4xl">
-                  Sales execution
-                </h1>
-                <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">
-                  Focus the team on leads that need action now, and keep the rest of the pipeline organized in the background.
-                </p>
+                <h1 className="mt-2 font-display text-3xl font-semibold text-white sm:text-4xl">{sectionTitle}</h1>
+                <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">{sectionDescription}</p>
                 <p className="mt-3 text-xs uppercase tracking-[0.26em] text-slate-500">
-                  Signed in as {currentUser?.name} • {currentUser?.role}
+                  Signed in as {currentUser?.name} | {currentUser?.role}
                 </p>
               </div>
             </div>
@@ -721,115 +1061,307 @@ export default function App() {
               onSubmit={handleCreateUser}
               onDelete={handleDeleteUser}
             />
-          ) : (
-          <section className="mt-6 grid gap-6 2xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]">
-            <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 sm:p-5">
-              <div className="flex flex-col gap-4 border-b border-white/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Sales execution queue</p>
-                  <h2 className="mt-2 font-display text-2xl font-semibold text-white">
-                    {activeTab === "Needs Attention" ? "Needs attention" : "Organized leads"}
-                  </h2>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {tabs.map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => {
-                        startTransition(() => {
-                          setActiveTab(tab);
-                        });
-                      }}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                        activeTab === tab
-                          ? "bg-white text-ink-950"
-                          : "bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white"
-                      }`}
-                    >
-                      {tab}
-                    </button>
+          ) : showAnalytics ? (
+            <section className="mt-6 grid gap-4 xl:grid-cols-3">
+              <MetricCard
+                eyebrow="Total leads"
+                value={String(analytics.totalLeads).padStart(2, "0")}
+                detail="All accessible leads in the CRM."
+                accent="from-white/10 to-transparent"
+              />
+              <MetricCard
+                eyebrow="Organized leads"
+                value={String(analytics.organizedCount).padStart(2, "0")}
+                detail="Leads currently not demanding immediate attention."
+                accent="from-ice-500/20 to-transparent"
+              />
+              <MetricCard
+                eyebrow="Tracked conversations"
+                value={String(analytics.conversationsCount).padStart(2, "0")}
+                detail="Recent SMS and call records available for the desk."
+                accent="from-ember-500/20 to-transparent"
+              />
+
+              <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5 xl:col-span-2">
+                <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Status distribution</p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {Object.entries(analytics.statusCounts).map(([status, count]) => (
+                    <div key={status} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                      <p className="text-xs uppercase tracking-[0.22em] text-slate-500">{pipelineLabel(status)}</p>
+                      <p className="mt-2 text-2xl font-semibold text-white">{count}</p>
+                    </div>
                   ))}
                 </div>
               </div>
 
-              <div className="mt-4 grid gap-4">
-                {loading ? (
-                  Array.from({ length: 4 }).map((_, index) => (
-                    <div key={index} className="h-48 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
-                  ))
-                ) : activeTab === "Needs Attention" ? (
-                  visibleAttentionLeads.map((lead) => (
-                    <AttentionLeadCard
-                      key={lead.id}
-                      lead={lead}
-                      selected={lead.id === selectedLead?.id}
-                      onSelect={() => {
-                        startTransition(() => {
-                          setSelectedLeadId(lead.id);
-                        });
-                      }}
-                    />
-                  ))
-                ) : (
-                  organizedGroups.map((group) =>
-                    visibleOrganizedGroups[group]?.length ? (
-                      <div key={group} className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
-                        <div className="mb-4 flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Organized</p>
-                            <h3 className="mt-1 font-display text-xl font-semibold text-white">{pipelineLabel(group)}</h3>
-                          </div>
-                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
-                            {visibleOrganizedGroups[group].length}
-                          </span>
-                        </div>
-                        <div className="grid gap-4">
-                          {visibleOrganizedGroups[group].map((lead) => (
-                            <LeadCard
-                              key={lead.id}
-                              lead={lead}
-                              selected={lead.id === selectedLead?.id}
-                              onSelect={() => {
-                                startTransition(() => {
-                                  setSelectedLeadId(lead.id);
-                                });
-                              }}
-                            />
-                          ))}
-                        </div>
+              <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+                <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Source mix</p>
+                <div className="mt-4 space-y-3">
+                  {Object.entries(analytics.sourceCounts).map(([source, count]) => (
+                    <div key={source} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
+                      <span className="text-sm font-medium text-white">{source}</span>
+                      <span className="text-sm text-slate-300">{count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+          ) : (
+            <section className="mt-6 grid gap-6 2xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]">
+              <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 sm:p-5">
+                {showDashboard ? (
+                  <>
+                    <div className="flex flex-col gap-4 border-b border-white/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Sales execution queue</p>
+                        <h2 className="mt-2 font-display text-2xl font-semibold text-white">
+                          {activeTab === "Needs Attention" ? "Needs attention" : "Organized leads"}
+                        </h2>
                       </div>
-                    ) : null
-                  )
-                )}
-                {!loading &&
-                ((activeTab === "Needs Attention" && visibleAttentionLeads.length === 0) ||
-                  (activeTab === "Organized Leads" && flattenedOrganizedLeads.length === 0)) ? (
-                  <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                    {activeTab === "Needs Attention"
-                      ? "No leads require attention right now."
-                      : "No organized leads match this filter."}
-                  </div>
+                      <div className="flex flex-wrap gap-2">
+                        {tabs.map((tab) => (
+                          <button
+                            key={tab}
+                            type="button"
+                            onClick={() => {
+                              startTransition(() => {
+                                setActiveTab(tab);
+                              });
+                            }}
+                            className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                              activeTab === tab
+                                ? "bg-white text-ink-950"
+                                : "bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white"
+                            }`}
+                          >
+                            {tab}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-4">
+                      {loading ? (
+                        Array.from({ length: 4 }).map((_, index) => (
+                          <div key={index} className="h-48 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
+                        ))
+                      ) : activeTab === "Needs Attention" ? (
+                        visibleAttentionLeads.map((lead) => (
+                          <AttentionLeadCard
+                            key={lead.id}
+                            lead={lead}
+                            selected={lead.id === selectedLead?.id}
+                            onSelect={() => {
+                              startTransition(() => {
+                                setSelectedLeadId(lead.id);
+                              });
+                            }}
+                          />
+                        ))
+                      ) : (
+                        organizedGroups.map((group) =>
+                          visibleOrganizedGroups[group]?.length ? (
+                            <div key={group} className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
+                              <div className="mb-4 flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Organized</p>
+                                  <h3 className="mt-1 font-display text-xl font-semibold text-white">{pipelineLabel(group)}</h3>
+                                </div>
+                                <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
+                                  {visibleOrganizedGroups[group].length}
+                                </span>
+                              </div>
+                              <div className="grid gap-4">
+                                {visibleOrganizedGroups[group].map((lead) => (
+                                  <LeadCard
+                                    key={lead.id}
+                                    lead={lead}
+                                    selected={lead.id === selectedLead?.id}
+                                    onSelect={() => {
+                                      startTransition(() => {
+                                        setSelectedLeadId(lead.id);
+                                      });
+                                    }}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          ) : null
+                        )
+                      )}
+                      {!loading &&
+                      ((activeTab === "Needs Attention" && visibleAttentionLeads.length === 0) ||
+                        (activeTab === "Organized Leads" && flattenedOrganizedLeads.length === 0)) ? (
+                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
+                          {activeTab === "Needs Attention"
+                            ? "No leads require attention right now."
+                            : "No organized leads match this filter."}
+                        </div>
+                      ) : null}
+                    </div>
+                  </>
+                ) : null}
+
+                {showLeads ? (
+                  <>
+                    <div className="border-b border-white/10 pb-4">
+                      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">All leads</p>
+                      <h2 className="mt-2 font-display text-2xl font-semibold text-white">Lead library</h2>
+                    </div>
+                    <div className="mt-4 grid gap-4">
+                      {libraryLoading ? (
+                        Array.from({ length: 4 }).map((_, index) => (
+                          <div key={index} className="h-44 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
+                        ))
+                      ) : visibleLeadLibrary.length ? (
+                        visibleLeadLibrary.map((lead) => (
+                          <LeadCard
+                            key={lead.id}
+                            lead={lead}
+                            selected={lead.id === selectedLead?.id}
+                            onSelect={() => {
+                              startTransition(() => {
+                                setSelectedLeadId(lead.id);
+                              });
+                            }}
+                          />
+                        ))
+                      ) : (
+                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
+                          No leads matched this search.
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : null}
+
+                {showConversations ? (
+                  <>
+                    <div className="border-b border-white/10 pb-4">
+                      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Live communication feed</p>
+                      <h2 className="mt-2 font-display text-2xl font-semibold text-white">Recent conversations</h2>
+                    </div>
+                    <div className="mt-4 grid gap-4">
+                      {conversationLoading ? (
+                        Array.from({ length: 4 }).map((_, index) => (
+                          <div key={index} className="h-36 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
+                        ))
+                      ) : visibleConversationFeed.length ? (
+                        visibleConversationFeed.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setSelectedLeadId(item.leadId)}
+                            className={`w-full rounded-[1.75rem] border p-5 text-left transition ${
+                              Number(item.leadId) === Number(selectedLead?.id)
+                                ? "border-ice-400/40 bg-white/10 shadow-glow"
+                                : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-4">
+                              <div>
+                                <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                                  {item.type === "call" ? "Call" : "SMS"} | {item.happenedAtLabel}
+                                </p>
+                                <h3 className="mt-2 font-display text-lg font-semibold text-white">{item.leadName}</h3>
+                                <p className="mt-1 text-sm text-slate-300">{item.vehicleInterest}</p>
+                              </div>
+                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
+                                {item.leadStatusLabel}
+                              </span>
+                            </div>
+                            <p className="mt-4 line-clamp-2 text-sm leading-6 text-slate-300">{item.preview}</p>
+                            <div className="mt-4 flex flex-wrap gap-2 text-xs uppercase tracking-[0.2em] text-slate-500">
+                              <span>{item.direction}</span>
+                              <span>{item.assignedRep}</span>
+                              {item.durationSeconds ? <span>{item.durationSeconds}s</span> : null}
+                              {item.recordingAvailable ? <span>recording</span> : null}
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
+                          No recent conversations matched this search.
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : null}
+
+                {showInventory ? (
+                  <>
+                    <div className="border-b border-white/10 pb-4">
+                      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Vehicle demand</p>
+                      <h2 className="mt-2 font-display text-2xl font-semibold text-white">Inventory references</h2>
+                    </div>
+                    <div className="mt-4 grid gap-4">
+                      {libraryLoading ? (
+                        Array.from({ length: 4 }).map((_, index) => (
+                          <div key={index} className="h-36 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
+                        ))
+                      ) : inventoryRows.length ? (
+                        inventoryRows.map((item) => (
+                          <button
+                            key={item.key}
+                            type="button"
+                            onClick={() => setSelectedLeadId(item.latestLeadId)}
+                            className={`w-full rounded-[1.75rem] border p-5 text-left transition ${
+                              Number(item.latestLeadId) === Number(selectedLead?.id)
+                                ? "border-ice-400/40 bg-white/10 shadow-glow"
+                                : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-4">
+                              <div>
+                                <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Stock {item.stockNumber}</p>
+                                <h3 className="mt-2 font-display text-lg font-semibold text-white">{item.title}</h3>
+                              </div>
+                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
+                                {item.leadCount} lead{item.leadCount === 1 ? "" : "s"}
+                              </span>
+                            </div>
+                            <div className="mt-4 flex flex-wrap gap-2 text-sm text-slate-300">
+                              {item.condition ? <span>{item.condition}</span> : null}
+                              {item.price ? <span>${item.price}</span> : null}
+                              <span>Latest: {item.latestLeadName}</span>
+                              <span>{item.latestLeadStatus}</span>
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
+                          No inventory-linked leads matched this search.
+                        </div>
+                      )}
+                    </div>
+                  </>
                 ) : null}
               </div>
-            </div>
 
-            <div className="2xl:sticky 2xl:top-6 2xl:self-start">
-              <LeadDetailsPanel
-                lead={selectedLead}
-                loading={detailLoading}
-                onStatusChange={handleStatusChange}
-                statusUpdating={statusUpdating}
-                canAssign={currentUser?.role === "admin" || currentUser?.role === "manager"}
-                assignees={assignees}
-                assigneesLoading={assigneesLoading}
-                assignmentUpdating={assignmentUpdating}
-                onAssignLead={handleAssignLead}
-                onCompleteTask={handleCompleteTask}
-                taskCompletingId={taskCompletingId}
-              />
-            </div>
-          </section>
+              {!showAnalytics ? (
+                <div className="2xl:sticky 2xl:top-6 2xl:self-start">
+                  <LeadDetailsPanel
+                    lead={selectedLead}
+                    loading={detailLoading}
+                    onStatusChange={handleStatusChange}
+                    statusUpdating={statusUpdating}
+                    canAssign={currentUser?.role === "admin" || currentUser?.role === "manager"}
+                    assignees={assignees}
+                    assigneesLoading={assigneesLoading}
+                    assignmentUpdating={assignmentUpdating}
+                    onAssignLead={handleAssignLead}
+                    onCompleteTask={handleCompleteTask}
+                    taskCompletingId={taskCompletingId}
+                    onSendSms={handleSendSms}
+                    smsSending={smsSending}
+                    onLogCall={handleLogCall}
+                    callLogging={callLogging}
+                    onHoldVehicle={handleHoldVehicle}
+                    holdSubmitting={holdSubmitting}
+                  />
+                </div>
+              ) : null}
+            </section>
           )}
         </main>
       </div>
