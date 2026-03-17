@@ -903,6 +903,139 @@ class PostgresCrmDatabase extends CrmDatabase {
     });
   }
 
+  async listConversationFeedForApi(user = null, limit = 50) {
+    const access = this.accessClauseForUser(user);
+    const displayNameSql = `
+      CASE
+        WHEN leads.customer_name IS NOT NULL AND TRIM(leads.customer_name) <> '' THEN TRIM(leads.customer_name)
+        WHEN TRIM(contacts.first_name || ' ' || contacts.last_name) <> '' THEN TRIM(contacts.first_name || ' ' || contacts.last_name)
+        WHEN contacts.company IS NOT NULL AND TRIM(contacts.company) <> '' THEN contacts.company
+        WHEN leads.email IS NOT NULL AND TRIM(leads.email) <> '' THEN leads.email
+        WHEN contacts.email IS NOT NULL AND TRIM(contacts.email) <> '' THEN contacts.email
+        WHEN leads.phone IS NOT NULL AND TRIM(leads.phone) <> '' THEN leads.phone
+        WHEN contacts.phone IS NOT NULL AND TRIM(contacts.phone) <> '' THEN contacts.phone
+        ELSE 'Lead #' || leads.id
+      END
+    `;
+    const [messageRows, callRows] = await Promise.all([
+      this.all(
+        `
+          SELECT
+            lead_messages.id,
+            lead_messages.lead_id,
+            lead_messages.direction,
+            lead_messages.external_number,
+            lead_messages.body_text,
+            lead_messages.message_status,
+            lead_messages.provider_extension_id,
+            lead_messages.crm_user_id,
+            COALESCE(lead_messages.received_at, lead_messages.sent_at, lead_messages.created_at) AS happened_at,
+            users.name AS actor_name,
+            sales_user.name AS assigned_user_name,
+            leads.status AS lead_status,
+            leads.vehicle_interest,
+            leads.stock_number,
+            ${displayNameSql} AS lead_name
+          FROM lead_messages
+          INNER JOIN leads ON leads.id = lead_messages.lead_id
+          LEFT JOIN contacts ON contacts.id = leads.contact_id
+          LEFT JOIN users ON users.id = lead_messages.crm_user_id
+          LEFT JOIN users AS sales_user ON sales_user.id = leads.assigned_to
+          WHERE ${access.clause}
+          ORDER BY happened_at DESC, lead_messages.id DESC
+          LIMIT ?
+        `,
+        [...access.params, limit]
+      ),
+      this.all(
+        `
+          SELECT
+            lead_calls.id,
+            lead_calls.lead_id,
+            lead_calls.direction,
+            lead_calls.external_number,
+            lead_calls.result,
+            lead_calls.duration_seconds,
+            lead_calls.provider_extension_id,
+            lead_calls.crm_user_id,
+            COALESCE(lead_calls.start_time, lead_calls.end_time, lead_calls.created_at) AS happened_at,
+            users.name AS actor_name,
+            sales_user.name AS assigned_user_name,
+            leads.status AS lead_status,
+            leads.vehicle_interest,
+            leads.stock_number,
+            call_recordings.provider_recording_id,
+            call_recordings.content_uri,
+            analyses.summary AS ai_summary,
+            ${displayNameSql} AS lead_name
+          FROM lead_calls
+          INNER JOIN leads ON leads.id = lead_calls.lead_id
+          LEFT JOIN contacts ON contacts.id = leads.contact_id
+          LEFT JOIN users ON users.id = lead_calls.crm_user_id
+          LEFT JOIN users AS sales_user ON sales_user.id = leads.assigned_to
+          LEFT JOIN call_recordings ON call_recordings.lead_call_id = lead_calls.id
+          LEFT JOIN communication_ai_analyses AS analyses
+            ON analyses.source_type = 'call' AND analyses.source_id = lead_calls.id
+          WHERE ${access.clause}
+          ORDER BY happened_at DESC, lead_calls.id DESC
+          LIMIT ?
+        `,
+        [...access.params, limit]
+      ),
+    ]);
+
+    const messages = messageRows.map((row) => ({
+      id: `sms:${row.id}`,
+      type: "sms",
+      lead_id: Number(row.lead_id),
+      lead_name: row.lead_name,
+      lead_status: fromStoredStatus(row.lead_status || "new"),
+      vehicle_interest: row.vehicle_interest || "Vehicle inquiry",
+      stock_number: row.stock_number || null,
+      assigned_user_name: row.assigned_user_name || "Unassigned",
+      actor_name: row.actor_name || null,
+      direction: row.direction || "unknown",
+      external_number: row.external_number || null,
+      preview: row.body_text || "No message text.",
+      message_status: row.message_status || null,
+      provider_extension_id: row.provider_extension_id || null,
+      happened_at: row.happened_at || null,
+    }));
+
+    const seenCalls = new Set();
+    const calls = callRows
+      .filter((row) => {
+        if (seenCalls.has(String(row.id))) {
+          return false;
+        }
+        seenCalls.add(String(row.id));
+        return true;
+      })
+      .map((row) => ({
+        id: `call:${row.id}`,
+        type: "call",
+        lead_id: Number(row.lead_id),
+        lead_name: row.lead_name,
+        lead_status: fromStoredStatus(row.lead_status || "new"),
+        vehicle_interest: row.vehicle_interest || "Vehicle inquiry",
+        stock_number: row.stock_number || null,
+        assigned_user_name: row.assigned_user_name || "Unassigned",
+        actor_name: row.actor_name || null,
+        direction: row.direction || "unknown",
+        external_number: row.external_number || null,
+        preview: row.ai_summary || row.result || "Call synced",
+        result: row.result || null,
+        duration_seconds: Number(row.duration_seconds || 0),
+        provider_extension_id: row.provider_extension_id || null,
+        recording_available: Boolean(row.provider_recording_id || row.content_uri),
+        happened_at: row.happened_at || null,
+      }));
+
+    return [...calls, ...messages]
+      .sort((left, right) => new Date(right.happened_at || 0).getTime() - new Date(left.happened_at || 0).getTime())
+      .slice(0, limit);
+  }
+
   async getExecutionSettings() {
     const rows = await this.all("SELECT key, value FROM crm_settings");
     const stored = Object.fromEntries(rows.map((row) => [row.key, Number(row.value)]));
@@ -1013,16 +1146,44 @@ class PostgresCrmDatabase extends CrmDatabase {
       return null;
     }
 
-    const existing = unique_key
-      ? await this.get("SELECT * FROM notifications WHERE unique_key = ?", [unique_key])
-      : null;
-    if (existing) {
-      return existing;
-    }
-
     const timestamp = new Date().toISOString();
     const dealershipId = getDefaultDealershipId();
-    const row = await this.get(
+    const metadataJson = JSON.stringify(metadata || {});
+
+    if (unique_key) {
+      const row = await this.get(
+        `
+          INSERT INTO notifications (
+            dealership_id, user_id, lead_id, type, title, body, status, unique_key, metadata_json, created_at, read_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (unique_key) DO UPDATE
+          SET
+            user_id = EXCLUDED.user_id,
+            lead_id = EXCLUDED.lead_id,
+            type = EXCLUDED.type,
+            title = EXCLUDED.title,
+            body = EXCLUDED.body,
+            metadata_json = EXCLUDED.metadata_json
+          RETURNING *
+        `,
+        [
+          dealershipId,
+          user_id,
+          lead_id,
+          type,
+          title,
+          body || null,
+          "unread",
+          unique_key,
+          metadataJson,
+          timestamp,
+          null,
+        ]
+      );
+      return row;
+    }
+
+    return this.get(
       `
         INSERT INTO notifications (
           dealership_id, user_id, lead_id, type, title, body, status, unique_key, metadata_json, created_at, read_at
@@ -1037,13 +1198,12 @@ class PostgresCrmDatabase extends CrmDatabase {
         title,
         body || null,
         "unread",
-        unique_key,
-        JSON.stringify(metadata || {}),
+        null,
+        metadataJson,
         timestamp,
         null,
       ]
     );
-    return row;
   }
 
   async markNotificationRead(id, userId) {
@@ -1072,57 +1232,74 @@ class PostgresCrmDatabase extends CrmDatabase {
     const timestamp = new Date().toISOString();
     const dealershipId = getDefaultDealershipId();
     const status = due_at && new Date(due_at).getTime() <= Date.now() ? "overdue" : "pending";
-    const existing = unique_key ? await this.get("SELECT * FROM tasks WHERE unique_key = ?", [unique_key]) : null;
+    const metadataJson = JSON.stringify(metadata || {});
+    let inserted = null;
 
-    if (existing && existing.status !== "completed") {
-      await this.execute(
+    if (unique_key) {
+      inserted = await this.get(
         `
-          UPDATE tasks
-          SET user_id = ?, type = ?, title = ?, due_at = ?, status = ?, source = ?, metadata_json = ?, updated_at = ?
-          WHERE id = ?
+          INSERT INTO tasks (
+            dealership_id, lead_id, user_id, type, title, due_at, status, source, unique_key, metadata_json, created_at, updated_at, completed_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (unique_key) DO UPDATE
+          SET
+            lead_id = EXCLUDED.lead_id,
+            user_id = EXCLUDED.user_id,
+            type = EXCLUDED.type,
+            title = EXCLUDED.title,
+            due_at = EXCLUDED.due_at,
+            status = EXCLUDED.status,
+            source = EXCLUDED.source,
+            metadata_json = EXCLUDED.metadata_json,
+            updated_at = EXCLUDED.updated_at,
+            completed_at = CASE
+              WHEN tasks.status = 'completed' AND EXCLUDED.status IN ('pending', 'overdue') THEN NULL
+              ELSE tasks.completed_at
+            END
+          RETURNING id, (xmax = 0) AS inserted
         `,
         [
+          dealershipId,
+          lead_id,
           user_id,
           type,
           title,
           due_at,
           status,
           source,
-          JSON.stringify(metadata || {}),
+          unique_key,
+          metadataJson,
           timestamp,
-          existing.id,
+          timestamp,
+          null,
         ]
       );
-      const updated = await this.get(
-        "SELECT tasks.*, users.name AS assigned_user_name FROM tasks LEFT JOIN users ON users.id = tasks.user_id WHERE tasks.id = ?",
-        [existing.id]
+    } else {
+      inserted = await this.get(
+        `
+          INSERT INTO tasks (
+            dealership_id, lead_id, user_id, type, title, due_at, status, source, unique_key, metadata_json, created_at, updated_at, completed_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          RETURNING id, TRUE AS inserted
+        `,
+        [
+          dealershipId,
+          lead_id,
+          user_id,
+          type,
+          title,
+          due_at,
+          status,
+          source,
+          null,
+          metadataJson,
+          timestamp,
+          timestamp,
+          null,
+        ]
       );
-      return this.formatTaskForApi(updated);
     }
 
-    const inserted = await this.get(
-      `
-        INSERT INTO tasks (
-          dealership_id, lead_id, user_id, type, title, due_at, status, source, unique_key, metadata_json, created_at, updated_at, completed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        RETURNING id
-      `,
-      [
-        dealershipId,
-        lead_id,
-        user_id,
-        type,
-        title,
-        due_at,
-        status,
-        source,
-        unique_key,
-        JSON.stringify(metadata || {}),
-        timestamp,
-        timestamp,
-        null,
-      ]
-    );
     await this.createNotification({
       user_id,
       lead_id,
