@@ -954,6 +954,23 @@ test("RingCentral webhook logs phone activity and auto-updates lead status", asy
   }
 });
 
+test("RingCentral webhook validation handshake returns before event processing", async () => {
+  await withServer(async ({ server }) => {
+    const client = createClient(server);
+    const response = await client.request({
+      method: "POST",
+      path: "/api/ringcentral/webhooks",
+      headers: {
+        "Validation-Token": "rc-validation-check",
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers["validation-token"], "rc-validation-check");
+    assert.equal(response.body, "");
+  });
+});
+
 test("manager dashboard shows aggregate metrics and leads per salesperson", async () => {
   await withServer(async ({ app, server }) => {
     const salesUser = app.locals.db.getUserByEmail("sales@crm.local");

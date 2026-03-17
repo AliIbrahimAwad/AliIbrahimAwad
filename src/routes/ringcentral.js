@@ -82,6 +82,8 @@ function registerRingCentralRoutes(app) {
       const validationToken = req.app.locals.ringcentral.getValidationToken(req.headers);
       if (validationToken) {
         res.setHeader("Validation-Token", validationToken);
+        res.status(200).end();
+        return;
       }
 
       if (!req.app.locals.ringcentral.isValidWebhookRequest(req.headers)) {
