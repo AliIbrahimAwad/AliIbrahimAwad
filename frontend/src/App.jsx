@@ -823,13 +823,7 @@ export default function App() {
       .toLowerCase()
       .includes(search)
   );
-  const visibleInventoryItems = inventoryItems.filter((item) =>
-    !search ||
-    [item.stockNumber, item.vin, item.make, item.model, item.trim, item.status]
-      .join(" ")
-      .toLowerCase()
-      .includes(search)
-  );
+  const visibleInventoryItems = inventoryItems;
   const analytics = buildAnalyticsSnapshot({
     leadLibrary: visibleLeadLibrary,
     attentionLeads: visibleAttentionLeads,
