@@ -627,6 +627,44 @@ test("lead creation ignores invalid numeric dealership input instead of passing 
   });
 });
 
+test("database adapter sanitizes NaN SQL params before execution", async () => {
+  await withServer(async ({ app }) => {
+    const run = app.locals.db.createInventoryImportRun(
+      {
+        dealership_id: 1,
+        source_type: "manual_upload",
+        source_name: "dealer-feed",
+        file_name: "inventory.csv",
+        status: "running",
+      },
+      { dealership_id: 1 }
+    );
+
+    assert.doesNotThrow(() => {
+      app.locals.db.execute(
+        `
+          INSERT INTO inventory_import_errors (
+            import_run_id,
+            row_number,
+            stock_number,
+            vin,
+            error_message,
+            raw_row_json,
+            created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `,
+        [run.id, Number.NaN, "SAFE-1", null, "Test error", "{}", new Date().toISOString()]
+      );
+    });
+
+    const row = app.locals.db.get(
+      "SELECT row_number FROM inventory_import_errors WHERE import_run_id = ? AND stock_number = ?",
+      [run.id, "SAFE-1"]
+    );
+    assert.equal(row.row_number, null);
+  });
+});
+
 test("website API creates an unassigned website lead", async () => {
   await withServer(async ({ server }) => {
     const client = createClient(server);

@@ -120,6 +120,22 @@ function isTruthyFilter(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
 
+function sanitizeSqlParam(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeSqlParam(item));
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value === "string" && String(value).trim().toLowerCase() === "nan") {
+    return null;
+  }
+
+  return value;
+}
+
 function withPgPlaceholders(sql) {
   let index = 0;
   return sql.replace(/\?/g, () => `$${++index}`);
@@ -150,16 +166,16 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
   save() {}
 
   async execute(sql, params = []) {
-    await this.pool.query(withPgPlaceholders(sql), params);
+    await this.pool.query(withPgPlaceholders(sql), sanitizeSqlParam(params));
   }
 
   async get(sql, params = []) {
-    const result = await this.pool.query(withPgPlaceholders(sql), params);
+    const result = await this.pool.query(withPgPlaceholders(sql), sanitizeSqlParam(params));
     return result.rows[0] || null;
   }
 
   async all(sql, params = []) {
-    const result = await this.pool.query(withPgPlaceholders(sql), params);
+    const result = await this.pool.query(withPgPlaceholders(sql), sanitizeSqlParam(params));
     return result.rows;
   }
 

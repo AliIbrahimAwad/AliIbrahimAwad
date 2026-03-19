@@ -132,6 +132,22 @@ function isTruthyFilter(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
 
+function sanitizeSqlParam(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeSqlParam(item));
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value === "string" && String(value).trim().toLowerCase() === "nan") {
+    return null;
+  }
+
+  return value;
+}
+
 const SCHEMA_SQL = `
   PRAGMA foreign_keys = ON;
 
@@ -389,11 +405,11 @@ class CrmDatabase extends BaseCrmDatabase {
   }
 
   execute(sql, params = []) {
-    this.db.run(sql, params);
+    this.db.run(sql, sanitizeSqlParam(params));
   }
 
   get(sql, params = []) {
-    const statement = this.db.prepare(sql, params);
+    const statement = this.db.prepare(sql, sanitizeSqlParam(params));
     try {
       if (!statement.step()) {
         return null;
@@ -406,7 +422,7 @@ class CrmDatabase extends BaseCrmDatabase {
   }
 
   all(sql, params = []) {
-    const statement = this.db.prepare(sql, params);
+    const statement = this.db.prepare(sql, sanitizeSqlParam(params));
     const rows = [];
 
     try {
