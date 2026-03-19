@@ -7,6 +7,7 @@ const os = require("os");
 const path = require("path");
 
 const { createApp } = require("../app");
+const { importInventoryCsv } = require("../services/inventoryImport");
 const { toDateOnlyString } = require("../src/utils/dates");
 
 function createTempDbPath() {
@@ -425,6 +426,47 @@ test("manager can import inventory CSV with upsert behavior", async () => {
   });
 });
 
+test("inventory list hides unverified units by default but can include them when requested", async () => {
+  await withServer(async ({ server }) => {
+    const client = createClient(server);
+    await login(client, "manager@crm.local", "manager123");
+
+    const importResponse = await client.request({
+      method: "POST",
+      path: "/api/inventory/import",
+      json: {
+        file_name: "inventory.csv",
+        source_name: "dealer-feed",
+        csv_text: [
+          "stock_number,vin,year,make,model,verified,status",
+          "V100,1HGCM82633A000011,2023,Honda,Civic,yes,active",
+          "V101,1HGCM82633A000012,2022,Toyota,RAV4,no,active",
+        ].join("\n"),
+      },
+    });
+
+    assert.equal(importResponse.statusCode, 201);
+
+    const defaultListResponse = await client.request({
+      method: "GET",
+      path: "/api/inventory",
+    });
+    assert.equal(defaultListResponse.statusCode, 200);
+    const defaultBody = JSON.parse(defaultListResponse.body);
+    assert.equal(defaultBody.items.length, 1);
+    assert.equal(defaultBody.items[0].stock_number, "V100");
+
+    const includeAllResponse = await client.request({
+      method: "GET",
+      path: "/api/inventory?include_unverified=1",
+    });
+    assert.equal(includeAllResponse.statusCode, 200);
+    const includeAllBody = JSON.parse(includeAllResponse.body);
+    assert.equal(includeAllBody.items.length, 2);
+    assert.equal(includeAllBody.items.find((item) => item.stock_number === "V101").verified, "no");
+  });
+});
+
 test("inventory import records row-level errors without aborting the run", async () => {
   await withServer(async ({ app, server }) => {
     const client = createClient(server);
@@ -502,6 +544,67 @@ test("manager can link a lead to an inventory unit", async () => {
     const payload = JSON.parse(linkResponse.body);
     assert.equal(payload.lead.inventory_id, inventoryRow.id);
     assert.equal(payload.lead.inventory.stock_number, "C300");
+  });
+});
+
+test("lead creation auto-links inventory by stock number", async () => {
+  await withServer(async ({ server }) => {
+    const client = createClient(server);
+    await login(client, "manager@crm.local", "manager123");
+
+    const importResponse = await client.request({
+      method: "POST",
+      path: "/api/inventory/import",
+      json: {
+        file_name: "inventory.csv",
+        source_name: "dealer-feed",
+        csv_text: [
+          "stock_number,vin,year,make,model,trim,verified,status",
+          "AUTO77,1HGCM82633A000077,2024,Honda,Civic,Touring,yes,active",
+        ].join("\n"),
+      },
+    });
+    assert.equal(importResponse.statusCode, 201);
+
+    const createLeadResponse = await client.request({
+      method: "POST",
+      path: "/api/leads",
+      json: {
+        customer_name: "Stock Match Lead",
+        phone: "6472223333",
+        source: "website",
+        stock_number: "AUTO77",
+      },
+    });
+
+    assert.equal(createLeadResponse.statusCode, 201);
+    const lead = JSON.parse(createLeadResponse.body);
+    assert.equal(lead.inventory_id != null, true);
+    assert.equal(lead.inventory.stock_number, "AUTO77");
+  });
+});
+
+test("inventory import rejects invalid dealership context before hitting the database", async () => {
+  await withServer(async ({ app }) => {
+    const user = app.locals.db.getUserByEmail("manager@crm.local");
+    const originalCurrentDealershipId = app.locals.db.currentDealershipId.bind(app.locals.db);
+    app.locals.db.currentDealershipId = () => Number.NaN;
+
+    try {
+      await assert.rejects(
+        () =>
+          importInventoryCsv({
+            db: app.locals.db,
+            user,
+            fileName: "inventory.csv",
+            sourceName: "dealer-feed",
+            csvText: ["stock_number,vin,year,make,model", "B200,1HGCM82633A000003,2024,Ford,F-150"].join("\n"),
+          }),
+        /Unable to determine dealership for inventory import/i
+      );
+    } finally {
+      app.locals.db.currentDealershipId = originalCurrentDealershipId;
+    }
   });
 });
 

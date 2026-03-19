@@ -61,7 +61,8 @@ class UnauthorizedError extends HttpError {
 
 class BaseCrmDatabase {
   currentDealershipId(user = null) {
-    return Number(user?.dealership_id || getDefaultDealershipId());
+    const parsed = Number(user?.dealership_id);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : getDefaultDealershipId();
   }
 
   displayContactName(contact) {

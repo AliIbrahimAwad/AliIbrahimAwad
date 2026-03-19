@@ -14,6 +14,7 @@ const INVENTORY_HEADER_ALIASES = {
   exterior_color: ["exterior_color", "ext_color", "exterior colour", "exterior color", "colour", "color"],
   interior_color: ["interior_color", "int_color", "interior colour", "interior color"],
   status: ["status", "inventory_status"],
+  verified: ["verified", "is_verified", "verified_status", "verification_status"],
 };
 
 function normalizeHeader(value) {
@@ -121,9 +122,15 @@ function mapInventoryRow(row, context = {}) {
     exterior_color: mapped.exterior_color,
     interior_color: mapped.interior_color,
     status: mapped.status || "active",
+    verified: mapped.verified || "yes",
     source: context.sourceName || "manual_upload",
     source_file: context.fileName || null,
   };
+}
+
+function normalizePositiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 async function importInventoryCsv({
@@ -140,7 +147,12 @@ async function importInventoryCsv({
 
   const parsedRows = parseCsvText(csvText);
   const normalizedSourceName = String(sourceName || "").trim() || "manual_upload";
-  const dealershipId = Number(user.dealership_id);
+  const dealershipId = normalizePositiveInteger(
+    typeof db.currentDealershipId === "function" ? db.currentDealershipId(user) : user?.dealership_id || 1
+  );
+  if (!dealershipId) {
+    throw new ValidationError("Unable to determine dealership for inventory import.");
+  }
   const run = await db.createInventoryImportRun(
     {
       dealership_id: dealershipId,
@@ -180,7 +192,12 @@ async function importInventoryCsv({
           last_seen_at: new Date().toISOString(),
         });
 
-        seenInventoryIds.add(Number(result.inventory.id));
+        const inventoryId = normalizePositiveInteger(result?.inventory?.id);
+        if (!inventoryId) {
+          throw new ValidationError("Imported inventory row did not return a valid inventory ID.");
+        }
+
+        seenInventoryIds.add(inventoryId);
         if (result.action === "inserted") {
           summary.rows_inserted += 1;
         } else {
@@ -188,11 +205,16 @@ async function importInventoryCsv({
         }
       } catch (error) {
         summary.rows_skipped += 1;
+        const importRunId = normalizePositiveInteger(run?.id);
+        if (!importRunId) {
+          throw error;
+        }
+
         await db.createInventoryImportError(
           {
-            import_run_id: Number(run.id),
+            import_run_id: importRunId,
             dealership_id: dealershipId,
-            row_number: entry.rowNumber,
+            row_number: normalizePositiveInteger(entry.rowNumber),
             stock_number: firstValue(entry.raw, INVENTORY_HEADER_ALIASES.stock_number),
             vin: firstValue(entry.raw, INVENTORY_HEADER_ALIASES.vin),
             error_message: error.message || "Unable to import inventory row.",
@@ -214,7 +236,7 @@ async function importInventoryCsv({
 
     const finalStatus = summary.rows_skipped > 0 ? "completed_with_errors" : "completed";
     const completedRun = await db.updateInventoryImportRun(
-      Number(run.id),
+      normalizePositiveInteger(run?.id),
       {
         dealership_id: dealershipId,
         status: finalStatus,
@@ -236,7 +258,7 @@ async function importInventoryCsv({
     };
   } catch (error) {
     await db.updateInventoryImportRun(
-      Number(run.id),
+      normalizePositiveInteger(run?.id),
       {
         dealership_id: dealershipId,
         status: "failed",

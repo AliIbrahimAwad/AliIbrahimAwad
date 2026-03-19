@@ -65,6 +65,11 @@ function parseIntegerField(value) {
   return Number.isFinite(parsed) ? Math.round(parsed) : null;
 }
 
+function parsePositiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function normalizeInventoryStatus(value) {
   const normalized = String(value || "")
     .trim()
@@ -88,6 +93,31 @@ function normalizeInventoryStatus(value) {
   }
 
   return "inactive";
+}
+
+function normalizeInventoryVerified(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
+  if (!normalized) {
+    return "yes";
+  }
+
+  if (["yes", "true", "verified", "1"].includes(normalized)) {
+    return "yes";
+  }
+
+  if (["no", "false", "unverified", "0"].includes(normalized)) {
+    return "no";
+  }
+
+  return "yes";
+}
+
+function isTruthyFilter(value) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
 
 function withPgPlaceholders(sql) {
@@ -246,6 +276,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         exterior_color TEXT,
         interior_color TEXT,
         status TEXT NOT NULL DEFAULT 'active',
+        verified TEXT NOT NULL DEFAULT 'yes',
         source TEXT,
         source_file TEXT,
         last_seen_at TEXT,
@@ -344,10 +375,11 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_condition TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_price TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_type TEXT;
-      ALTER TABLE leads ADD COLUMN IF NOT EXISTS listing_url TEXT;
-      ALTER TABLE leads ADD COLUMN IF NOT EXISTS message TEXT;
-      ALTER TABLE leads ADD COLUMN IF NOT EXISTS inventory_id BIGINT REFERENCES inventory(id) ON DELETE SET NULL;
-      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS normalized_phone TEXT;
+        ALTER TABLE leads ADD COLUMN IF NOT EXISTS listing_url TEXT;
+        ALTER TABLE leads ADD COLUMN IF NOT EXISTS message TEXT;
+        ALTER TABLE leads ADD COLUMN IF NOT EXISTS inventory_id BIGINT REFERENCES inventory(id) ON DELETE SET NULL;
+        ALTER TABLE inventory ADD COLUMN IF NOT EXISTS verified TEXT NOT NULL DEFAULT 'yes';
+        ALTER TABLE contacts ADD COLUMN IF NOT EXISTS normalized_phone TEXT;
 
       CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_leads_normalized_phone ON leads(normalized_phone);
@@ -388,6 +420,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     await this.execute("UPDATE lead_activities SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
     await this.execute("UPDATE activities SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
     await this.execute("UPDATE imported_messages SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
+    await this.execute("UPDATE inventory SET verified = 'yes' WHERE verified IS NULL OR BTRIM(verified) = ''");
     await this.execute(
       `
         INSERT INTO lead_activities (dealership_id, lead_id, user_id, type, content, created_at)
@@ -476,7 +509,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
   }
 
   currentDealershipId(user = null) {
-    return Number(user?.dealership_id || getDefaultDealershipId());
+    return parsePositiveInteger(user?.dealership_id) || getDefaultDealershipId();
   }
 
   async getDealershipIdForLead(leadId) {
@@ -718,12 +751,13 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       trim: row.trim || null,
       price: row.price == null ? null : Number(row.price),
       mileage: row.mileage == null ? null : Number(row.mileage),
-      condition: row.condition || null,
-      body_style: row.body_style || null,
-      exterior_color: row.exterior_color || null,
-      interior_color: row.interior_color || null,
-      status: row.status || "active",
-      source: row.source || null,
+        condition: row.condition || null,
+        body_style: row.body_style || null,
+        exterior_color: row.exterior_color || null,
+        interior_color: row.interior_color || null,
+        status: row.status || "active",
+        verified: row.verified || "yes",
+        source: row.source || null,
       source_file: row.source_file || null,
       last_seen_at: row.last_seen_at || null,
       created_at: row.created_at,
@@ -1928,10 +1962,11 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     const dealershipId = input.dealership_id
       ? Number(input.dealership_id)
       : user
-        ? this.currentDealershipId(user)
-        : getDefaultDealershipId();
+          ? this.currentDealershipId(user)
+          : getDefaultDealershipId();
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
     const assignedTo = input.assigned_to == null ? null : Number(input.assigned_to);
+    const inventoryId = await this.resolveLeadInventoryId(input, dealershipId);
 
     const row = await this.get(
       `
@@ -1956,12 +1991,13 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
           lead_type,
           listing_url,
           message,
+          inventory_id,
           created_at,
           updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          RETURNING id
-        `,
-      [
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+          `,
+        [
         dealershipId,
         input.source || "website",
         storedStatus || "new",
@@ -1979,12 +2015,13 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         input.vehicle_trim || null,
         input.vehicle_condition || null,
         input.vehicle_price || null,
-        input.lead_type || null,
-        input.listing_url || null,
-        input.message || null,
-        now,
-        now,
-      ]
+          input.lead_type || null,
+          input.listing_url || null,
+          input.message || null,
+          inventoryId,
+          now,
+          now,
+        ]
     );
 
     await this.createActivity({
@@ -2002,6 +2039,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     const now = new Date().toISOString();
     const storedStatus = input.status ? toStoredStatus(input.status) : null;
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
+    const inventoryId = await this.resolveLeadInventoryId(input, Number(existingLead.dealership_id), existingLead.inventory_id);
 
     await this.execute(
       `
@@ -2025,6 +2063,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
           lead_type = ?,
           listing_url = ?,
           message = ?,
+          inventory_id = ?,
           updated_at = ?
         WHERE id = ? AND dealership_id = ?
       `,
@@ -2047,6 +2086,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         input.lead_type || null,
         input.listing_url || null,
         input.message || null,
+        inventoryId,
         now,
         id,
         existingLead.dealership_id,
@@ -2110,11 +2150,15 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
   }
 
   async listInventoryForApi(filters = {}, user = null) {
-    const dealershipId = this.currentDealershipId(user);
-    const clauses = ["inventory.dealership_id = ?"];
-    const params = [dealershipId];
+      const dealershipId = this.currentDealershipId(user);
+      const clauses = ["inventory.dealership_id = ?"];
+      const params = [dealershipId];
 
-    if (stringOrNull(filters.status)) {
+      if (!isTruthyFilter(filters.include_unverified ?? filters.includeUnverified)) {
+        clauses.push("COALESCE(LOWER(inventory.verified), 'yes') = 'yes'");
+      }
+
+      if (stringOrNull(filters.status)) {
       clauses.push("LOWER(inventory.status) = ?");
       params.push(String(filters.status).trim().toLowerCase());
     }
@@ -2183,6 +2227,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
 
   async createInventoryImportRun(input, user = null) {
     const now = new Date().toISOString();
+    const dealershipId = parsePositiveInteger(input.dealership_id) || this.currentDealershipId(user);
     const row = await this.get(
       `
         INSERT INTO inventory_import_runs (
@@ -2203,9 +2248,9 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
           updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING *
-      `,
-      [
-        input.dealership_id || this.currentDealershipId(user),
+        `,
+        [
+          dealershipId,
         input.source_type || "manual_upload",
         input.source_name || null,
         input.file_name || null,
@@ -2230,14 +2275,18 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
   }
 
   async updateInventoryImportRun(id, input, user = null) {
-    const dealershipId = input.dealership_id || this.currentDealershipId(user);
+    const runId = parsePositiveInteger(id);
+    const dealershipId = parsePositiveInteger(input.dealership_id) || this.currentDealershipId(user);
+    if (!runId) {
+      throw new ValidationError("Inventory import run ID is invalid.");
+    }
     const existing = await this.get(
       `
         SELECT *
         FROM inventory_import_runs
         WHERE id = ? AND dealership_id = ?
       `,
-      [id, dealershipId]
+        [runId, dealershipId]
     );
 
     if (!existing) {
@@ -2270,8 +2319,8 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         input.error_message || null,
         input.completed_at || null,
         new Date().toISOString(),
-        id,
-        dealershipId,
+          runId,
+          dealershipId,
       ]
     );
 
@@ -2282,13 +2331,19 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
   }
 
   async createInventoryImportError(input, user = null) {
+    const importRunId = parsePositiveInteger(input.import_run_id);
+    const dealershipId = parsePositiveInteger(input.dealership_id) || this.currentDealershipId(user);
+    if (!importRunId) {
+      throw new ValidationError("Inventory import run ID is invalid.");
+    }
+
     const run = await this.get(
       `
         SELECT id
         FROM inventory_import_runs
         WHERE id = ? AND dealership_id = ?
       `,
-      [input.import_run_id, input.dealership_id || this.currentDealershipId(user)]
+        [importRunId, dealershipId]
     );
 
     if (!run) {
@@ -2308,10 +2363,10 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
         RETURNING *
       `,
-      [
-        input.import_run_id,
-        input.row_number == null ? null : Number(input.row_number),
-        input.stock_number || null,
+        [
+          importRunId,
+          input.row_number == null ? null : parsePositiveInteger(input.row_number),
+          input.stock_number || null,
         input.vin || null,
         input.error_message,
         input.raw_row_json || null,
@@ -2397,9 +2452,30 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     return stockMatch || vinMatch || null;
   }
 
+  async resolveLeadInventoryId(input, dealershipId, fallbackInventoryId = null) {
+    const inventory = await this.findInventoryByIdentity({
+      dealership_id: dealershipId,
+      stock_number: input.stock_number,
+      vin: input.vehicle_id,
+    });
+
+    if (inventory) {
+      return Number(inventory.id);
+    }
+
+    if (stringOrNull(input.stock_number) || stringOrNull(input.vehicle_id)) {
+      return null;
+    }
+
+    return fallbackInventoryId == null ? null : Number(fallbackInventoryId);
+  }
+
   async upsertInventoryRecord(input) {
     const now = input.updated_at || new Date().toISOString();
-    const dealershipId = Number(input.dealership_id);
+    const dealershipId = parsePositiveInteger(input.dealership_id);
+    if (!dealershipId) {
+      throw new ValidationError("Inventory record is missing a valid dealership ID.");
+    }
     const stockNumber = normalizeInventoryIdentity(input.stock_number);
     const vin = normalizeInventoryIdentity(input.vin);
     const existing = await this.findInventoryByIdentity({
@@ -2422,6 +2498,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       stringOrNull(input.exterior_color),
       stringOrNull(input.interior_color),
       normalizeInventoryStatus(input.status),
+      normalizeInventoryVerified(input.verified),
       stringOrNull(input.source),
       stringOrNull(input.source_file),
       input.last_seen_at || now,
@@ -2445,6 +2522,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
             exterior_color = ?,
             interior_color = ?,
             status = ?,
+            verified = ?,
             source = ?,
             source_file = ?,
             last_seen_at = ?,
@@ -2474,20 +2552,21 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
           price,
           mileage,
           condition,
-          body_style,
-          exterior_color,
-          interior_color,
-          status,
-          source,
-          source_file,
-          last_seen_at,
-          created_at,
-          updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        RETURNING *
-      `,
-      [dealershipId, ...payload, now, now]
-    );
+            body_style,
+            exterior_color,
+            interior_color,
+            status,
+            verified,
+            source,
+            source_file,
+            last_seen_at,
+            created_at,
+            updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          RETURNING *
+        `,
+        [dealershipId, ...payload, now, now]
+      );
 
     return {
       action: "inserted",
@@ -2501,7 +2580,9 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     seen_inventory_ids = [],
     next_status = "inactive",
   }) {
-    if (!dealership_id || !stringOrNull(source) || !seen_inventory_ids.length) {
+    const dealershipId = parsePositiveInteger(dealership_id);
+    const seenInventoryIds = seen_inventory_ids.map((value) => parsePositiveInteger(value)).filter(Boolean);
+    if (!dealershipId || !stringOrNull(source) || !seenInventoryIds.length) {
       return 0;
     }
 
@@ -2517,8 +2598,8 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
           AND id <> ALL(?)
         RETURNING id
       `,
-      [normalizeInventoryStatus(next_status), new Date().toISOString(), dealership_id, source, seen_inventory_ids]
-    );
+        [normalizeInventoryStatus(next_status), new Date().toISOString(), dealershipId, source, seenInventoryIds]
+      );
 
     return rows.length;
   }

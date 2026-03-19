@@ -214,6 +214,7 @@ function formatInventoryItem(item) {
     exteriorColor: item.exterior_color || "",
     interiorColor: item.interior_color || "",
     status: item.status || "",
+    verified: item.verified || "yes",
     source: item.source || "",
     sourceFile: item.source_file || "",
     lastSeenAt: item.last_seen_at || null,
@@ -315,6 +316,7 @@ export default function App() {
     model: "",
     stockNumber: "",
     vin: "",
+    includeUnverified: false,
   });
   const [loading, setLoading] = useState(true);
   const [libraryLoading, setLibraryLoading] = useState(false);
@@ -397,14 +399,15 @@ export default function App() {
     setInventoryLoading(true);
     try {
       const [inventoryResponse, runsResponse] = await Promise.all([
-        getInventory({
-          limit: 250,
-          status: inventoryFilters.status,
-          make: inventoryFilters.make,
-          model: inventoryFilters.model,
-          stock_number: inventoryFilters.stockNumber,
-          vin: inventoryFilters.vin,
-        }),
+          getInventory({
+            limit: 250,
+            status: inventoryFilters.status,
+            make: inventoryFilters.make,
+            model: inventoryFilters.model,
+            stock_number: inventoryFilters.stockNumber,
+            vin: inventoryFilters.vin,
+            include_unverified: inventoryFilters.includeUnverified ? "1" : "",
+          }),
         getInventoryImportRuns(10),
       ]);
       setInventoryItems((inventoryResponse.items || []).map(formatInventoryItem));
@@ -600,7 +603,16 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeSection, authStatus, inventoryFilters.status, inventoryFilters.make, inventoryFilters.model, inventoryFilters.stockNumber, inventoryFilters.vin]);
+  }, [
+    activeSection,
+    authStatus,
+    inventoryFilters.status,
+    inventoryFilters.make,
+    inventoryFilters.model,
+    inventoryFilters.stockNumber,
+    inventoryFilters.vin,
+    inventoryFilters.includeUnverified,
+  ]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || activeSection !== "Unmatched") {

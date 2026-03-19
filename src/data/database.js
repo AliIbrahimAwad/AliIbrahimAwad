@@ -77,6 +77,11 @@ function parseIntegerField(value) {
   return Number.isFinite(parsed) ? Math.round(parsed) : null;
 }
 
+function parsePositiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function normalizeInventoryStatus(value) {
   const normalized = String(value || "")
     .trim()
@@ -100,6 +105,31 @@ function normalizeInventoryStatus(value) {
   }
 
   return "inactive";
+}
+
+function normalizeInventoryVerified(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
+  if (!normalized) {
+    return "yes";
+  }
+
+  if (["yes", "true", "verified", "1"].includes(normalized)) {
+    return "yes";
+  }
+
+  if (["no", "false", "unverified", "0"].includes(normalized)) {
+    return "no";
+  }
+
+  return "yes";
+}
+
+function isTruthyFilter(value) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
 
 const SCHEMA_SQL = `
@@ -210,6 +240,7 @@ const SCHEMA_SQL = `
     exterior_color TEXT,
     interior_color TEXT,
     status TEXT NOT NULL DEFAULT 'active',
+    verified TEXT NOT NULL DEFAULT 'yes',
     source TEXT,
     source_file TEXT,
     last_seen_at TEXT,
@@ -423,6 +454,7 @@ class CrmDatabase extends BaseCrmDatabase {
     this.ensureColumn("leads", "listing_url", "TEXT");
     this.ensureColumn("leads", "message", "TEXT");
     this.ensureColumn("leads", "inventory_id", "INTEGER");
+    this.ensureColumn("inventory", "verified", "TEXT NOT NULL DEFAULT 'yes'");
     this.ensureColumn("contacts", "normalized_phone", "TEXT");
     this.execute("UPDATE leads SET status = 'new' WHERE status IS NULL OR TRIM(status) = ''");
     this.execute("UPDATE leads SET status = 'appointment' WHERE status = 'qualified'");
@@ -454,6 +486,7 @@ class CrmDatabase extends BaseCrmDatabase {
       "UPDATE imported_messages SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
       [dealershipId]
     );
+    this.execute("UPDATE inventory SET verified = 'yes' WHERE verified IS NULL OR TRIM(verified) = ''");
     this.execute("UPDATE leads SET normalized_phone = ? WHERE phone IS NULL OR TRIM(phone) = ''", [null]);
     this.execute("UPDATE contacts SET normalized_phone = ? WHERE phone IS NULL OR TRIM(phone) = ''", [null]);
 
@@ -736,6 +769,7 @@ class CrmDatabase extends BaseCrmDatabase {
       exterior_color: row.exterior_color || null,
       interior_color: row.interior_color || null,
       status: row.status || "active",
+      verified: row.verified || "yes",
       source: row.source || null,
       source_file: row.source_file || null,
       last_seen_at: row.last_seen_at || null,
@@ -1835,11 +1869,12 @@ class CrmDatabase extends BaseCrmDatabase {
     const storedStatus = toStoredStatus(input.status || "new");
     const dealershipId = input.dealership_id
       ? Number(input.dealership_id)
-      : user
-        ? this.currentDealershipId(user)
-        : getDefaultDealershipId();
+        : user
+          ? this.currentDealershipId(user)
+          : getDefaultDealershipId();
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
     const assignedTo = input.assigned_to == null ? null : Number(input.assigned_to);
+    const inventoryId = this.resolveLeadInventoryId(input, dealershipId);
 
     this.execute(
       `
@@ -1864,9 +1899,10 @@ class CrmDatabase extends BaseCrmDatabase {
           lead_type,
           listing_url,
           message,
+          inventory_id,
           created_at,
           updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         [
           dealershipId,
@@ -1889,6 +1925,7 @@ class CrmDatabase extends BaseCrmDatabase {
           input.lead_type || null,
           input.listing_url || null,
           input.message || null,
+          inventoryId,
           now,
           now,
         ]
@@ -1907,10 +1944,11 @@ class CrmDatabase extends BaseCrmDatabase {
   }
 
   updateApiLead(id, input) {
-    this.getApiLead(id);
+    const existingLead = this.getApiLead(id);
     const now = new Date().toISOString();
     const storedStatus = input.status ? toStoredStatus(input.status) : null;
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
+    const inventoryId = this.resolveLeadInventoryId(input, Number(existingLead.dealership_id), existingLead.inventory_id);
 
     this.execute(
       `
@@ -1934,6 +1972,7 @@ class CrmDatabase extends BaseCrmDatabase {
           lead_type = ?,
           listing_url = ?,
           message = ?,
+          inventory_id = ?,
           updated_at = ?
         WHERE id = ?
       `,
@@ -1956,6 +1995,7 @@ class CrmDatabase extends BaseCrmDatabase {
         input.lead_type || null,
         input.listing_url || null,
         input.message || null,
+        inventoryId,
         now,
         id,
       ]
@@ -2022,6 +2062,10 @@ class CrmDatabase extends BaseCrmDatabase {
   listInventoryForApi(filters = {}, user = null) {
     const clauses = ["inventory.dealership_id = ?"];
     const params = [this.currentDealershipId(user)];
+
+    if (!isTruthyFilter(filters.include_unverified ?? filters.includeUnverified)) {
+      clauses.push("COALESCE(LOWER(inventory.verified), 'yes') = 'yes'");
+    }
 
     if (stringOrNull(filters.status)) {
       clauses.push("LOWER(inventory.status) = ?");
@@ -2091,6 +2135,7 @@ class CrmDatabase extends BaseCrmDatabase {
 
   createInventoryImportRun(input, user = null) {
     const now = new Date().toISOString();
+    const dealershipId = parsePositiveInteger(input.dealership_id) || this.currentDealershipId(user);
     this.execute(
       `
         INSERT INTO inventory_import_runs (
@@ -2112,7 +2157,7 @@ class CrmDatabase extends BaseCrmDatabase {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
-        input.dealership_id || this.currentDealershipId(user),
+        dealershipId,
         input.source_type || "manual_upload",
         input.source_name || null,
         input.file_name || null,
@@ -2136,13 +2181,19 @@ class CrmDatabase extends BaseCrmDatabase {
   }
 
   updateInventoryImportRun(id, input, user = null) {
+    const runId = parsePositiveInteger(id);
+    const dealershipId = parsePositiveInteger(input.dealership_id) || this.currentDealershipId(user);
+    if (!runId) {
+      throw new ValidationError("Inventory import run ID is invalid.");
+    }
+
     const existing = this.get(
       `
         SELECT *
         FROM inventory_import_runs
         WHERE id = ? AND dealership_id = ?
       `,
-      [id, input.dealership_id || this.currentDealershipId(user)]
+      [runId, dealershipId]
     );
 
     if (!existing) {
@@ -2174,23 +2225,29 @@ class CrmDatabase extends BaseCrmDatabase {
         input.error_message || null,
         input.completed_at || null,
         new Date().toISOString(),
-        id,
+        runId,
         existing.dealership_id,
       ]
     );
 
     this.save();
-    return this.get("SELECT * FROM inventory_import_runs WHERE id = ?", [id]);
+    return this.get("SELECT * FROM inventory_import_runs WHERE id = ?", [runId]);
   }
 
   createInventoryImportError(input, user = null) {
+    const importRunId = parsePositiveInteger(input.import_run_id);
+    const dealershipId = parsePositiveInteger(input.dealership_id) || this.currentDealershipId(user);
+    if (!importRunId) {
+      throw new ValidationError("Inventory import run ID is invalid.");
+    }
+
     const run = this.get(
       `
         SELECT id
         FROM inventory_import_runs
         WHERE id = ? AND dealership_id = ?
       `,
-      [input.import_run_id, input.dealership_id || this.currentDealershipId(user)]
+      [importRunId, dealershipId]
     );
 
     if (!run) {
@@ -2210,8 +2267,8 @@ class CrmDatabase extends BaseCrmDatabase {
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
       [
-        input.import_run_id,
-        input.row_number == null ? null : Number(input.row_number),
+        importRunId,
+        input.row_number == null ? null : parsePositiveInteger(input.row_number),
         input.stock_number || null,
         input.vin || null,
         input.error_message,
@@ -2295,9 +2352,30 @@ class CrmDatabase extends BaseCrmDatabase {
     return stockMatch || vinMatch || null;
   }
 
+  resolveLeadInventoryId(input, dealershipId, fallbackInventoryId = null) {
+    const inventory = this.findInventoryByIdentity({
+      dealership_id: dealershipId,
+      stock_number: input.stock_number,
+      vin: input.vehicle_id,
+    });
+
+    if (inventory) {
+      return Number(inventory.id);
+    }
+
+    if (stringOrNull(input.stock_number) || stringOrNull(input.vehicle_id)) {
+      return null;
+    }
+
+    return fallbackInventoryId == null ? null : Number(fallbackInventoryId);
+  }
+
   upsertInventoryRecord(input) {
     const now = input.updated_at || new Date().toISOString();
-    const dealershipId = Number(input.dealership_id);
+    const dealershipId = parsePositiveInteger(input.dealership_id);
+    if (!dealershipId) {
+      throw new ValidationError("Inventory record is missing a valid dealership ID.");
+    }
     const stockNumber = normalizeInventoryIdentity(input.stock_number);
     const vin = normalizeInventoryIdentity(input.vin);
     const existing = this.findInventoryByIdentity({
@@ -2320,6 +2398,7 @@ class CrmDatabase extends BaseCrmDatabase {
       stringOrNull(input.exterior_color),
       stringOrNull(input.interior_color),
       normalizeInventoryStatus(input.status),
+      normalizeInventoryVerified(input.verified),
       stringOrNull(input.source),
       stringOrNull(input.source_file),
       input.last_seen_at || now,
@@ -2343,6 +2422,7 @@ class CrmDatabase extends BaseCrmDatabase {
             exterior_color = ?,
             interior_color = ?,
             status = ?,
+            verified = ?,
             source = ?,
             source_file = ?,
             last_seen_at = ?,
@@ -2376,12 +2456,13 @@ class CrmDatabase extends BaseCrmDatabase {
           exterior_color,
           interior_color,
           status,
+          verified,
           source,
           source_file,
           last_seen_at,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [dealershipId, ...params, now, now]
     );
@@ -2400,12 +2481,14 @@ class CrmDatabase extends BaseCrmDatabase {
     seen_inventory_ids = [],
     next_status = "inactive",
   }) {
-    if (!dealership_id || !stringOrNull(source) || !seen_inventory_ids.length) {
+    const dealershipId = parsePositiveInteger(dealership_id);
+    const seenInventoryIds = seen_inventory_ids.map((value) => parsePositiveInteger(value)).filter(Boolean);
+    if (!dealershipId || !stringOrNull(source) || !seenInventoryIds.length) {
       return 0;
     }
 
-    const placeholders = seen_inventory_ids.map(() => "?").join(", ");
-    const params = [normalizeInventoryStatus(next_status), new Date().toISOString(), dealership_id, source, ...seen_inventory_ids];
+    const placeholders = seenInventoryIds.map(() => "?").join(", ");
+    const params = [normalizeInventoryStatus(next_status), new Date().toISOString(), dealershipId, source, ...seenInventoryIds];
     const row = this.get(
       `
         SELECT COUNT(*) AS count
@@ -2415,7 +2498,7 @@ class CrmDatabase extends BaseCrmDatabase {
           AND status = 'active'
           AND id NOT IN (${placeholders})
       `,
-      [dealership_id, source, ...seen_inventory_ids]
+      [dealershipId, source, ...seenInventoryIds]
     );
 
     this.execute(

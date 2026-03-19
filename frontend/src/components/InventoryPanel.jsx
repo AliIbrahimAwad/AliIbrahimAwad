@@ -71,6 +71,16 @@ export function InventoryPanel({
             className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
           />
         </div>
+
+        <label className="inline-flex items-center gap-3 text-sm text-slate-300">
+          <input
+            type="checkbox"
+            checked={Boolean(filters.includeUnverified)}
+            onChange={(event) => onFilterChange?.("includeUnverified", event.target.checked)}
+            className="h-4 w-4 rounded border border-white/20 bg-white/5"
+          />
+          Show unverified units
+        </label>
       </div>
 
       {canImport ? (
@@ -136,6 +146,7 @@ export function InventoryPanel({
                 {item.bodyStyle ? <span>{item.bodyStyle}</span> : null}
                 <span>{formatPrice(item.price)}</span>
                 {item.mileage != null ? <span>{item.mileage.toLocaleString()} km</span> : null}
+                <span>Verified: {item.verified === "no" ? "No" : "Yes"}</span>
               </div>
               <div className="mt-4 flex flex-wrap gap-2 text-xs uppercase tracking-[0.2em] text-slate-500">
                 {item.exteriorColor ? <span>{item.exteriorColor}</span> : null}
