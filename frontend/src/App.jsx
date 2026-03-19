@@ -406,7 +406,7 @@ export default function App() {
             model: inventoryFilters.model,
             stock_number: inventoryFilters.stockNumber,
             vin: inventoryFilters.vin,
-            include_unverified: inventoryFilters.includeUnverified ? "1" : "",
+            include_unverified: "1",
           }),
         getInventoryImportRuns(10),
       ]);
@@ -827,13 +827,20 @@ export default function App() {
       .toLowerCase()
       .includes(search)
   );
-  const visibleInventoryItems = inventoryItems.filter((item) =>
-    !search ||
-    [item.stockNumber, item.vin, item.make, item.model, item.trim, item.status]
+  const visibleInventoryItems = inventoryItems.filter((item) => {
+    if (!inventoryFilters.includeUnverified && item.verified === "no") {
+      return false;
+    }
+
+    if (!search) {
+      return true;
+    }
+
+    return [item.stockNumber, item.vin, item.make, item.model, item.trim, item.status, item.verified]
       .join(" ")
       .toLowerCase()
-      .includes(search)
-  );
+      .includes(search);
+  });
   const analytics = buildAnalyticsSnapshot({
     leadLibrary: visibleLeadLibrary,
     attentionLeads: visibleAttentionLeads,
