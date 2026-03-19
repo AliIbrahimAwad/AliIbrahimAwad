@@ -59,11 +59,15 @@ export function LeadDetailsPanel({
   callLogging = false,
   onHoldVehicle,
   holdSubmitting = false,
+  inventoryOptions = [],
+  inventoryLinking = false,
+  onLinkInventory,
 }) {
   const [assignmentValue, setAssignmentValue] = useState("");
   const [smsDraft, setSmsDraft] = useState("");
   const [smsComposerOpen, setSmsComposerOpen] = useState(false);
   const [actionNotice, setActionNotice] = useState("");
+  const [inventoryValue, setInventoryValue] = useState("");
   const smsComposerRef = useRef(null);
 
   useEffect(() => {
@@ -74,7 +78,8 @@ export function LeadDetailsPanel({
     setSmsDraft("");
     setSmsComposerOpen(false);
     setActionNotice("");
-  }, [lead?.id]);
+    setInventoryValue(lead?.inventoryId ? String(lead.inventoryId) : "");
+  }, [lead?.id, lead?.inventoryId]);
 
   useEffect(() => {
     if (!smsComposerOpen || !smsComposerRef.current) {
@@ -203,6 +208,61 @@ export function LeadDetailsPanel({
         {!isSalesUser ? <InfoBlock label="Assigned Rep" value={lead.assignedRep} /> : null}
         {!isSalesUser ? <InfoBlock label="Listing URL" value={lead.listingUrl || "Direct inventory inquiry"} /> : null}
         {!isSalesUser ? <InfoBlock label="Lead Type" value={lead.leadType} /> : null}
+      </div>
+
+      <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+        <div className="flex items-center gap-2 text-sm font-semibold text-white">
+          <CarFront className="h-4 w-4 text-ice-300" />
+          Linked inventory
+        </div>
+        <p className="mt-3 text-sm leading-6 text-slate-300">
+          {lead.inventory
+            ? `${[lead.inventory.year, lead.inventory.make, lead.inventory.model, lead.inventory.trim]
+                .filter(Boolean)
+                .join(" ")}${lead.inventory.stockNumber ? ` | Stock ${lead.inventory.stockNumber}` : ""}${
+                lead.inventory.vin ? ` | VIN ${lead.inventory.vin}` : ""
+              }`
+            : "No structured inventory unit linked yet."}
+        </p>
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+          <label className="grid flex-1 gap-2">
+            <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Link inventory unit</span>
+            <select
+              value={inventoryValue}
+              onChange={(event) => setInventoryValue(event.target.value)}
+              disabled={inventoryLinking}
+              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none disabled:cursor-wait disabled:opacity-70"
+            >
+              <option value="" className="bg-ink-900">
+                Select inventory
+              </option>
+              {inventoryOptions.map((item) => (
+                <option key={item.id} value={item.id} className="bg-ink-900">
+                  {[item.stockNumber, item.year, item.make, item.model, item.trim].filter(Boolean).join(" | ")}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={async () => {
+              if (!inventoryValue) {
+                return;
+              }
+
+              try {
+                await onLinkInventory?.(Number(inventoryValue));
+                setActionNotice("Inventory unit linked to this lead.");
+              } catch (_error) {
+                // Parent surfaces API errors.
+              }
+            }}
+            disabled={inventoryLinking || !inventoryValue || Number(inventoryValue) === Number(lead.inventoryId)}
+            className="inline-flex items-center justify-center rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {inventoryLinking ? "Linking..." : "Link inventory"}
+          </button>
+        </div>
       </div>
 
       <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-gradient-to-br from-white/8 to-white/[0.03] p-5">

@@ -56,7 +56,7 @@ async function createApp(options = {}) {
   app.locals.ringcentral = ringcentral;
 
   app.use(express.urlencoded({ extended: false }));
-  app.use(express.json());
+  app.use(express.json({ limit: "10mb" }));
   app.use(
     session({
       secret: process.env.SESSION_SECRET || "crm-dev-session-secret",

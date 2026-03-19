@@ -74,6 +74,74 @@ export function getConversations(limit = 50) {
   return request(`/api/conversations?limit=${limit}`);
 }
 
+export function getInventory(params = {}) {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, String(value));
+    }
+  });
+
+  const suffix = query.toString();
+  return request(`/api/inventory${suffix ? `?${suffix}` : ""}`);
+}
+
+export function getInventoryById(id) {
+  return request(`/api/inventory/${id}`);
+}
+
+export function importInventory(payload) {
+  return request("/api/inventory/import", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getInventoryImportRuns(limit = 20) {
+  return request(`/api/inventory/import-runs?limit=${limit}`);
+}
+
+export function linkLeadInventory(id, inventoryId) {
+  return request(`/api/leads/${id}/link-inventory`, {
+    method: "POST",
+    body: JSON.stringify({ inventory_id: inventoryId }),
+  });
+}
+
+export function getUnmatchedCommunications(params = {}) {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, String(value));
+    }
+  });
+
+  const suffix = query.toString();
+  return request(`/api/unmatched${suffix ? `?${suffix}` : ""}`);
+}
+
+export function assignUnmatchedCommunication(id, leadId) {
+  return request(`/api/unmatched/${id}/assign`, {
+    method: "POST",
+    body: JSON.stringify({ lead_id: leadId }),
+  });
+}
+
+export function createLeadFromUnmatched(id, payload = {}) {
+  return request(`/api/unmatched/${id}/create-lead`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function dismissUnmatchedCommunication(id) {
+  return request(`/api/unmatched/${id}/dismiss`, {
+    method: "POST",
+  });
+}
+
 export function sendLeadSms(id, message) {
   return request(`/api/leads/${id}/sms`, {
     method: "POST",

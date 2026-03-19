@@ -377,6 +377,134 @@ test("sending SMS through the CRM logs activity and updates new leads to contact
   });
 });
 
+test("manager can import inventory CSV with upsert behavior", async () => {
+  await withServer(async ({ app, server }) => {
+    const client = createClient(server);
+    await login(client, "manager@crm.local", "manager123");
+
+    const firstImport = await client.request({
+      method: "POST",
+      path: "/api/inventory/import",
+      json: {
+        file_name: "inventory.csv",
+        source_name: "dealer-feed",
+        csv_text: [
+          "stock_number,vin,year,make,model,trim,price,mileage,status",
+          "A100,1HGCM82633A000001,2023,Honda,Civic,Touring,29995,12500,active",
+          "A101,1HGCM82633A000002,2022,Toyota,RAV4,XLE,33995,19000,active",
+        ].join("\n"),
+      },
+    });
+
+    assert.equal(firstImport.statusCode, 201);
+    const firstBody = JSON.parse(firstImport.body);
+    assert.equal(firstBody.run.rows_inserted, 2);
+    assert.equal(firstBody.run.rows_updated, 0);
+
+    const secondImport = await client.request({
+      method: "POST",
+      path: "/api/inventory/import",
+      json: {
+        file_name: "inventory.csv",
+        source_name: "dealer-feed",
+        csv_text: [
+          "stock_number,vin,year,make,model,trim,price,mileage,status",
+          "A100,1HGCM82633A000001,2023,Honda,Civic,Sport,31995,14000,active",
+        ].join("\n"),
+      },
+    });
+
+    assert.equal(secondImport.statusCode, 201);
+    const secondBody = JSON.parse(secondImport.body);
+    assert.equal(secondBody.run.rows_inserted, 0);
+    assert.equal(secondBody.run.rows_updated, 1);
+
+    const inventoryRows = app.locals.db.listInventoryForApi({}, { dealership_id: 1, role: "manager" });
+    assert.equal(inventoryRows.length, 2);
+    assert.equal(inventoryRows.find((item) => item.stock_number === "A100").trim, "Sport");
+  });
+});
+
+test("inventory import records row-level errors without aborting the run", async () => {
+  await withServer(async ({ app, server }) => {
+    const client = createClient(server);
+    await login(client, "manager@crm.local", "manager123");
+
+    const response = await client.request({
+      method: "POST",
+      path: "/api/inventory/import",
+      json: {
+        file_name: "broken.csv",
+        source_name: "dealer-feed",
+        csv_text: [
+          "stock_number,vin,year,make,model",
+          "B200,1HGCM82633A000003,2024,Ford,F-150",
+          ",,,Honda,Civic",
+        ].join("\n"),
+      },
+    });
+
+    assert.equal(response.statusCode, 201);
+    const body = JSON.parse(response.body);
+    assert.equal(body.run.rows_inserted, 1);
+    assert.equal(body.run.rows_skipped, 1);
+
+    const errors = app.locals.db.all("SELECT * FROM inventory_import_errors WHERE import_run_id = ?", [body.run.id]);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0].error_message, /stock number or VIN/i);
+  });
+});
+
+test("manager can link a lead to an inventory unit", async () => {
+  await withServer(async ({ app, server }) => {
+    const client = createClient(server);
+    await login(client, "manager@crm.local", "manager123");
+
+    const importResponse = await client.request({
+      method: "POST",
+      path: "/api/inventory/import",
+      json: {
+        file_name: "inventory.csv",
+        source_name: "dealer-feed",
+        csv_text: [
+          "stock_number,vin,year,make,model,trim,price,mileage,status",
+          "C300,1HGCM82633A000004,2021,Mazda,CX-5,GS,27995,32000,active",
+        ].join("\n"),
+      },
+    });
+
+    const imported = JSON.parse(importResponse.body);
+    const inventoryRow = app.locals.db.listInventoryForApi({}, { dealership_id: 1, role: "manager" })[0];
+    assert.equal(imported.run.rows_inserted, 1);
+
+    const createLeadResponse = await client.request({
+      method: "POST",
+      path: "/api/leads",
+      json: {
+        customer_name: "Inventory Link Lead",
+        phone: "6471112222",
+        source: "website",
+      },
+    });
+
+    assert.equal(createLeadResponse.statusCode, 201);
+    const lead = JSON.parse(createLeadResponse.body);
+
+    const linkResponse = await client.request({
+      method: "POST",
+      path: `/api/leads/${lead.id}/link-inventory`,
+      json: {
+        inventory_id: inventoryRow.id,
+      },
+    });
+
+    assert.equal(linkResponse.statusCode, 200);
+    const payload = JSON.parse(linkResponse.body);
+    assert.equal(payload.lead.inventory_id, inventoryRow.id);
+    assert.equal(payload.lead.inventory.stock_number, "C300");
+  });
+});
+
 test("website API creates an unassigned website lead", async () => {
   await withServer(async ({ server }) => {
     const client = createClient(server);
@@ -874,6 +1002,173 @@ test("API hold endpoint creates a hold task and note for the lead", async () => 
   });
 });
 
+test("API lists unmatched communications for the signed-in rep and lets them dismiss an item", async () => {
+  await withServer(async ({ app, server }) => {
+    const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
+    await app.locals.ringcentral.store.upsertUnmatchedCommunication({
+      dealership_id: Number(salesUser.dealership_id),
+      type: "sms",
+      direction: "inbound",
+      from_number: "+16475550101",
+      to_number: "+16475551212",
+      normalized_from_number: "+16475550101",
+      normalized_to_number: "+16475551212",
+      body_text: "Is this still available?",
+      received_at: "2026-03-19T16:00:00.000Z",
+      provider: "ringcentral",
+      provider_message_id: "unmatched-api-sms-1",
+      crm_user_id: Number(salesUser.id),
+      provider_extension_id: "ext-sales",
+      raw: {},
+    });
+    await app.locals.ringcentral.store.upsertUnmatchedCommunication({
+      dealership_id: Number(salesUser.dealership_id),
+      type: "sms",
+      direction: "inbound",
+      from_number: "+16475550102",
+      to_number: "+16475551212",
+      normalized_from_number: "+16475550102",
+      normalized_to_number: "+16475551212",
+      body_text: "Other rep item",
+      received_at: "2026-03-19T16:05:00.000Z",
+      provider: "ringcentral",
+      provider_message_id: "unmatched-api-sms-2",
+      crm_user_id: 999,
+      provider_extension_id: "ext-other",
+      raw: {},
+    });
+
+    const client = createClient(server);
+    await login(client, "sales@crm.local", "sales123");
+
+    const listResponse = await client.request({ path: "/api/unmatched?status=new" });
+    assert.equal(listResponse.statusCode, 200);
+    const listBody = JSON.parse(listResponse.body);
+    assert.equal(listBody.items.length, 1);
+    assert.equal(listBody.items[0].provider_message_id, "unmatched-api-sms-1");
+
+    const dismissResponse = await client.request({
+      method: "POST",
+      path: `/api/unmatched/${listBody.items[0].id}/dismiss`,
+    });
+    assert.equal(dismissResponse.statusCode, 200);
+    const dismissedBody = JSON.parse(dismissResponse.body);
+    assert.equal(dismissedBody.item.status, "dismissed");
+  });
+});
+
+test("API can create a lead from an unmatched SMS and attach it to the timeline", async () => {
+  await withServer(async ({ app, server }) => {
+    const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
+    const queued = await app.locals.ringcentral.store.upsertUnmatchedCommunication({
+      dealership_id: Number(salesUser.dealership_id),
+      type: "sms",
+      direction: "inbound",
+      from_number: "+16475550333",
+      to_number: "+16475551212",
+      normalized_from_number: "+16475550333",
+      normalized_to_number: "+16475551212",
+      body_text: "Can you text me the price?",
+      received_at: "2026-03-19T17:00:00.000Z",
+      provider: "ringcentral",
+      provider_message_id: "unmatched-create-lead-1",
+      crm_user_id: Number(salesUser.id),
+      provider_extension_id: "ext-sales",
+      raw: {},
+    });
+
+    const client = createClient(server);
+    await login(client, "sales@crm.local", "sales123");
+
+    const response = await client.request({
+      method: "POST",
+      path: `/api/unmatched/${queued.record.id}/create-lead`,
+      json: {
+        customer_name: "Queue Shopper",
+      },
+    });
+
+    assert.equal(response.statusCode, 201);
+    const body = JSON.parse(response.body);
+    assert.equal(body.item.status, "resolved");
+    assert.equal(body.lead.customer_name, "Queue Shopper");
+    assert.equal(body.lead.phone, "+16475550333");
+    assert.ok(body.timeline.some((entry) => entry.type === "sms"));
+
+    const message = await app.locals.db.get(
+      "SELECT * FROM lead_messages WHERE provider_message_id = ?",
+      ["unmatched-create-lead-1"]
+    );
+    assert.ok(message);
+    assert.equal(Number(message.lead_id), Number(body.lead.id));
+  });
+});
+
+test("API can assign an unmatched call to an existing lead", async () => {
+  await withServer(async ({ app, server }) => {
+    const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
+    const lead = await app.locals.db.createApiLead(
+      {
+        source: "website",
+        customer_name: "Existing Match",
+        phone: "+1 (647) 555-0444",
+        email: "existing@example.com",
+        vehicle_interest: "2024 SUV",
+        status: "new",
+        assigned_to: Number(salesUser.id),
+        dealership_id: Number(salesUser.dealership_id),
+      },
+      salesUser
+    );
+
+    const queued = await app.locals.ringcentral.store.upsertUnmatchedCommunication({
+      dealership_id: Number(salesUser.dealership_id),
+      type: "call",
+      direction: "inbound",
+      from_number: "+16475550444",
+      to_number: "+16475551212",
+      normalized_from_number: "+16475550444",
+      normalized_to_number: "+16475551212",
+      call_duration: 31,
+      received_at: "2026-03-19T17:10:00.000Z",
+      provider: "ringcentral",
+      provider_call_id: "unmatched-assign-call-1",
+      crm_user_id: Number(salesUser.id),
+      provider_extension_id: "ext-sales",
+      raw: {
+        id: "unmatched-assign-call-1",
+        direction: "Inbound",
+        result: "Accepted",
+        action: "Phone Call",
+        duration: 31,
+        startTime: "2026-03-19T17:10:00.000Z",
+      },
+    });
+
+    const client = createClient(server);
+    await login(client, "sales@crm.local", "sales123");
+
+    const response = await client.request({
+      method: "POST",
+      path: `/api/unmatched/${queued.record.id}/assign`,
+      json: { lead_id: Number(lead.id) },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.item.status, "resolved");
+    assert.equal(Number(body.item.resolved_lead_id), Number(lead.id));
+    assert.ok(body.timeline.some((entry) => entry.type === "call"));
+
+    const call = await app.locals.db.get(
+      "SELECT * FROM lead_calls WHERE provider_call_id = ?",
+      ["unmatched-assign-call-1"]
+    );
+    assert.ok(call);
+    assert.equal(Number(call.lead_id), Number(lead.id));
+  });
+});
+
 test("dashboard worklist separates attention leads from organized leads", async () => {
   await withServer(async ({ app, server }) => {
     const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
@@ -912,7 +1207,7 @@ test("dashboard worklist separates attention leads from organized leads", async 
     const body = JSON.parse(response.body);
 
     assert.ok(body.attention_items.some((lead) => lead.customer_name === "Fresh Attention"));
-    assert.ok(body.organized_groups.engaged.some((lead) => lead.customer_name === "Organized Contact"));
+    assert.ok(body.organized_groups.contacted.some((lead) => lead.customer_name === "Organized Contact"));
   });
 });
 

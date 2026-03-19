@@ -1,9 +1,10 @@
 const { canAssignLeads, canManageUsers, canUpdateLeadStatus } = require("../models/user");
 const { requireAuth } = require("../middleware/auth");
-const { ValidationError } = require("../data/database");
+const { ValidationError } = require("../data/core");
 const { normalizePhone } = require("../utils/phones");
 const { toDateOnlyString } = require("../utils/dates");
 const { asyncHandler } = require("./helpers");
+const { importInventoryCsv } = require("../../services/inventoryImport");
 
 function toPagination(query = {}) {
   return {
@@ -43,6 +44,49 @@ function normalizeLeadPayload(body = {}) {
     listing_url: body.listing_url || body.listingUrl || null,
     message: String(body.message || "").trim() || null,
     status: String(body.status || "new").trim().toLowerCase(),
+  };
+}
+
+function normalizeUnmatchedLeadPayload(body = {}) {
+  return {
+    customer_name: String(body.customer_name || body.name || "").trim() || null,
+  };
+}
+
+function formatUnmatchedCommunication(item) {
+  return {
+    id: item.id,
+    dealership_id: Number(item.dealership_id),
+    type: item.type,
+    direction: item.direction,
+    from_number: item.from_number || null,
+    to_number: item.to_number || null,
+    normalized_from_number: item.normalized_from_number || null,
+    normalized_to_number: item.normalized_to_number || null,
+    body_text: item.body_text || "",
+    call_duration: item.call_duration == null ? null : Number(item.call_duration),
+    received_at: item.received_at || null,
+    provider: item.provider || "ringcentral",
+    provider_message_id: item.provider_message_id || null,
+    provider_call_id: item.provider_call_id || null,
+    crm_user_id: item.crm_user_id == null ? null : Number(item.crm_user_id),
+    provider_extension_id: item.provider_extension_id || null,
+    status: item.status,
+    resolved_lead_id: item.resolved_lead_id == null ? null : Number(item.resolved_lead_id),
+    resolved_lead_name: item.resolved_lead_name || null,
+    created_at: item.created_at,
+    updated_at: item.updated_at,
+  };
+}
+
+function normalizeInventoryFilters(query = {}) {
+  return {
+    limit: Math.max(1, Math.min(500, Number(query.limit) || 250)),
+    status: String(query.status || "").trim().toLowerCase(),
+    make: String(query.make || "").trim(),
+    model: String(query.model || "").trim(),
+    stock_number: String(query.stock_number || query.stockNumber || "").trim(),
+    vin: String(query.vin || "").trim(),
   };
 }
 
@@ -179,6 +223,126 @@ function registerApiRoutes(app) {
     })
   );
 
+  app.get(
+    "/api/inventory",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      res.json({
+        items: await req.app.locals.db.listInventoryForApi(normalizeInventoryFilters(req.query), req.currentUser),
+      });
+    })
+  );
+
+  app.get(
+    "/api/inventory/:id",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      res.json({
+        item: await req.app.locals.db.getInventoryForApi(Number(req.params.id), req.currentUser),
+      });
+    })
+  );
+
+  app.post(
+    "/api/inventory/import",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const csvText = String(req.body.csv_text || req.body.csvText || "");
+      const fileName = String(req.body.file_name || req.body.fileName || "").trim() || null;
+      const sourceName = String(req.body.source_name || req.body.sourceName || "").trim() || null;
+      const markMissingInactive = Boolean(req.body.mark_missing_inactive ?? req.body.markMissingInactive);
+      const result = await importInventoryCsv({
+        db: req.app.locals.db,
+        user: req.currentUser,
+        csvText,
+        fileName,
+        sourceName,
+        markMissingInactive,
+      });
+
+      res.status(201).json(result);
+    })
+  );
+
+  app.get(
+    "/api/inventory/import-runs",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      res.json({
+        items: await req.app.locals.db.listInventoryImportRuns(req.currentUser, Number(req.query.limit) || 20),
+      });
+    })
+  );
+
+  app.get(
+    "/api/unmatched",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 100));
+      const status = String(req.query.status || "").trim().toLowerCase();
+      const items = await req.app.locals.ringcentral.listUnmatchedCommunications({ status, limit }, req.currentUser);
+      res.json({
+        items: items.map(formatUnmatchedCommunication),
+      });
+    })
+  );
+
+  app.post(
+    "/api/unmatched/:id/assign",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const leadId = Number(req.body.lead_id || req.body.leadId);
+      if (!Number.isInteger(leadId) || leadId <= 0) {
+        throw new ValidationError("A valid lead is required.");
+      }
+
+      const result = await req.app.locals.ringcentral.assignUnmatchedCommunication(
+        String(req.params.id),
+        leadId,
+        req.currentUser
+      );
+      const item = await req.app.locals.ringcentral.store.getUnmatchedCommunicationById(String(req.params.id), req.currentUser);
+      res.json({
+        item: formatUnmatchedCommunication(item),
+        ...(await req.app.locals.db.getApiLeadWithActivities(result.lead_id, req.currentUser)),
+      });
+    })
+  );
+
+  app.post(
+    "/api/unmatched/:id/create-lead",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const result = await req.app.locals.ringcentral.createLeadFromUnmatched(
+        String(req.params.id),
+        normalizeUnmatchedLeadPayload(req.body),
+        req.currentUser
+      );
+      const item = await req.app.locals.ringcentral.store.getUnmatchedCommunicationById(String(req.params.id), req.currentUser);
+      res.status(201).json({
+        item: formatUnmatchedCommunication(item),
+        ...(await req.app.locals.db.getApiLeadWithActivities(result.lead_id, req.currentUser)),
+      });
+    })
+  );
+
+  app.post(
+    "/api/unmatched/:id/dismiss",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      await req.app.locals.ringcentral.dismissUnmatchedCommunication(String(req.params.id), req.currentUser);
+      const item = await req.app.locals.ringcentral.store.getUnmatchedCommunicationById(String(req.params.id), req.currentUser);
+      res.json({
+        item: formatUnmatchedCommunication(item),
+      });
+    })
+  );
+
   app.post(
     "/api/leads/:id/sms",
     requireAuth,
@@ -231,6 +395,20 @@ function registerApiRoutes(app) {
       });
 
       res.json(await req.app.locals.db.getApiLeadWithActivities(leadId, req.currentUser));
+    })
+  );
+
+  app.post(
+    "/api/leads/:id/link-inventory",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const inventoryId = Number(req.body.inventory_id || req.body.inventoryId);
+      if (!Number.isInteger(inventoryId) || inventoryId <= 0) {
+        throw new ValidationError("A valid inventory unit is required.");
+      }
+
+      const payload = await req.app.locals.db.linkLeadInventory(Number(req.params.id), inventoryId, req.currentUser);
+      res.json(payload);
     })
   );
 

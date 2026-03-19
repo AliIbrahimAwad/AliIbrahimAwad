@@ -2,6 +2,7 @@ import { startTransition, useDeferredValue, useEffect, useState } from "react";
 import { Menu, Search, SlidersHorizontal } from "lucide-react";
 
 import { AttentionLeadCard } from "./components/AttentionLeadCard";
+import { InventoryPanel } from "./components/InventoryPanel";
 import { LeadCard } from "./components/LeadCard";
 import { LeadDetailsPanel } from "./components/LeadDetailsPanel";
 import { LoginPage } from "./components/LoginPage";
@@ -9,19 +10,28 @@ import { MetricCard } from "./components/MetricCard";
 import { NotificationTray } from "./components/NotificationTray";
 import { Sidebar } from "./components/Sidebar";
 import { TeamManagementPanel } from "./components/TeamManagementPanel";
+import { UnmatchedCommunicationPanel } from "./components/UnmatchedCommunicationPanel";
 import {
+  assignUnmatchedCommunication,
   assignLead,
   completeTask,
   createUser,
+  createLeadFromUnmatched,
+  dismissUnmatchedCommunication,
   deleteUser,
   getAssignableUsers,
   getConversations,
   getDashboardWorklist,
+  getInventory,
+  getInventoryImportRuns,
   getLead,
   getLeads,
+  getUnmatchedCommunications,
   holdLeadVehicle,
+  importInventory,
   getSession,
   getUsers,
+  linkLeadInventory,
   login,
   logLeadCall,
   logout,
@@ -31,7 +41,7 @@ import {
 } from "./lib/api";
 import { formatPhoneNumber, pipelineLabel } from "./lib/format";
 
-const organizedGroups = ["contacted", "engaged", "appointment", "negotiation", "sold", "lost"];
+const organizedGroups = ["contacted", "appointment", "negotiation", "sold", "lost"];
 
 function capitalizeSource(source) {
   return String(source || "")
@@ -67,6 +77,7 @@ function formatLead(lead) {
     id: lead.id,
     customerName: lead.customer_name,
     assignedTo: lead.assigned_to ?? null,
+    inventoryId: lead.inventory_id ?? null,
     rawPhone: lead.phone || "",
     phone: lead.phone ? formatPhoneNumber(lead.phone) : "Not available",
     email: lead.email || "No email on file",
@@ -87,6 +98,19 @@ function formatLead(lead) {
     vehicleCondition: lead.vehicle_condition || "",
     vehiclePrice: lead.vehicle_price || "",
     leadType: lead.lead_type || "",
+    inventory: lead.inventory
+      ? {
+          id: lead.inventory.id,
+          stockNumber: lead.inventory.stock_number || "",
+          vin: lead.inventory.vin || "",
+          year: lead.inventory.year || "",
+          make: lead.inventory.make || "",
+          model: lead.inventory.model || "",
+          trim: lead.inventory.trim || "",
+          price: lead.inventory.price ?? null,
+          status: lead.inventory.status || "",
+        }
+      : null,
     lastActivity: formatRelative(lead.latest_activity_at || lead.updated_at),
     createdAtLabel: formatRelative(lead.created_at),
     updatedAtLabel: formatRelative(lead.updated_at),
@@ -146,58 +170,81 @@ function formatConversationItem(item) {
   };
 }
 
-function buildInventoryRows(leads = []) {
-  const groups = new Map();
-
-  leads.forEach((lead) => {
-    const key = [
-      lead.stockNumber || "",
-      lead.vehicleYear || "",
-      lead.vehicleMake || "",
-      lead.vehicleModel || "",
-      lead.vehicleTrim || "",
-      lead.listingUrl || "",
-    ].join("|");
-
-    if (!key.replace(/\|/g, "")) {
-      return;
-    }
-
-    const existing = groups.get(key) || {
-      key,
-      stockNumber: lead.stockNumber || "No stock",
-      title:
-        [lead.vehicleYear, lead.vehicleMake, lead.vehicleModel, lead.vehicleTrim].filter(Boolean).join(" ") ||
-        lead.vehicleInterest,
-      condition: lead.vehicleCondition || "",
-      price: lead.vehiclePrice || "",
-      listingUrl: lead.listingUrl || "",
-      leadCount: 0,
-      latestActivityAt: null,
-      latestLeadId: null,
-      latestLeadName: "",
-      latestLeadStatus: "",
-    };
-
-    existing.leadCount += 1;
-    const currentTime = new Date(lead.updated_at || 0).getTime();
-    const previousTime = new Date(existing.latestActivityAt || 0).getTime();
-    if (!existing.latestActivityAt || currentTime >= previousTime) {
-      existing.latestActivityAt = lead.updated_at || null;
-      existing.latestLeadId = lead.id;
-      existing.latestLeadName = lead.customerName;
-      existing.latestLeadStatus = lead.statusLabel;
-    }
-
-    groups.set(key, existing);
-  });
-
-  return [...groups.values()].sort(
-    (left, right) => new Date(right.latestActivityAt || 0).getTime() - new Date(left.latestActivityAt || 0).getTime()
-  );
+function formatUnmatchedItem(item) {
+  const phone = item.normalized_from_number || item.from_number || "";
+  return {
+    id: item.id,
+    type: item.type,
+    status: item.status,
+    direction: item.direction || "inbound",
+    rawPhone: phone,
+    phone: phone ? formatPhoneNumber(phone) : "Not available",
+    preview:
+      item.type === "sms"
+        ? item.body_text || "No message body."
+        : item.call_duration != null
+          ? `Inbound call lasting ${item.call_duration}s`
+          : "Inbound call",
+    bodyText: item.body_text || "",
+    callDuration: item.call_duration == null ? null : Number(item.call_duration),
+    receivedAt: item.received_at || item.created_at || null,
+    receivedAtLabel: formatRelative(item.received_at || item.created_at),
+    providerMessageId: item.provider_message_id || null,
+    providerCallId: item.provider_call_id || null,
+    crmUserId: item.crm_user_id == null ? null : Number(item.crm_user_id),
+    providerExtensionId: item.provider_extension_id || null,
+    resolvedLeadId: item.resolved_lead_id == null ? null : Number(item.resolved_lead_id),
+    resolvedLeadName: item.resolved_lead_name || null,
+  };
 }
 
-function buildAnalyticsSnapshot({ leadLibrary = [], attentionLeads = [], organizedLeadGroups = {}, conversationFeed = [] }) {
+function formatInventoryItem(item) {
+  return {
+    id: item.id,
+    stockNumber: item.stock_number || "",
+    vin: item.vin || "",
+    year: item.year ?? null,
+    make: item.make || "",
+    model: item.model || "",
+    trim: item.trim || "",
+    price: item.price ?? null,
+    mileage: item.mileage ?? null,
+    condition: item.condition || "",
+    bodyStyle: item.body_style || "",
+    exteriorColor: item.exterior_color || "",
+    interiorColor: item.interior_color || "",
+    status: item.status || "",
+    source: item.source || "",
+    sourceFile: item.source_file || "",
+    lastSeenAt: item.last_seen_at || null,
+    updatedAt: item.updated_at || null,
+  };
+}
+
+function formatInventoryRun(run) {
+  return {
+    id: run.id,
+    sourceName: run.source_name || "",
+    fileName: run.file_name || "",
+    status: run.status || "",
+    rowsTotal: Number(run.rows_total || 0),
+    rowsInserted: Number(run.rows_inserted || 0),
+    rowsUpdated: Number(run.rows_updated || 0),
+    rowsSkipped: Number(run.rows_skipped || 0),
+    rowsDeactivated: Number(run.rows_deactivated || 0),
+    errorCount: Number(run.error_count || 0),
+    startedAt: run.started_at || null,
+    completedAt: run.completed_at || null,
+  };
+}
+
+function buildAnalyticsSnapshot({
+  leadLibrary = [],
+  attentionLeads = [],
+  organizedLeadGroups = {},
+  conversationFeed = [],
+  inventoryItems = [],
+}) {
   const statusCounts = {};
   const sourceCounts = {};
 
@@ -212,7 +259,7 @@ function buildAnalyticsSnapshot({ leadLibrary = [], attentionLeads = [], organiz
     organizedCount: Object.values(organizedLeadGroups).reduce((sum, items) => sum + items.length, 0),
     unassignedCount: leadLibrary.filter((lead) => !lead.assignedTo).length,
     conversationsCount: conversationFeed.length,
-    inventoryCount: buildInventoryRows(leadLibrary).length,
+    inventoryCount: inventoryItems.length,
     statusCounts,
     sourceCounts,
   };
@@ -242,24 +289,37 @@ export default function App() {
   const [leadLibrary, setLeadLibrary] = useState([]);
   const [organizedLeadGroups, setOrganizedLeadGroups] = useState({
     contacted: [],
-    engaged: [],
     appointment: [],
     negotiation: [],
     sold: [],
     lost: [],
   });
+  const [inventoryItems, setInventoryItems] = useState([]);
+  const [inventoryImportRuns, setInventoryImportRuns] = useState([]);
+  const [unmatchedItems, setUnmatchedItems] = useState([]);
   const [conversationFeed, setConversationFeed] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [metrics, setMetrics] = useState(emptyMetrics);
   const [selectedLeadId, setSelectedLeadId] = useState(null);
   const [selectedLeadDetails, setSelectedLeadDetails] = useState(null);
+  const [selectedUnmatchedId, setSelectedUnmatchedId] = useState(null);
   const [activeSection, setActiveSection] = useState("Dashboard");
   const [users, setUsers] = useState([]);
   const [assignees, setAssignees] = useState([]);
   const [query, setQuery] = useState("");
   const [leadStatusFilter, setLeadStatusFilter] = useState("all");
+  const [unmatchedStatusFilter, setUnmatchedStatusFilter] = useState("new");
+  const [inventoryFilters, setInventoryFilters] = useState({
+    status: "",
+    make: "",
+    model: "",
+    stockNumber: "",
+    vin: "",
+  });
   const [loading, setLoading] = useState(true);
   const [libraryLoading, setLibraryLoading] = useState(false);
+  const [inventoryLoading, setInventoryLoading] = useState(false);
+  const [unmatchedLoading, setUnmatchedLoading] = useState(false);
   const [conversationLoading, setConversationLoading] = useState(false);
   const [usersLoading, setUsersLoading] = useState(false);
   const [assigneesLoading, setAssigneesLoading] = useState(false);
@@ -269,14 +329,25 @@ export default function App() {
   const [callLogging, setCallLogging] = useState(false);
   const [holdSubmitting, setHoldSubmitting] = useState(false);
   const [smsSending, setSmsSending] = useState(false);
+  const [inventoryImporting, setInventoryImporting] = useState(false);
+  const [inventoryLinking, setInventoryLinking] = useState(false);
+  const [unmatchedAssigning, setUnmatchedAssigning] = useState(false);
+  const [unmatchedCreating, setUnmatchedCreating] = useState(false);
+  const [unmatchedDismissing, setUnmatchedDismissing] = useState(false);
   const [taskCompletingId, setTaskCompletingId] = useState(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [userSubmitting, setUserSubmitting] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [leadLibraryLoaded, setLeadLibraryLoaded] = useState(false);
+  const [inventoryLoaded, setInventoryLoaded] = useState(false);
+  const [unmatchedLoaded, setUnmatchedLoaded] = useState(false);
   const [conversationFeedLoaded, setConversationFeedLoaded] = useState(false);
   const [error, setError] = useState("");
+  const [inventoryImportForm, setInventoryImportForm] = useState({
+    sourceName: "",
+    markMissingInactive: false,
+  });
   const [userForm, setUserForm] = useState({
     name: "",
     email: "",
@@ -319,6 +390,49 @@ export default function App() {
       }
     } finally {
       setLibraryLoading(false);
+    }
+  }
+
+  async function loadInventoryData() {
+    setInventoryLoading(true);
+    try {
+      const [inventoryResponse, runsResponse] = await Promise.all([
+        getInventory({
+          limit: 250,
+          status: inventoryFilters.status,
+          make: inventoryFilters.make,
+          model: inventoryFilters.model,
+          stock_number: inventoryFilters.stockNumber,
+          vin: inventoryFilters.vin,
+        }),
+        getInventoryImportRuns(10),
+      ]);
+      setInventoryItems((inventoryResponse.items || []).map(formatInventoryItem));
+      setInventoryImportRuns((runsResponse.items || []).map(formatInventoryRun));
+      setInventoryLoaded(true);
+    } finally {
+      setInventoryLoading(false);
+    }
+  }
+
+  async function loadUnmatchedQueue({ preserveSelection = true } = {}) {
+    setUnmatchedLoading(true);
+    try {
+      const payload = await getUnmatchedCommunications({
+        limit: 200,
+        status: unmatchedStatusFilter === "all" ? "" : unmatchedStatusFilter,
+      });
+      const items = (payload.items || []).map(formatUnmatchedItem);
+      setUnmatchedItems(items);
+      setUnmatchedLoaded(true);
+      if ((!preserveSelection || !selectedUnmatchedId) && items[0]) {
+        setSelectedUnmatchedId(items[0].id);
+      }
+      if (selectedUnmatchedId && !items.some((item) => item.id === selectedUnmatchedId)) {
+        setSelectedUnmatchedId(items[0]?.id || null);
+      }
+    } finally {
+      setUnmatchedLoading(false);
     }
   }
 
@@ -439,8 +553,12 @@ export default function App() {
 
     async function loadSectionData() {
       try {
-        if (["Leads", "Inventory", "Analytics"].includes(activeSection) && !leadLibraryLoaded) {
+        if (["Leads", "Analytics", "Unmatched"].includes(activeSection) && !leadLibraryLoaded) {
           await loadLeadLibrary();
+        }
+
+        if ((activeSection === "Inventory" || !inventoryLoaded) && authStatus === "authenticated") {
+          await loadInventoryData();
         }
 
         if (["Conversations", "Analytics"].includes(activeSection) && !conversationFeedLoaded) {
@@ -458,7 +576,57 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeSection, authStatus, conversationFeedLoaded, leadLibraryLoaded]);
+  }, [activeSection, authStatus, conversationFeedLoaded, leadLibraryLoaded, inventoryLoaded]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || activeSection !== "Inventory") {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function refreshInventory() {
+      try {
+        await loadInventoryData();
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError.message || "Unable to load inventory.");
+        }
+      }
+    }
+
+    refreshInventory();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, authStatus, inventoryFilters.status, inventoryFilters.make, inventoryFilters.model, inventoryFilters.stockNumber, inventoryFilters.vin]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || activeSection !== "Unmatched") {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadQueue() {
+      try {
+        await loadUnmatchedQueue();
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError.message || "Unable to load unmatched communications.");
+        }
+      }
+    }
+
+    if (!unmatchedLoaded || activeSection === "Unmatched") {
+      loadQueue();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, authStatus, unmatchedStatusFilter]);
 
   useEffect(() => {
     if (!selectedLeadId && ["Leads", "Inventory"].includes(activeSection) && leadLibrary[0]) {
@@ -632,12 +800,34 @@ export default function App() {
       .toLowerCase()
       .includes(search)
   );
-  const inventoryRows = buildInventoryRows(visibleLeadLibrary);
+  const visibleUnmatchedItems = unmatchedItems.filter((item) =>
+    !search ||
+    [
+      item.phone,
+      item.rawPhone,
+      item.preview,
+      item.status,
+      item.type,
+      item.providerExtensionId,
+      item.resolvedLeadName,
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(search)
+  );
+  const visibleInventoryItems = inventoryItems.filter((item) =>
+    !search ||
+    [item.stockNumber, item.vin, item.make, item.model, item.trim, item.status]
+      .join(" ")
+      .toLowerCase()
+      .includes(search)
+  );
   const analytics = buildAnalyticsSnapshot({
     leadLibrary: visibleLeadLibrary,
     attentionLeads: visibleAttentionLeads,
     organizedLeadGroups: visibleOrganizedGroups,
     conversationFeed: visibleConversationFeed,
+    inventoryItems: visibleInventoryItems,
   });
 
   const selectedLead =
@@ -650,6 +840,10 @@ export default function App() {
         flattenedOrganizedLeads.find((lead) => lead.id === selectedLeadId) ??
         organizedGroups.flatMap((group) => organizedLeadGroups[group]).find((lead) => lead.id === selectedLeadId) ??
         null;
+  const selectedUnmatched =
+    visibleUnmatchedItems.find((item) => item.id === selectedUnmatchedId) ??
+    unmatchedItems.find((item) => item.id === selectedUnmatchedId) ??
+    null;
 
   async function handleStatusChange(nextStatus) {
     if (!selectedLeadId) {
@@ -738,21 +932,26 @@ export default function App() {
       setActiveSection("Dashboard");
       setLeads([]);
       setLeadLibrary([]);
+      setInventoryItems([]);
+      setInventoryImportRuns([]);
       setOrganizedLeadGroups({
         contacted: [],
-        engaged: [],
         appointment: [],
         negotiation: [],
         sold: [],
         lost: [],
       });
+      setUnmatchedItems([]);
       setConversationFeed([]);
       setMetrics(emptyMetrics);
       setUsers([]);
       setAssignees([]);
       setNotifications([]);
       setLeadLibraryLoaded(false);
+      setInventoryLoaded(false);
+      setUnmatchedLoaded(false);
       setConversationFeedLoaded(false);
+      setSelectedUnmatchedId(null);
     }
   }
 
@@ -853,6 +1052,125 @@ export default function App() {
     }
   }
 
+  async function handleImportInventoryFile(file) {
+    try {
+      setInventoryImporting(true);
+      const csvText = await file.text();
+      await importInventory({
+        file_name: file.name,
+        csv_text: csvText,
+        source_name: inventoryImportForm.sourceName || null,
+        mark_missing_inactive: inventoryImportForm.markMissingInactive,
+      });
+      await loadInventoryData();
+      setError("");
+    } catch (importError) {
+      setError(importError.message || "Unable to import inventory.");
+    } finally {
+      setInventoryImporting(false);
+    }
+  }
+
+  async function handleLinkInventory(inventoryId) {
+    if (!selectedLeadId) {
+      return;
+    }
+
+    try {
+      setInventoryLinking(true);
+      const payload = await linkLeadInventory(selectedLeadId, inventoryId);
+      setSelectedLeadDetails({
+        ...formatLead(payload.lead),
+        activities: (payload.activities || []).map(formatActivity),
+        timeline: (payload.timeline || []).map(formatTimelineItem),
+        tasks: payload.tasks || [],
+      });
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary();
+      }
+      await refreshWorklist();
+      setError("");
+    } catch (linkError) {
+      setError(linkError.message || "Unable to link inventory.");
+      throw linkError;
+    } finally {
+      setInventoryLinking(false);
+    }
+  }
+
+  async function handleAssignUnmatched(leadId) {
+    if (!selectedUnmatchedId) {
+      return;
+    }
+
+    try {
+      setUnmatchedAssigning(true);
+      const payload = await assignUnmatchedCommunication(selectedUnmatchedId, leadId);
+      setSelectedLeadId(payload.lead.id);
+      setSelectedLeadDetails({
+        ...formatLead(payload.lead),
+        activities: (payload.activities || []).map(formatActivity),
+        timeline: (payload.timeline || []).map(formatTimelineItem),
+        tasks: payload.tasks || [],
+      });
+      setActiveSection("Leads");
+      await refreshWorklist();
+      await loadLeadLibrary();
+      await loadConversationFeed();
+      await loadUnmatchedQueue({ preserveSelection: false });
+      setError("");
+    } catch (assignError) {
+      setError(assignError.message || "Unable to attach the communication to a lead.");
+    } finally {
+      setUnmatchedAssigning(false);
+    }
+  }
+
+  async function handleCreateLeadFromUnmatched(payload = {}) {
+    if (!selectedUnmatchedId) {
+      return;
+    }
+
+    try {
+      setUnmatchedCreating(true);
+      const response = await createLeadFromUnmatched(selectedUnmatchedId, payload);
+      setSelectedLeadId(response.lead.id);
+      setSelectedLeadDetails({
+        ...formatLead(response.lead),
+        activities: (response.activities || []).map(formatActivity),
+        timeline: (response.timeline || []).map(formatTimelineItem),
+        tasks: response.tasks || [],
+      });
+      setActiveSection("Leads");
+      await refreshWorklist();
+      await loadLeadLibrary();
+      await loadConversationFeed();
+      await loadUnmatchedQueue({ preserveSelection: false });
+      setError("");
+    } catch (createError) {
+      setError(createError.message || "Unable to create a lead from this communication.");
+    } finally {
+      setUnmatchedCreating(false);
+    }
+  }
+
+  async function handleDismissUnmatched() {
+    if (!selectedUnmatchedId) {
+      return;
+    }
+
+    try {
+      setUnmatchedDismissing(true);
+      await dismissUnmatchedCommunication(selectedUnmatchedId);
+      await loadUnmatchedQueue({ preserveSelection: false });
+      setError("");
+    } catch (dismissError) {
+      setError(dismissError.message || "Unable to dismiss the communication.");
+    } finally {
+      setUnmatchedDismissing(false);
+    }
+  }
+
   async function handleMarkNotificationRead(notificationId) {
     try {
       await markNotificationRead(notificationId);
@@ -922,12 +1240,14 @@ export default function App() {
   const showTeam = activeSection === "Team" && currentUser?.role === "admin";
   const showDashboard = activeSection === "Dashboard";
   const showLeads = activeSection === "Leads";
+  const showUnmatched = activeSection === "Unmatched";
   const showConversations = activeSection === "Conversations";
   const showInventory = activeSection === "Inventory";
   const showAnalytics = activeSection === "Analytics";
   const sectionTitle = {
     Dashboard: "Sales execution",
     Leads: "Lead pipeline",
+    Unmatched: "Unmatched communications",
     Conversations: "Conversations",
     Inventory: "Inventory focus",
     Analytics: "Pipeline analytics",
@@ -936,8 +1256,9 @@ export default function App() {
   const sectionDescription = {
     Dashboard: "Show only the leads that need a rep or manager to act right now.",
     Leads: "Review the organized pipeline after urgent work is handled.",
+    Unmatched: "Capture inbound calls and SMS that did not match a lead, then resolve them into the CRM.",
     Conversations: "See the latest inbound and outbound communication in one place and jump straight into the lead record.",
-    Inventory: "Group open opportunities by vehicle so the desk can see what stock is driving demand.",
+    Inventory: "Manage real dealership inventory units, import CSV snapshots, and link leads to structured stock records.",
     Analytics: "Track where leads sit, which sources are feeding the desk, and how much of the pipeline is actionable.",
     Team: "Manage CRM access for the dealership team.",
   }[activeSection];
@@ -1215,6 +1536,84 @@ export default function App() {
                   </>
                 ) : null}
 
+                {showUnmatched ? (
+                  <>
+                    <div className="flex flex-col gap-4 border-b border-white/10 pb-4 lg:flex-row lg:items-end lg:justify-between">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Inbox for unknown numbers</p>
+                        <h2 className="mt-2 font-display text-2xl font-semibold text-white">Unmatched communications</h2>
+                        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
+                          Inbound calls and SMS that did not match a lead stay here until a user attaches them, creates a lead, or dismisses them.
+                        </p>
+                      </div>
+                      <label className="grid gap-2 lg:min-w-[220px]">
+                        <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Status filter</span>
+                        <select
+                          value={unmatchedStatusFilter}
+                          onChange={(event) => setUnmatchedStatusFilter(event.target.value)}
+                          className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+                        >
+                          <option value="new" className="bg-ink-900">
+                            New only
+                          </option>
+                          <option value="resolved" className="bg-ink-900">
+                            Resolved
+                          </option>
+                          <option value="dismissed" className="bg-ink-900">
+                            Dismissed
+                          </option>
+                          <option value="all" className="bg-ink-900">
+                            All statuses
+                          </option>
+                        </select>
+                      </label>
+                    </div>
+                    <div className="mt-4 grid gap-4">
+                      {unmatchedLoading ? (
+                        Array.from({ length: 4 }).map((_, index) => (
+                          <div key={index} className="h-36 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
+                        ))
+                      ) : visibleUnmatchedItems.length ? (
+                        visibleUnmatchedItems.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setSelectedUnmatchedId(item.id)}
+                            className={`w-full rounded-[1.75rem] border p-5 text-left transition ${
+                              item.id === selectedUnmatched?.id
+                                ? "border-ice-400/40 bg-white/10 shadow-glow"
+                                : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-4">
+                              <div>
+                                <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                                  {item.type === "call" ? "Call" : "SMS"} | {item.receivedAtLabel}
+                                </p>
+                                <h3 className="mt-2 font-display text-lg font-semibold text-white">{item.phone}</h3>
+                                <p className="mt-1 text-sm text-slate-300">{item.preview}</p>
+                              </div>
+                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-300">
+                                {item.status}
+                              </span>
+                            </div>
+                            <div className="mt-4 flex flex-wrap gap-2 text-xs uppercase tracking-[0.2em] text-slate-500">
+                              <span>{item.direction}</span>
+                              {item.providerExtensionId ? <span>Ext {item.providerExtensionId}</span> : null}
+                              {item.callDuration != null ? <span>{item.callDuration}s</span> : null}
+                              {item.resolvedLeadName ? <span>{item.resolvedLeadName}</span> : null}
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
+                          No unmatched communications match this view.
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : null}
+
                 {showConversations ? (
                   <>
                     <div className="border-b border-white/10 pb-4">
@@ -1269,56 +1668,39 @@ export default function App() {
                 ) : null}
 
                 {showInventory ? (
-                  <>
-                    <div className="border-b border-white/10 pb-4">
-                      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Vehicle demand</p>
-                      <h2 className="mt-2 font-display text-2xl font-semibold text-white">Inventory references</h2>
-                    </div>
-                    <div className="mt-4 grid gap-4">
-                      {libraryLoading ? (
-                        Array.from({ length: 4 }).map((_, index) => (
-                          <div key={index} className="h-36 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
-                        ))
-                      ) : inventoryRows.length ? (
-                        inventoryRows.map((item) => (
-                          <button
-                            key={item.key}
-                            type="button"
-                            onClick={() => setSelectedLeadId(item.latestLeadId)}
-                            className={`w-full rounded-[1.75rem] border p-5 text-left transition ${
-                              Number(item.latestLeadId) === Number(selectedLead?.id)
-                                ? "border-ice-400/40 bg-white/10 shadow-glow"
-                                : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]"
-                            }`}
-                          >
-                            <div className="flex items-start justify-between gap-4">
-                              <div>
-                                <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Stock {item.stockNumber}</p>
-                                <h3 className="mt-2 font-display text-lg font-semibold text-white">{item.title}</h3>
-                              </div>
-                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
-                                {item.leadCount} lead{item.leadCount === 1 ? "" : "s"}
-                              </span>
-                            </div>
-                            <div className="mt-4 flex flex-wrap gap-2 text-sm text-slate-300">
-                              {item.condition ? <span>{item.condition}</span> : null}
-                              {item.price ? <span>${item.price}</span> : null}
-                              <span>Latest: {item.latestLeadName}</span>
-                              <span>{item.latestLeadStatus}</span>
-                            </div>
-                          </button>
-                        ))
-                      ) : (
-                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                          No inventory-linked leads matched this search.
-                        </div>
-                      )}
-                    </div>
-                  </>
+                  <InventoryPanel
+                    items={visibleInventoryItems}
+                    loading={inventoryLoading}
+                    filters={inventoryFilters}
+                    onFilterChange={(field, value) =>
+                      setInventoryFilters((current) => ({
+                        ...current,
+                        [field]: value,
+                      }))
+                    }
+                    canImport={currentUser?.role === "admin" || currentUser?.role === "manager"}
+                    importSourceName={inventoryImportForm.sourceName}
+                    importMarkMissingInactive={inventoryImportForm.markMissingInactive}
+                    importSubmitting={inventoryImporting}
+                    importRuns={inventoryImportRuns}
+                    onImportSourceNameChange={(value) =>
+                      setInventoryImportForm((current) => ({
+                        ...current,
+                        sourceName: value,
+                      }))
+                    }
+                    onImportMarkMissingInactiveChange={(checked) =>
+                      setInventoryImportForm((current) => ({
+                        ...current,
+                        markMissingInactive: checked,
+                      }))
+                    }
+                    onImportFileSelected={handleImportInventoryFile}
+                  />
                 ) : null}
               </div>
 
-              {!showAnalytics ? (
+              {!showAnalytics && !showUnmatched ? (
                 <div className="2xl:sticky 2xl:top-6 2xl:self-start">
                   <LeadDetailsPanel
                     lead={selectedLead}
@@ -1339,6 +1721,24 @@ export default function App() {
                     callLogging={callLogging}
                     onHoldVehicle={handleHoldVehicle}
                     holdSubmitting={holdSubmitting}
+                    inventoryOptions={inventoryItems}
+                    inventoryLinking={inventoryLinking}
+                    onLinkInventory={handleLinkInventory}
+                  />
+                </div>
+              ) : null}
+              {showUnmatched ? (
+                <div className="2xl:sticky 2xl:top-6 2xl:self-start">
+                  <UnmatchedCommunicationPanel
+                    item={selectedUnmatched}
+                    leads={leadLibrary}
+                    loading={unmatchedLoading}
+                    assigning={unmatchedAssigning}
+                    creating={unmatchedCreating}
+                    dismissing={unmatchedDismissing}
+                    onAssign={handleAssignUnmatched}
+                    onCreateLead={handleCreateLeadFromUnmatched}
+                    onDismiss={handleDismissUnmatched}
                   />
                 </div>
               ) : null}

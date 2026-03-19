@@ -6,7 +6,7 @@ const { DEFAULT_EXECUTION_SETTINGS, normalizeExecutionSettings } = require("../c
 const { categorizeOrganizedLead, evaluateLeadAttention } = require("../models/attention");
 const { canTransitionLeadStatus, CRM_LEAD_STATUSES } = require("../models/leadStatus");
 const {
-  CrmDatabase,
+  BaseCrmDatabase,
   DEALER_PIPELINE_STATUSES,
   NotFoundError,
   UnauthorizedError,
@@ -14,7 +14,7 @@ const {
   fromStoredStatus,
   titleCaseStatus,
   toStoredStatus,
-} = require("./database");
+} = require("./core");
 const { canViewAllLeads } = require("../models/user");
 const { LEAD_ACTIVITY_TYPES } = require("../types/models");
 const { normalizePhone } = require("../utils/phones");
@@ -42,12 +42,60 @@ function plusHours(dateString, hours) {
   return date.toISOString();
 }
 
+function stringOrNull(value) {
+  const normalized = String(value ?? "").trim();
+  return normalized ? normalized : null;
+}
+
+function normalizeInventoryIdentity(value) {
+  return stringOrNull(value)?.toUpperCase() || null;
+}
+
+function parseIntegerField(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+
+  const digits = String(value).replace(/[^0-9.-]/g, "");
+  if (!digits) {
+    return null;
+  }
+
+  const parsed = Number(digits);
+  return Number.isFinite(parsed) ? Math.round(parsed) : null;
+}
+
+function normalizeInventoryStatus(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
+  if (!normalized) {
+    return "active";
+  }
+
+  if (["active", "inactive", "sold", "removed"].includes(normalized)) {
+    return normalized;
+  }
+
+  if (["available", "instock", "in_stock", "in-stock"].includes(normalized)) {
+    return "active";
+  }
+
+  if (["deleted", "archived"].includes(normalized)) {
+    return "removed";
+  }
+
+  return "inactive";
+}
+
 function withPgPlaceholders(sql) {
   let index = 0;
   return sql.replace(/\?/g, () => `$${++index}`);
 }
 
-class PostgresCrmDatabase extends CrmDatabase {
+class PostgresCrmDatabase extends BaseCrmDatabase {
   static async initialize({ connectionString, ssl = false }) {
     const pool = new Pool({
       connectionString,
@@ -61,7 +109,7 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   constructor({ pool }) {
-    super({ db: null, dbPath: null });
+    super();
     this.pool = pool;
   }
 
@@ -182,6 +230,59 @@ class PostgresCrmDatabase extends CrmDatabase {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS inventory (
+        id BIGSERIAL PRIMARY KEY,
+        dealership_id BIGINT NOT NULL DEFAULT 1,
+        stock_number TEXT,
+        vin TEXT,
+        year INTEGER,
+        make TEXT,
+        model TEXT,
+        trim TEXT,
+        price BIGINT,
+        mileage BIGINT,
+        condition TEXT,
+        body_style TEXT,
+        exterior_color TEXT,
+        interior_color TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        source TEXT,
+        source_file TEXT,
+        last_seen_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS inventory_import_runs (
+        id BIGSERIAL PRIMARY KEY,
+        dealership_id BIGINT NOT NULL DEFAULT 1,
+        source_type TEXT NOT NULL,
+        source_name TEXT,
+        file_name TEXT,
+        status TEXT NOT NULL,
+        rows_total INTEGER NOT NULL DEFAULT 0,
+        rows_inserted INTEGER NOT NULL DEFAULT 0,
+        rows_updated INTEGER NOT NULL DEFAULT 0,
+        rows_skipped INTEGER NOT NULL DEFAULT 0,
+        rows_deactivated INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS inventory_import_errors (
+        id BIGSERIAL PRIMARY KEY,
+        import_run_id BIGINT NOT NULL REFERENCES inventory_import_runs(id) ON DELETE CASCADE,
+        row_number INTEGER,
+        stock_number TEXT,
+        vin TEXT,
+        error_message TEXT NOT NULL,
+        raw_row_json TEXT,
+        created_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS tasks (
         id BIGSERIAL PRIMARY KEY,
         dealership_id BIGINT NOT NULL DEFAULT 1,
@@ -245,13 +346,30 @@ class PostgresCrmDatabase extends CrmDatabase {
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_type TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS listing_url TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS message TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS inventory_id BIGINT REFERENCES inventory(id) ON DELETE SET NULL;
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS normalized_phone TEXT;
 
       CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_leads_normalized_phone ON leads(normalized_phone);
+      CREATE INDEX IF NOT EXISTS idx_leads_inventory_id ON leads(inventory_id);
       CREATE INDEX IF NOT EXISTS idx_contacts_normalized_phone ON contacts(normalized_phone);
       CREATE INDEX IF NOT EXISTS idx_activities_lead_id_created_at ON activities(lead_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_imported_messages_external_id ON imported_messages(external_id);
+      CREATE INDEX IF NOT EXISTS idx_inventory_dealership_id ON inventory(dealership_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_inventory_stock_number ON inventory(stock_number);
+      CREATE INDEX IF NOT EXISTS idx_inventory_vin ON inventory(vin);
+      CREATE INDEX IF NOT EXISTS idx_inventory_status ON inventory(status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_inventory_make_model ON inventory(make, model);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_dealership_stock_number
+        ON inventory(dealership_id, stock_number)
+        WHERE stock_number IS NOT NULL AND BTRIM(stock_number) <> '';
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_dealership_vin
+        ON inventory(dealership_id, vin)
+        WHERE vin IS NOT NULL AND BTRIM(vin) <> '';
+      CREATE INDEX IF NOT EXISTS idx_inventory_import_runs_dealership_started_at
+        ON inventory_import_runs(dealership_id, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_inventory_import_errors_run_id
+        ON inventory_import_errors(import_run_id, row_number);
       CREATE INDEX IF NOT EXISTS idx_tasks_user_status_due_at ON tasks(user_id, status, due_at);
       CREATE INDEX IF NOT EXISTS idx_tasks_lead_status_due_at ON tasks(lead_id, status, due_at);
       CREATE INDEX IF NOT EXISTS idx_notifications_user_status_created_at ON notifications(user_id, status, created_at DESC);
@@ -489,9 +607,18 @@ class PostgresCrmDatabase extends CrmDatabase {
         leads.next_action,
         leads.contact_id,
         leads.assigned_to,
+        leads.inventory_id,
         contacts.phone AS contact_phone,
         contacts.normalized_phone AS contact_normalized_phone,
         contacts.email AS contact_email,
+        inventory.stock_number AS inventory_stock_number,
+        inventory.vin AS inventory_vin,
+        inventory.year AS inventory_year,
+        inventory.make AS inventory_make,
+        inventory.model AS inventory_model,
+        inventory.trim AS inventory_trim,
+        inventory.price AS inventory_price,
+        inventory.status AS inventory_status,
         CASE
           WHEN leads.customer_name IS NOT NULL AND TRIM(leads.customer_name) <> '' THEN TRIM(leads.customer_name)
           WHEN TRIM(contacts.first_name || ' ' || contacts.last_name) <> '' THEN TRIM(contacts.first_name || ' ' || contacts.last_name)
@@ -521,6 +648,7 @@ class PostgresCrmDatabase extends CrmDatabase {
         ) AS latest_activity_at
       FROM leads
       LEFT JOIN contacts ON contacts.id = leads.contact_id
+      LEFT JOIN inventory ON inventory.id = leads.inventory_id AND inventory.dealership_id = leads.dealership_id
       LEFT JOIN users AS sales_user ON sales_user.id = leads.assigned_to
     `;
   }
@@ -538,6 +666,7 @@ class PostgresCrmDatabase extends CrmDatabase {
       source: row.source || "manual",
       customer_name: customerName,
       assigned_to: row.assigned_to == null ? null : Number(row.assigned_to),
+      inventory_id: row.inventory_id == null ? null : Number(row.inventory_id),
       phone,
       normalized_phone: row.normalized_phone || row.contact_normalized_phone || null,
       email,
@@ -560,6 +689,45 @@ class PostgresCrmDatabase extends CrmDatabase {
       created_at: row.created_at,
       updated_at: row.updated_at,
       latest_activity_at: row.latest_activity_at || row.updated_at,
+      inventory:
+        row.inventory_id == null
+          ? null
+          : {
+              id: Number(row.inventory_id),
+              stock_number: row.inventory_stock_number || null,
+              vin: row.inventory_vin || null,
+              year: row.inventory_year == null ? null : Number(row.inventory_year),
+              make: row.inventory_make || null,
+              model: row.inventory_model || null,
+              trim: row.inventory_trim || null,
+              price: row.inventory_price == null ? null : Number(row.inventory_price),
+              status: row.inventory_status || null,
+            },
+    };
+  }
+
+  formatInventoryRow(row) {
+    return {
+      id: Number(row.id),
+      dealership_id: Number(row.dealership_id),
+      stock_number: row.stock_number || null,
+      vin: row.vin || null,
+      year: row.year == null ? null : Number(row.year),
+      make: row.make || null,
+      model: row.model || null,
+      trim: row.trim || null,
+      price: row.price == null ? null : Number(row.price),
+      mileage: row.mileage == null ? null : Number(row.mileage),
+      condition: row.condition || null,
+      body_style: row.body_style || null,
+      exterior_color: row.exterior_color || null,
+      interior_color: row.interior_color || null,
+      status: row.status || "active",
+      source: row.source || null,
+      source_file: row.source_file || null,
+      last_seen_at: row.last_seen_at || null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
     };
   }
 
@@ -1671,7 +1839,6 @@ class PostgresCrmDatabase extends CrmDatabase {
     const attention = [];
     const organized = {
       contacted: [],
-      engaged: [],
       appointment: [],
       negotiation: [],
       sold: [],
@@ -1755,11 +1922,16 @@ class PostgresCrmDatabase extends CrmDatabase {
     });
   }
 
-  async createApiLead(input) {
+  async createApiLead(input, user = null) {
     const now = new Date().toISOString();
     const storedStatus = toStoredStatus(input.status || "new");
-    const dealershipId = getDefaultDealershipId();
+    const dealershipId = input.dealership_id
+      ? Number(input.dealership_id)
+      : user
+        ? this.currentDealershipId(user)
+        : getDefaultDealershipId();
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
+    const assignedTo = input.assigned_to == null ? null : Number(input.assigned_to);
 
     const row = await this.get(
       `
@@ -1793,7 +1965,7 @@ class PostgresCrmDatabase extends CrmDatabase {
         dealershipId,
         input.source || "website",
         storedStatus || "new",
-        null,
+        assignedTo,
         input.customer_name || null,
         input.phone || null,
         normalizedPhone,
@@ -1822,7 +1994,7 @@ class PostgresCrmDatabase extends CrmDatabase {
       created_at: now,
     });
 
-    return this.getApiLead(row.id);
+    return this.getApiLead(row.id, user);
   }
 
   async updateApiLead(id, input, actor = null) {
@@ -1937,6 +2109,447 @@ class PostgresCrmDatabase extends CrmDatabase {
     };
   }
 
+  async listInventoryForApi(filters = {}, user = null) {
+    const dealershipId = this.currentDealershipId(user);
+    const clauses = ["inventory.dealership_id = ?"];
+    const params = [dealershipId];
+
+    if (stringOrNull(filters.status)) {
+      clauses.push("LOWER(inventory.status) = ?");
+      params.push(String(filters.status).trim().toLowerCase());
+    }
+
+    if (stringOrNull(filters.make)) {
+      clauses.push("LOWER(COALESCE(inventory.make, '')) LIKE ?");
+      params.push(`%${String(filters.make).trim().toLowerCase()}%`);
+    }
+
+    if (stringOrNull(filters.model)) {
+      clauses.push("LOWER(COALESCE(inventory.model, '')) LIKE ?");
+      params.push(`%${String(filters.model).trim().toLowerCase()}%`);
+    }
+
+    if (stringOrNull(filters.stock_number)) {
+      clauses.push("LOWER(COALESCE(inventory.stock_number, '')) LIKE ?");
+      params.push(`%${String(filters.stock_number).trim().toLowerCase()}%`);
+    }
+
+    if (stringOrNull(filters.vin)) {
+      clauses.push("LOWER(COALESCE(inventory.vin, '')) LIKE ?");
+      params.push(`%${String(filters.vin).trim().toLowerCase()}%`);
+    }
+
+    const limit = Math.max(1, Math.min(500, Number(filters.limit) || 250));
+    const rows = await this.all(
+      `
+        SELECT inventory.*
+        FROM inventory
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY
+          CASE inventory.status
+            WHEN 'active' THEN 1
+            WHEN 'inactive' THEN 2
+            WHEN 'sold' THEN 3
+            ELSE 4
+          END,
+          LOWER(COALESCE(inventory.make, '')) ASC,
+          LOWER(COALESCE(inventory.model, '')) ASC,
+          LOWER(COALESCE(inventory.stock_number, '')) ASC,
+          inventory.updated_at DESC
+        LIMIT ?
+      `,
+      [...params, limit]
+    );
+
+    return rows.map((row) => this.formatInventoryRow(row));
+  }
+
+  async getInventoryForApi(id, user = null) {
+    const row = await this.get(
+      `
+        SELECT *
+        FROM inventory
+        WHERE id = ? AND dealership_id = ?
+      `,
+      [id, this.currentDealershipId(user)]
+    );
+
+    if (!row) {
+      throw new NotFoundError("Inventory unit not found");
+    }
+
+    return this.formatInventoryRow(row);
+  }
+
+  async createInventoryImportRun(input, user = null) {
+    const now = new Date().toISOString();
+    const row = await this.get(
+      `
+        INSERT INTO inventory_import_runs (
+          dealership_id,
+          source_type,
+          source_name,
+          file_name,
+          status,
+          rows_total,
+          rows_inserted,
+          rows_updated,
+          rows_skipped,
+          rows_deactivated,
+          error_message,
+          started_at,
+          completed_at,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING *
+      `,
+      [
+        input.dealership_id || this.currentDealershipId(user),
+        input.source_type || "manual_upload",
+        input.source_name || null,
+        input.file_name || null,
+        input.status || "running",
+        Number(input.rows_total || 0),
+        Number(input.rows_inserted || 0),
+        Number(input.rows_updated || 0),
+        Number(input.rows_skipped || 0),
+        Number(input.rows_deactivated || 0),
+        input.error_message || null,
+        input.started_at || now,
+        input.completed_at || null,
+        now,
+        now,
+      ]
+    );
+
+    return {
+      ...row,
+      id: Number(row.id),
+    };
+  }
+
+  async updateInventoryImportRun(id, input, user = null) {
+    const dealershipId = input.dealership_id || this.currentDealershipId(user);
+    const existing = await this.get(
+      `
+        SELECT *
+        FROM inventory_import_runs
+        WHERE id = ? AND dealership_id = ?
+      `,
+      [id, dealershipId]
+    );
+
+    if (!existing) {
+      throw new NotFoundError("Inventory import run not found");
+    }
+
+    const row = await this.get(
+      `
+        UPDATE inventory_import_runs
+        SET
+          status = COALESCE(?, status),
+          rows_total = COALESCE(?, rows_total),
+          rows_inserted = COALESCE(?, rows_inserted),
+          rows_updated = COALESCE(?, rows_updated),
+          rows_skipped = COALESCE(?, rows_skipped),
+          rows_deactivated = COALESCE(?, rows_deactivated),
+          error_message = COALESCE(?, error_message),
+          completed_at = COALESCE(?, completed_at),
+          updated_at = ?
+        WHERE id = ? AND dealership_id = ?
+        RETURNING *
+      `,
+      [
+        input.status || null,
+        input.rows_total == null ? null : Number(input.rows_total),
+        input.rows_inserted == null ? null : Number(input.rows_inserted),
+        input.rows_updated == null ? null : Number(input.rows_updated),
+        input.rows_skipped == null ? null : Number(input.rows_skipped),
+        input.rows_deactivated == null ? null : Number(input.rows_deactivated),
+        input.error_message || null,
+        input.completed_at || null,
+        new Date().toISOString(),
+        id,
+        dealershipId,
+      ]
+    );
+
+    return {
+      ...row,
+      id: Number(row.id),
+    };
+  }
+
+  async createInventoryImportError(input, user = null) {
+    const run = await this.get(
+      `
+        SELECT id
+        FROM inventory_import_runs
+        WHERE id = ? AND dealership_id = ?
+      `,
+      [input.import_run_id, input.dealership_id || this.currentDealershipId(user)]
+    );
+
+    if (!run) {
+      throw new NotFoundError("Inventory import run not found");
+    }
+
+    const row = await this.get(
+      `
+        INSERT INTO inventory_import_errors (
+          import_run_id,
+          row_number,
+          stock_number,
+          vin,
+          error_message,
+          raw_row_json,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        RETURNING *
+      `,
+      [
+        input.import_run_id,
+        input.row_number == null ? null : Number(input.row_number),
+        input.stock_number || null,
+        input.vin || null,
+        input.error_message,
+        input.raw_row_json || null,
+        new Date().toISOString(),
+      ]
+    );
+
+    return {
+      ...row,
+      id: Number(row.id),
+    };
+  }
+
+  async listInventoryImportRuns(user = null, limit = 20) {
+    const rows = await this.all(
+      `
+        SELECT
+          inventory_import_runs.*,
+          (
+            SELECT COUNT(*)
+            FROM inventory_import_errors
+            WHERE inventory_import_errors.import_run_id = inventory_import_runs.id
+          ) AS error_count
+        FROM inventory_import_runs
+        WHERE dealership_id = ?
+        ORDER BY started_at DESC, id DESC
+        LIMIT ?
+      `,
+      [this.currentDealershipId(user), Math.max(1, Math.min(100, Number(limit) || 20))]
+    );
+
+    return rows.map((row) => ({
+      ...row,
+      id: Number(row.id),
+      dealership_id: Number(row.dealership_id),
+      rows_total: Number(row.rows_total || 0),
+      rows_inserted: Number(row.rows_inserted || 0),
+      rows_updated: Number(row.rows_updated || 0),
+      rows_skipped: Number(row.rows_skipped || 0),
+      rows_deactivated: Number(row.rows_deactivated || 0),
+      error_count: Number(row.error_count || 0),
+    }));
+  }
+
+  async findInventoryByIdentity({ dealership_id, stock_number = null, vin = null }) {
+    const normalizedStockNumber = normalizeInventoryIdentity(stock_number);
+    const normalizedVin = normalizeInventoryIdentity(vin);
+    if (!normalizedStockNumber && !normalizedVin) {
+      return null;
+    }
+
+    let stockMatch = null;
+    let vinMatch = null;
+
+    if (normalizedStockNumber) {
+      stockMatch = await this.get(
+        `
+          SELECT *
+          FROM inventory
+          WHERE dealership_id = ? AND UPPER(stock_number) = ?
+          LIMIT 1
+        `,
+        [dealership_id, normalizedStockNumber]
+      );
+    }
+
+    if (normalizedVin) {
+      vinMatch = await this.get(
+        `
+          SELECT *
+          FROM inventory
+          WHERE dealership_id = ? AND UPPER(vin) = ?
+          LIMIT 1
+        `,
+        [dealership_id, normalizedVin]
+      );
+    }
+
+    if (stockMatch && vinMatch && Number(stockMatch.id) !== Number(vinMatch.id)) {
+      throw new ValidationError("Stock number and VIN resolve to different inventory units.");
+    }
+
+    return stockMatch || vinMatch || null;
+  }
+
+  async upsertInventoryRecord(input) {
+    const now = input.updated_at || new Date().toISOString();
+    const dealershipId = Number(input.dealership_id);
+    const stockNumber = normalizeInventoryIdentity(input.stock_number);
+    const vin = normalizeInventoryIdentity(input.vin);
+    const existing = await this.findInventoryByIdentity({
+      dealership_id: dealershipId,
+      stock_number: stockNumber,
+      vin,
+    });
+
+    const payload = [
+      stockNumber,
+      vin,
+      parseIntegerField(input.year),
+      stringOrNull(input.make),
+      stringOrNull(input.model),
+      stringOrNull(input.trim),
+      parseIntegerField(input.price),
+      parseIntegerField(input.mileage),
+      stringOrNull(input.condition),
+      stringOrNull(input.body_style),
+      stringOrNull(input.exterior_color),
+      stringOrNull(input.interior_color),
+      normalizeInventoryStatus(input.status),
+      stringOrNull(input.source),
+      stringOrNull(input.source_file),
+      input.last_seen_at || now,
+    ];
+
+    if (existing) {
+      const row = await this.get(
+        `
+          UPDATE inventory
+          SET
+            stock_number = ?,
+            vin = ?,
+            year = ?,
+            make = ?,
+            model = ?,
+            trim = ?,
+            price = ?,
+            mileage = ?,
+            condition = ?,
+            body_style = ?,
+            exterior_color = ?,
+            interior_color = ?,
+            status = ?,
+            source = ?,
+            source_file = ?,
+            last_seen_at = ?,
+            updated_at = ?
+          WHERE id = ? AND dealership_id = ?
+          RETURNING *
+        `,
+        [...payload, now, existing.id, dealershipId]
+      );
+
+      return {
+        action: "updated",
+        inventory: this.formatInventoryRow(row),
+      };
+    }
+
+    const row = await this.get(
+      `
+        INSERT INTO inventory (
+          dealership_id,
+          stock_number,
+          vin,
+          year,
+          make,
+          model,
+          trim,
+          price,
+          mileage,
+          condition,
+          body_style,
+          exterior_color,
+          interior_color,
+          status,
+          source,
+          source_file,
+          last_seen_at,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING *
+      `,
+      [dealershipId, ...payload, now, now]
+    );
+
+    return {
+      action: "inserted",
+      inventory: this.formatInventoryRow(row),
+    };
+  }
+
+  async markInventoryMissingFromImport({
+    dealership_id,
+    source = null,
+    seen_inventory_ids = [],
+    next_status = "inactive",
+  }) {
+    if (!dealership_id || !stringOrNull(source) || !seen_inventory_ids.length) {
+      return 0;
+    }
+
+    const rows = await this.all(
+      `
+        UPDATE inventory
+        SET
+          status = ?,
+          updated_at = ?
+        WHERE dealership_id = ?
+          AND source = ?
+          AND status = 'active'
+          AND id <> ALL(?)
+        RETURNING id
+      `,
+      [normalizeInventoryStatus(next_status), new Date().toISOString(), dealership_id, source, seen_inventory_ids]
+    );
+
+    return rows.length;
+  }
+
+  async linkLeadInventory(leadId, inventoryId, user = null) {
+    const lead = await this.getApiLead(leadId, user);
+    const inventory = await this.getInventoryForApi(inventoryId, user);
+
+    if (Number(lead.dealership_id) !== Number(inventory.dealership_id)) {
+      throw new ValidationError("Inventory unit does not belong to this dealership.");
+    }
+
+    await this.execute(
+      `
+        UPDATE leads
+        SET inventory_id = ?, updated_at = ?
+        WHERE id = ? AND dealership_id = ?
+      `,
+      [inventory.id, new Date().toISOString(), leadId, lead.dealership_id]
+    );
+
+    await this.createLeadActivity({
+      lead_id: Number(leadId),
+      user_id: user?.id || null,
+      type: "note",
+      content: `Linked inventory unit ${inventory.stock_number || inventory.vin || inventory.id}.`,
+    });
+
+    return this.getApiLeadWithActivities(leadId, user);
+  }
+
   async getDashboardApiMetrics(user = null) {
     const access = this.accessClauseForUser(user);
     const today = new Date();
@@ -1987,18 +2600,18 @@ class PostgresCrmDatabase extends CrmDatabase {
       ).count
     );
 
-    const vehiclesSold = Number(
-      (
-        await this.get(
-          `
-            SELECT COUNT(*) AS count
-            FROM leads
-            WHERE status = 'won' AND ${access.clause}
-          `,
-          access.params
-        )
-      ).count
-    );
+      const vehiclesSold = Number(
+        (
+          await this.get(
+            `
+              SELECT COUNT(*) AS count
+              FROM leads
+              WHERE status = ? AND ${access.clause}
+            `,
+            [toStoredStatus("sold"), ...access.params]
+          )
+        ).count
+      );
 
     const totalLeads = Number(
       (
@@ -2241,7 +2854,7 @@ class PostgresCrmDatabase extends CrmDatabase {
           company = ?,
           job_title = ?,
           updated_at = ?
-        WHERE id = ?
+        WHERE id = ? AND dealership_id = ?
       `,
       [
         input.first_name,
@@ -2253,6 +2866,7 @@ class PostgresCrmDatabase extends CrmDatabase {
         input.job_title,
         new Date().toISOString(),
         id,
+        this.currentDealershipId(user),
       ]
     );
 
@@ -2296,10 +2910,10 @@ class PostgresCrmDatabase extends CrmDatabase {
     return lead;
   }
 
-  async createLead(input) {
+  async createLead(input, user = null) {
     const assigneeId = input.assigned_to || null;
     const now = new Date().toISOString();
-    const dealershipId = getDefaultDealershipId();
+    const dealershipId = this.currentDealershipId(user);
 
     const row = await this.get(
       `
@@ -2331,11 +2945,11 @@ class PostgresCrmDatabase extends CrmDatabase {
       ]
     );
 
-    return this.getLead(row.id);
+    return this.getLead(row.id, user);
   }
 
-  async updateLead(id, input) {
-    await this.getLead(id);
+  async updateLead(id, input, user = null) {
+    const existing = await this.getLead(id, user);
     await this.execute(
       `
         UPDATE leads
@@ -2348,7 +2962,7 @@ class PostgresCrmDatabase extends CrmDatabase {
           follow_up_date = ?,
           next_action = ?,
           updated_at = ?
-        WHERE id = ?
+        WHERE id = ? AND dealership_id = ?
       `,
       [
         input.contact_id,
@@ -2360,10 +2974,11 @@ class PostgresCrmDatabase extends CrmDatabase {
         input.next_action,
         new Date().toISOString(),
         id,
+        existing.dealership_id,
       ]
     );
 
-    return this.getLead(id);
+    return this.getLead(id, user);
   }
 
   async assignLead(id, assignedTo, actor = null) {
@@ -2400,8 +3015,13 @@ class PostgresCrmDatabase extends CrmDatabase {
     return this.getLead(id, actor);
   }
 
-  async updateLeadStatusIfNew(id, status = "contacted") {
-    const lead = await this.getLead(id);
+  async updateLeadStatusIfNew(id, status = "contacted", user = null) {
+    const lead = user
+      ? await this.getLead(id, user)
+      : await this.get("SELECT id, dealership_id, status FROM leads WHERE id = ?", [id]);
+    if (!lead) {
+      throw new NotFoundError("Lead not found");
+    }
     if (lead.status !== "new") {
       return lead;
     }
@@ -2417,11 +3037,13 @@ class PostgresCrmDatabase extends CrmDatabase {
       [status, new Date().toISOString(), id, lead.dealership_id]
     );
 
-    return this.getLead(id);
+    return user
+      ? this.getLead(id, user)
+      : this.get("SELECT id, dealership_id, assigned_to, status FROM leads WHERE id = ?", [id]);
   }
 
-  async deleteLead(id) {
-    const lead = await this.getLead(id);
+  async deleteLead(id, user = null) {
+    const lead = await this.getLead(id, user);
     await this.execute("DELETE FROM leads WHERE id = ? AND dealership_id = ?", [id, lead.dealership_id]);
   }
 
@@ -2444,8 +3066,10 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   async addLeadNote(leadId, body, userId = null) {
-    await this.getLead(leadId);
-    const dealershipId = await this.resolveDealershipIdContext({ lead_id: leadId, user_id: userId });
+    const dealershipId = await this.getDealershipIdForLead(leadId);
+    if (!dealershipId) {
+      throw new NotFoundError("Lead not found");
+    }
     await this.execute(
       `
         INSERT INTO notes (dealership_id, lead_id, body, created_at)
@@ -2487,7 +3111,10 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   async recordLeadActivity({ lead_id, user_id = null, type, content, created_at = null }) {
-    await this.getLead(lead_id);
+    const dealershipId = await this.getDealershipIdForLead(lead_id);
+    if (!dealershipId) {
+      throw new NotFoundError("Lead not found");
+    }
     await this.createLeadActivity({
       lead_id,
       user_id,
