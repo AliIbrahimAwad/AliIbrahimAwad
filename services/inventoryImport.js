@@ -1,18 +1,29 @@
 const { ValidationError } = require("../src/data/core");
 
 const INVENTORY_HEADER_ALIASES = {
-  stock_number: ["stock_number", "stock", "stock_no", "stock_number_", "stock#", "stock #", "stk", "stk#"],
+  stock_number: [
+    "stock_number",
+    "stocknumber",
+    "stock",
+    "stock_no",
+    "stocknumber_",
+    "stock_number_",
+    "stock#",
+    "stock #",
+    "stk",
+    "stk#",
+  ],
   vin: ["vin", "vehicle_identification_number"],
   year: ["year"],
   make: ["make"],
   model: ["model"],
   trim: ["trim"],
-  price: ["price", "sale_price", "internet_price", "list_price"],
+  price: ["price", "sale_price", "saleprice", "internet_price", "list_price", "listprice"],
   mileage: ["mileage", "miles", "odometer", "odometer_reading", "kilometers", "kilometres"],
-  condition: ["condition", "vehicle_condition", "new_used", "used_new"],
-  body_style: ["body_style", "body_style_", "body style", "body"],
-  exterior_color: ["exterior_color", "ext_color", "exterior colour", "exterior color", "colour", "color"],
-  interior_color: ["interior_color", "int_color", "interior colour", "interior color"],
+  condition: ["condition", "vehicle_condition", "inventorytype", "new_used", "used_new"],
+  body_style: ["body_style", "bodystyle", "body_style_", "body style", "body"],
+  exterior_color: ["exterior_color", "extcolour", "ext_color", "exterior colour", "exterior color", "colour", "color"],
+  interior_color: ["interior_color", "intcolour", "int_color", "interior colour", "interior color"],
   status: ["status", "inventory_status"],
 };
 
