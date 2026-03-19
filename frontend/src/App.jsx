@@ -396,19 +396,26 @@ export default function App() {
   async function loadInventoryData() {
     setInventoryLoading(true);
     try {
-      const [inventoryResponse, runsResponse] = await Promise.all([
-          getInventory({
-            limit: 250,
-            status: inventoryFilters.status,
-            make: inventoryFilters.make,
-            model: inventoryFilters.model,
-            stock_number: inventoryFilters.stockNumber,
-            vin: inventoryFilters.vin,
-          }),
+      const [inventoryResult, runsResult] = await Promise.allSettled([
+        getInventory({
+          limit: 250,
+          status: inventoryFilters.status,
+          make: inventoryFilters.make,
+          model: inventoryFilters.model,
+          stock_number: inventoryFilters.stockNumber,
+          vin: inventoryFilters.vin,
+        }),
         getInventoryImportRuns(10),
       ]);
-      setInventoryItems((inventoryResponse.items || []).map(formatInventoryItem));
-      setInventoryImportRuns((runsResponse.items || []).map(formatInventoryRun));
+
+      if (inventoryResult.status !== "fulfilled") {
+        throw inventoryResult.reason;
+      }
+
+      setInventoryItems((inventoryResult.value.items || []).map(formatInventoryItem));
+      setInventoryImportRuns(
+        runsResult.status === "fulfilled" ? (runsResult.value.items || []).map(formatInventoryRun) : []
+      );
       setInventoryLoaded(true);
     } finally {
       setInventoryLoading(false);
