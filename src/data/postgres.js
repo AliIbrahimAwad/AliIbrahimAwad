@@ -518,7 +518,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     }
 
     const row = await this.get("SELECT dealership_id FROM leads WHERE id = ?", [leadId]);
-    return row ? Number(row.dealership_id || getDefaultDealershipId()) : null;
+    return row ? parsePositiveInteger(row.dealership_id) || getDefaultDealershipId() : null;
   }
 
   async getDealershipIdForUser(userId) {
@@ -527,16 +527,16 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     }
 
     const row = await this.get("SELECT dealership_id FROM users WHERE id = ?", [userId]);
-    return row ? Number(row.dealership_id || getDefaultDealershipId()) : null;
+    return row ? parsePositiveInteger(row.dealership_id) || getDefaultDealershipId() : null;
   }
 
   async resolveDealershipIdContext({ dealership_id = null, lead_id = null, user_id = null, user = null } = {}) {
-    return Number(
-      dealership_id ||
-        user?.dealership_id ||
-        (await this.getDealershipIdForLead(lead_id)) ||
-        (await this.getDealershipIdForUser(user_id)) ||
-        getDefaultDealershipId()
+    return (
+      parsePositiveInteger(dealership_id) ||
+      parsePositiveInteger(user?.dealership_id) ||
+      (await this.getDealershipIdForLead(lead_id)) ||
+      (await this.getDealershipIdForUser(user_id)) ||
+      getDefaultDealershipId()
     );
   }
 
@@ -1959,13 +1959,10 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
   async createApiLead(input, user = null) {
     const now = new Date().toISOString();
     const storedStatus = toStoredStatus(input.status || "new");
-    const dealershipId = input.dealership_id
-      ? Number(input.dealership_id)
-      : user
-          ? this.currentDealershipId(user)
-          : getDefaultDealershipId();
+    const dealershipId =
+      parsePositiveInteger(input.dealership_id) || (user ? this.currentDealershipId(user) : getDefaultDealershipId());
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
-    const assignedTo = input.assigned_to == null ? null : Number(input.assigned_to);
+    const assignedTo = input.assigned_to == null ? null : parsePositiveInteger(input.assigned_to);
     const inventoryId = await this.resolveLeadInventoryId(input, dealershipId);
 
     const row = await this.get(

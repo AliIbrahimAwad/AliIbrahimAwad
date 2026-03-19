@@ -1867,13 +1867,10 @@ class CrmDatabase extends BaseCrmDatabase {
   createApiLead(input, user = null) {
     const now = new Date().toISOString();
     const storedStatus = toStoredStatus(input.status || "new");
-    const dealershipId = input.dealership_id
-      ? Number(input.dealership_id)
-        : user
-          ? this.currentDealershipId(user)
-          : getDefaultDealershipId();
+    const dealershipId =
+      parsePositiveInteger(input.dealership_id) || (user ? this.currentDealershipId(user) : getDefaultDealershipId());
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
-    const assignedTo = input.assigned_to == null ? null : Number(input.assigned_to);
+    const assignedTo = input.assigned_to == null ? null : parsePositiveInteger(input.assigned_to);
     const inventoryId = this.resolveLeadInventoryId(input, dealershipId);
 
     this.execute(

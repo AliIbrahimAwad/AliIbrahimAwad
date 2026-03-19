@@ -608,6 +608,25 @@ test("inventory import rejects invalid dealership context before hitting the dat
   });
 });
 
+test("lead creation ignores invalid numeric dealership input instead of passing NaN to storage", async () => {
+  await withServer(async ({ app }) => {
+    const manager = app.locals.db.getUserByEmail("manager@crm.local");
+    const lead = await app.locals.db.createApiLead(
+      {
+        dealership_id: "NaN",
+        customer_name: "Safe Dealership Lead",
+        phone: "6473334444",
+        source: "website",
+        status: "new",
+      },
+      manager
+    );
+
+    assert.equal(lead.dealership_id, 1);
+    assert.equal(lead.customer_name, "Safe Dealership Lead");
+  });
+});
+
 test("website API creates an unassigned website lead", async () => {
   await withServer(async ({ server }) => {
     const client = createClient(server);
