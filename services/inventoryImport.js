@@ -14,7 +14,6 @@ const INVENTORY_HEADER_ALIASES = {
   exterior_color: ["exterior_color", "ext_color", "exterior colour", "exterior color", "colour", "color"],
   interior_color: ["interior_color", "int_color", "interior colour", "interior color"],
   status: ["status", "inventory_status"],
-  verified: ["verified", "is_verified", "verified_status", "verification_status"],
 };
 
 function normalizeHeader(value) {
@@ -122,7 +121,6 @@ function mapInventoryRow(row, context = {}) {
     exterior_color: mapped.exterior_color,
     interior_color: mapped.interior_color,
     status: mapped.status || "active",
-    verified: mapped.verified || "yes",
     source: context.sourceName || "manual_upload",
     source_file: context.fileName || null,
   };

@@ -107,31 +107,6 @@ function normalizeInventoryStatus(value) {
   return "inactive";
 }
 
-function normalizeInventoryVerified(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "_");
-
-  if (!normalized) {
-    return "yes";
-  }
-
-  if (["yes", "true", "verified", "1"].includes(normalized)) {
-    return "yes";
-  }
-
-  if (["no", "false", "unverified", "0"].includes(normalized)) {
-    return "no";
-  }
-
-  return "yes";
-}
-
-function isTruthyFilter(value) {
-  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
-}
-
 function sanitizeSqlParam(value) {
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeSqlParam(item));
@@ -256,7 +231,6 @@ const SCHEMA_SQL = `
     exterior_color TEXT,
     interior_color TEXT,
     status TEXT NOT NULL DEFAULT 'active',
-    verified TEXT NOT NULL DEFAULT 'yes',
     source TEXT,
     source_file TEXT,
     last_seen_at TEXT,
@@ -470,7 +444,6 @@ class CrmDatabase extends BaseCrmDatabase {
     this.ensureColumn("leads", "listing_url", "TEXT");
     this.ensureColumn("leads", "message", "TEXT");
     this.ensureColumn("leads", "inventory_id", "INTEGER");
-    this.ensureColumn("inventory", "verified", "TEXT NOT NULL DEFAULT 'yes'");
     this.ensureColumn("contacts", "normalized_phone", "TEXT");
     this.execute("UPDATE leads SET status = 'new' WHERE status IS NULL OR TRIM(status) = ''");
     this.execute("UPDATE leads SET status = 'appointment' WHERE status = 'qualified'");
@@ -502,7 +475,6 @@ class CrmDatabase extends BaseCrmDatabase {
       "UPDATE imported_messages SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
       [dealershipId]
     );
-    this.execute("UPDATE inventory SET verified = 'yes' WHERE verified IS NULL OR TRIM(verified) = ''");
     this.execute("UPDATE leads SET normalized_phone = ? WHERE phone IS NULL OR TRIM(phone) = ''", [null]);
     this.execute("UPDATE contacts SET normalized_phone = ? WHERE phone IS NULL OR TRIM(phone) = ''", [null]);
 
@@ -783,10 +755,9 @@ class CrmDatabase extends BaseCrmDatabase {
       condition: row.condition || null,
       body_style: row.body_style || null,
       exterior_color: row.exterior_color || null,
-      interior_color: row.interior_color || null,
-      status: row.status || "active",
-      verified: row.verified || "yes",
-      source: row.source || null,
+        interior_color: row.interior_color || null,
+        status: row.status || "active",
+        source: row.source || null,
       source_file: row.source_file || null,
       last_seen_at: row.last_seen_at || null,
       created_at: row.created_at,
@@ -2076,10 +2047,6 @@ class CrmDatabase extends BaseCrmDatabase {
     const clauses = ["inventory.dealership_id = ?"];
     const params = [this.currentDealershipId(user)];
 
-    if (!isTruthyFilter(filters.include_unverified ?? filters.includeUnverified)) {
-      clauses.push("COALESCE(LOWER(inventory.verified), 'yes') = 'yes'");
-    }
-
     if (stringOrNull(filters.status)) {
       clauses.push("LOWER(inventory.status) = ?");
       params.push(String(filters.status).trim().toLowerCase());
@@ -2407,14 +2374,13 @@ class CrmDatabase extends BaseCrmDatabase {
       parseIntegerField(input.price),
       parseIntegerField(input.mileage),
       stringOrNull(input.condition),
-      stringOrNull(input.body_style),
-      stringOrNull(input.exterior_color),
-      stringOrNull(input.interior_color),
-      normalizeInventoryStatus(input.status),
-      normalizeInventoryVerified(input.verified),
-      stringOrNull(input.source),
-      stringOrNull(input.source_file),
-      input.last_seen_at || now,
+        stringOrNull(input.body_style),
+        stringOrNull(input.exterior_color),
+        stringOrNull(input.interior_color),
+        normalizeInventoryStatus(input.status),
+        stringOrNull(input.source),
+        stringOrNull(input.source_file),
+        input.last_seen_at || now,
     ];
 
     if (existing) {
@@ -2431,14 +2397,13 @@ class CrmDatabase extends BaseCrmDatabase {
             price = ?,
             mileage = ?,
             condition = ?,
-            body_style = ?,
-            exterior_color = ?,
-            interior_color = ?,
-            status = ?,
-            verified = ?,
-            source = ?,
-            source_file = ?,
-            last_seen_at = ?,
+              body_style = ?,
+              exterior_color = ?,
+              interior_color = ?,
+              status = ?,
+              source = ?,
+              source_file = ?,
+              last_seen_at = ?,
             updated_at = ?
           WHERE id = ? AND dealership_id = ?
         `,
@@ -2469,13 +2434,12 @@ class CrmDatabase extends BaseCrmDatabase {
           exterior_color,
           interior_color,
           status,
-          verified,
           source,
           source_file,
           last_seen_at,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [dealershipId, ...params, now, now]
     );

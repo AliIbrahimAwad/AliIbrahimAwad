@@ -87,7 +87,6 @@ function normalizeInventoryFilters(query = {}) {
     model: String(query.model || "").trim(),
     stock_number: String(query.stock_number || query.stockNumber || "").trim(),
     vin: String(query.vin || "").trim(),
-    include_unverified: String(query.include_unverified || query.includeUnverified || "").trim().toLowerCase(),
   };
 }
 

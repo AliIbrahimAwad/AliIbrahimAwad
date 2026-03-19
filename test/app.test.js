@@ -426,7 +426,7 @@ test("manager can import inventory CSV with upsert behavior", async () => {
   });
 });
 
-test("inventory list hides unverified units by default but can include them when requested", async () => {
+test("inventory list includes imported units regardless of extra CSV columns", async () => {
   await withServer(async ({ server }) => {
     const client = createClient(server);
     await login(client, "manager@crm.local", "manager123");
@@ -447,23 +447,15 @@ test("inventory list hides unverified units by default but can include them when
 
     assert.equal(importResponse.statusCode, 201);
 
-    const defaultListResponse = await client.request({
+    const listResponse = await client.request({
       method: "GET",
       path: "/api/inventory",
     });
-    assert.equal(defaultListResponse.statusCode, 200);
-    const defaultBody = JSON.parse(defaultListResponse.body);
-    assert.equal(defaultBody.items.length, 1);
-    assert.equal(defaultBody.items[0].stock_number, "V100");
-
-    const includeAllResponse = await client.request({
-      method: "GET",
-      path: "/api/inventory?include_unverified=1",
-    });
-    assert.equal(includeAllResponse.statusCode, 200);
-    const includeAllBody = JSON.parse(includeAllResponse.body);
-    assert.equal(includeAllBody.items.length, 2);
-    assert.equal(includeAllBody.items.find((item) => item.stock_number === "V101").verified, "no");
+    assert.equal(listResponse.statusCode, 200);
+    const body = JSON.parse(listResponse.body);
+    assert.equal(body.items.length, 2);
+    assert.ok(body.items.some((item) => item.stock_number === "V100"));
+    assert.ok(body.items.some((item) => item.stock_number === "V101"));
   });
 });
 

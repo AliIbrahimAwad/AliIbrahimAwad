@@ -214,7 +214,6 @@ function formatInventoryItem(item) {
     exteriorColor: item.exterior_color || "",
     interiorColor: item.interior_color || "",
     status: item.status || "",
-    verified: item.verified || "yes",
     source: item.source || "",
     sourceFile: item.source_file || "",
     lastSeenAt: item.last_seen_at || null,
@@ -316,7 +315,6 @@ export default function App() {
     model: "",
     stockNumber: "",
     vin: "",
-    includeUnverified: false,
   });
   const [loading, setLoading] = useState(true);
   const [libraryLoading, setLibraryLoading] = useState(false);
@@ -406,7 +404,6 @@ export default function App() {
             model: inventoryFilters.model,
             stock_number: inventoryFilters.stockNumber,
             vin: inventoryFilters.vin,
-            include_unverified: "1",
           }),
         getInventoryImportRuns(10),
       ]);
@@ -611,7 +608,6 @@ export default function App() {
     inventoryFilters.model,
     inventoryFilters.stockNumber,
     inventoryFilters.vin,
-    inventoryFilters.includeUnverified,
   ]);
 
   useEffect(() => {
@@ -827,20 +823,13 @@ export default function App() {
       .toLowerCase()
       .includes(search)
   );
-  const visibleInventoryItems = inventoryItems.filter((item) => {
-    if (!inventoryFilters.includeUnverified && item.verified === "no") {
-      return false;
-    }
-
-    if (!search) {
-      return true;
-    }
-
-    return [item.stockNumber, item.vin, item.make, item.model, item.trim, item.status, item.verified]
+  const visibleInventoryItems = inventoryItems.filter((item) =>
+    !search ||
+    [item.stockNumber, item.vin, item.make, item.model, item.trim, item.status]
       .join(" ")
       .toLowerCase()
-      .includes(search);
-  });
+      .includes(search)
+  );
   const analytics = buildAnalyticsSnapshot({
     leadLibrary: visibleLeadLibrary,
     attentionLeads: visibleAttentionLeads,

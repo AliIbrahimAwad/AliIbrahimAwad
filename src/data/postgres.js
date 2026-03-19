@@ -95,31 +95,6 @@ function normalizeInventoryStatus(value) {
   return "inactive";
 }
 
-function normalizeInventoryVerified(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "_");
-
-  if (!normalized) {
-    return "yes";
-  }
-
-  if (["yes", "true", "verified", "1"].includes(normalized)) {
-    return "yes";
-  }
-
-  if (["no", "false", "unverified", "0"].includes(normalized)) {
-    return "no";
-  }
-
-  return "yes";
-}
-
-function isTruthyFilter(value) {
-  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
-}
-
 function sanitizeSqlParam(value) {
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeSqlParam(item));
@@ -292,7 +267,6 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         exterior_color TEXT,
         interior_color TEXT,
         status TEXT NOT NULL DEFAULT 'active',
-        verified TEXT NOT NULL DEFAULT 'yes',
         source TEXT,
         source_file TEXT,
         last_seen_at TEXT,
@@ -394,7 +368,6 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         ALTER TABLE leads ADD COLUMN IF NOT EXISTS listing_url TEXT;
         ALTER TABLE leads ADD COLUMN IF NOT EXISTS message TEXT;
         ALTER TABLE leads ADD COLUMN IF NOT EXISTS inventory_id BIGINT REFERENCES inventory(id) ON DELETE SET NULL;
-        ALTER TABLE inventory ADD COLUMN IF NOT EXISTS verified TEXT NOT NULL DEFAULT 'yes';
         ALTER TABLE contacts ADD COLUMN IF NOT EXISTS normalized_phone TEXT;
 
       CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at DESC);
@@ -436,7 +409,6 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     await this.execute("UPDATE lead_activities SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
     await this.execute("UPDATE activities SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
     await this.execute("UPDATE imported_messages SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
-    await this.execute("UPDATE inventory SET verified = 'yes' WHERE verified IS NULL OR BTRIM(verified) = ''");
     await this.execute(
       `
         INSERT INTO lead_activities (dealership_id, lead_id, user_id, type, content, created_at)
@@ -772,7 +744,6 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         exterior_color: row.exterior_color || null,
         interior_color: row.interior_color || null,
         status: row.status || "active",
-        verified: row.verified || "yes",
         source: row.source || null,
       source_file: row.source_file || null,
       last_seen_at: row.last_seen_at || null,
@@ -2167,10 +2138,6 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       const clauses = ["inventory.dealership_id = ?"];
       const params = [dealershipId];
 
-      if (!isTruthyFilter(filters.include_unverified ?? filters.includeUnverified)) {
-        clauses.push("COALESCE(LOWER(inventory.verified), 'yes') = 'yes'");
-      }
-
       if (stringOrNull(filters.status)) {
       clauses.push("LOWER(inventory.status) = ?");
       params.push(String(filters.status).trim().toLowerCase());
@@ -2507,14 +2474,13 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       parseIntegerField(input.price),
       parseIntegerField(input.mileage),
       stringOrNull(input.condition),
-      stringOrNull(input.body_style),
-      stringOrNull(input.exterior_color),
-      stringOrNull(input.interior_color),
-      normalizeInventoryStatus(input.status),
-      normalizeInventoryVerified(input.verified),
-      stringOrNull(input.source),
-      stringOrNull(input.source_file),
-      input.last_seen_at || now,
+        stringOrNull(input.body_style),
+        stringOrNull(input.exterior_color),
+        stringOrNull(input.interior_color),
+        normalizeInventoryStatus(input.status),
+        stringOrNull(input.source),
+        stringOrNull(input.source_file),
+        input.last_seen_at || now,
     ];
 
     if (existing) {
@@ -2535,7 +2501,6 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
             exterior_color = ?,
             interior_color = ?,
             status = ?,
-            verified = ?,
             source = ?,
             source_file = ?,
             last_seen_at = ?,
@@ -2569,13 +2534,12 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
             exterior_color,
             interior_color,
             status,
-            verified,
             source,
             source_file,
             last_seen_at,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           RETURNING *
         `,
         [dealershipId, ...payload, now, now]
