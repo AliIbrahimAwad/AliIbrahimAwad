@@ -112,6 +112,7 @@ export function LeadDetailsPanel({
   const timeline = lead.timeline || [];
   const isSalesUser = currentUserRole === "sales";
   const canEditStatus = !isSalesUser;
+  const hasCallablePhone = Boolean(lead.rawPhone);
 
   return (
     <aside className="rounded-[2rem] border border-white/10 bg-ink-900/85 p-6 shadow-card backdrop-blur">
@@ -395,18 +396,19 @@ export function LeadDetailsPanel({
           type="button"
           onClick={async () => {
             try {
-              await onLogCall?.();
-              setActionNotice("Call logged. If this device supports phone links, your dialer should open now.");
-              if (lead.phone && typeof window !== "undefined") {
-                window.location.href = `tel:${lead.phone}`;
-              }
+              const attempt = await onLogCall?.();
+              const deviceLabel = attempt?.from_number || "your configured RingCentral device";
+              const customerLabel = attempt?.to_number || lead.phone;
+              setActionNotice(
+                `RingCentral is ringing ${deviceLabel} first. After you answer, it will connect ${customerLabel}.`
+              );
             } catch (_error) {
               // The parent surfaces API errors, so we only avoid clearing the current UI state here.
             }
           }}
-          disabled={!lead.phone || callLogging}
+          disabled={!hasCallablePhone || callLogging}
           className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
-            lead.phone
+            hasCallablePhone
               ? "bg-white text-ink-950 hover:bg-slate-100 disabled:cursor-wait disabled:opacity-70"
               : "cursor-not-allowed bg-white/10 text-slate-500"
           }`}
@@ -420,7 +422,7 @@ export function LeadDetailsPanel({
             setSmsComposerOpen(true);
             setActionNotice("SMS composer ready.");
           }}
-          disabled={!lead.phone}
+          disabled={!hasCallablePhone}
           className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
         >
           <MessageSquareText className="h-4 w-4" />
@@ -466,7 +468,7 @@ export function LeadDetailsPanel({
           />
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
-              Sending to {lead.phone || "No phone number"}
+              Sending to {hasCallablePhone ? lead.phone : "No phone number"}
             </p>
             <div className="flex gap-2">
               <button

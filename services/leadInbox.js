@@ -272,7 +272,9 @@ async function createLeadInboxService({ db, graph }) {
       return { skipped: true, reason: "unknown_format" };
     }
 
-    const duplicate = await db.findLeadDuplicate(parsedLead);
+  const duplicate = await db.findLeadDuplicate(parsedLead, {
+    dealership_id: parsedLead.dealership_id,
+  });
     if (duplicate) {
       const existingLead = await db.getApiLead(duplicate.lead.id);
       const merged = mergeLeadData(existingLead, parsedLead);

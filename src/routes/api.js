@@ -106,7 +106,11 @@ function registerApiRoutes(app) {
     "/api/leads/:id",
     requireAuth,
     asyncHandler(async (req, res) => {
-      const lead = await req.app.locals.db.updateApiLead(Number(req.params.id), normalizeLeadPayload(req.body));
+      const lead = await req.app.locals.db.updateApiLead(
+        Number(req.params.id),
+        normalizeLeadPayload(req.body),
+        req.currentUser
+      );
       res.json(lead);
     })
   );
@@ -125,13 +129,13 @@ function registerApiRoutes(app) {
         throw new ValidationError("A valid salesperson is required.");
       }
 
-      const assignees = await req.app.locals.db.listSalesUsers();
+      const assignees = await req.app.locals.db.listSalesUsers(req.currentUser);
       if (!assignees.some((user) => Number(user.id) === assignedTo)) {
         throw new ValidationError("A valid salesperson is required.");
       }
 
       await req.app.locals.db.getApiLead(Number(req.params.id), req.currentUser);
-      await req.app.locals.db.assignLead(Number(req.params.id), assignedTo);
+      await req.app.locals.db.assignLead(Number(req.params.id), assignedTo, req.currentUser);
 
       res.json(await req.app.locals.db.getApiLeadWithActivities(Number(req.params.id), req.currentUser));
     })
@@ -159,7 +163,7 @@ function registerApiRoutes(app) {
     asyncHandler(async (req, res) => {
       const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 20));
       res.json({
-        items: await req.app.locals.db.listNotificationsForApi(Number(req.currentUser.id), limit),
+        items: await req.app.locals.db.listNotificationsForApi(Number(req.currentUser.id), limit, req.currentUser),
       });
     })
   );
@@ -241,41 +245,25 @@ function registerApiRoutes(app) {
         throw new ValidationError("This lead does not have a phone number.");
       }
 
-      const connection = await req.app.locals.ringcentral.getActiveConnectionForUser(req.currentUser.id);
-      const call = req.app.locals.ringcentral.logCall(phone, 0);
-
-      if (req.app.locals.ringcentral.store) {
-        await req.app.locals.ringcentral.store.upsertLeadCall({
-          lead_id: leadId,
-          provider: "ringcentral",
-          provider_call_id: String(call.id),
-          session_id: null,
-          telephony_session_id: null,
-          direction: "outbound",
-          from_number: null,
-          to_number: phone,
-          external_number: normalizePhone(phone),
-          result: "Initiated",
-          action: "CRM click-to-call",
-          duration_seconds: 0,
-          start_time: call.createdAt,
-          end_time: null,
-          crm_user_id: Number(req.currentUser.id),
-          provider_extension_id: connection?.ringcentral_extension_id || null,
-          recording_status: "none",
-          transcript_status: "not_requested",
-          raw: { source: "crm_action" },
-        });
-      }
-
-      await req.app.locals.db.recordLeadActivity({
+      const callAttempt = await req.app.locals.ringcentral.initiateOutboundCall(phone, {
+        crmUserId: Number(req.currentUser.id),
+        dealership_id: Number(req.currentUser.dealership_id),
+        lead_dealership_id: Number(lead.dealership_id),
         lead_id: leadId,
-        user_id: req.currentUser.id,
-        type: "call",
-        content: "Call initiated from CRM.",
+        user: req.currentUser,
       });
 
-      res.json(await req.app.locals.db.getApiLeadWithActivities(leadId, req.currentUser));
+      res.status(202).json({
+        ok: true,
+        call_attempt: {
+          id: callAttempt.id,
+          status: callAttempt.status,
+          from_number: callAttempt.from_number,
+          to_number: callAttempt.to_number,
+          initiated_at: callAttempt.initiated_at,
+          provider_extension_id: callAttempt.provider_extension_id,
+        },
+      });
     })
   );
 
@@ -304,8 +292,6 @@ function registerApiRoutes(app) {
         },
       });
 
-      // The detail API still exposes legacy `activities`, so write the hold note there
-      // to keep the confirmation visible immediately after the action completes.
       await req.app.locals.db.createActivity({
         lead_id: leadId,
         type: "note",
@@ -322,7 +308,7 @@ function registerApiRoutes(app) {
     "/api/notifications/:id/read",
     requireAuth,
     asyncHandler(async (req, res) => {
-      await req.app.locals.db.markNotificationRead(Number(req.params.id), Number(req.currentUser.id));
+      await req.app.locals.db.markNotificationRead(Number(req.params.id), Number(req.currentUser.id), req.currentUser);
       res.status(204).end();
     })
   );

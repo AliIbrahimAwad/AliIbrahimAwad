@@ -10,8 +10,9 @@ const {
   renderLeadForm,
   renderLeadsListPage,
 } = require("../views/leads");
+const { CRM_LEAD_STATUSES } = require("../models/leadStatus");
 const { requireAuth } = require("../middleware/auth");
-const { LEAD_SOURCES, LEAD_STATUSES } = require("../types/models");
+const { LEAD_SOURCES } = require("../types/models");
 const { asyncHandler } = require("./helpers");
 
 function sanitizeText(value) {
@@ -63,7 +64,7 @@ function validateContact(payload) {
 function validateLead(payload, contacts = [], assignees = []) {
   const errors = {};
 
-  if (!payload.status || !LEAD_STATUSES.includes(payload.status)) {
+  if (!payload.status || !CRM_LEAD_STATUSES.includes(payload.status)) {
     errors.status = "Choose a valid lead status.";
   }
 
@@ -106,7 +107,7 @@ function validateLead(payload, contacts = [], assignees = []) {
 
 async function getLeadFormContext(req, formData = {}) {
   const contacts = await req.app.locals.db.listContactsForSelect(req.currentUser);
-  const assignees = await req.app.locals.db.listSalesUsers();
+  const assignees = await req.app.locals.db.listSalesUsers(req.currentUser);
   const defaultAssignee = req.currentUser.role === "sales" ? req.currentUser.id : null;
 
   return {
@@ -157,7 +158,7 @@ function validateAssignment(assignedTo, assignees = []) {
 async function renderLeadDetailResponse(req, res, lead, options = {}) {
   const contacts = await req.app.locals.db.listContactsForSelect(req.currentUser);
   const notes = await req.app.locals.db.listLeadNotes(lead.id);
-  const assignees = canAssignLeads(req.currentUser) ? await req.app.locals.db.listSalesUsers() : [];
+  const assignees = canAssignLeads(req.currentUser) ? await req.app.locals.db.listSalesUsers(req.currentUser) : [];
   const activities = await req.app.locals.db.listLeadActivities(lead.id);
 
   res.status(options.statusCode || 200).send(
@@ -343,7 +344,7 @@ function registerWebRoutes(app) {
         renderLeadForm({
           title: "New lead",
           action: "/leads",
-          statuses: LEAD_STATUSES,
+    statuses: CRM_LEAD_STATUSES,
           activePath: "/leads",
           submitLabel: "Create lead",
           currentUser: req.currentUser,
@@ -369,7 +370,7 @@ function registerWebRoutes(app) {
           renderLeadForm({
             title: "New lead",
             action: "/leads",
-            statuses: LEAD_STATUSES,
+    statuses: CRM_LEAD_STATUSES,
             errors,
             activePath: "/leads",
             submitLabel: "Create lead",
@@ -415,7 +416,7 @@ function registerWebRoutes(app) {
         renderLeadForm({
           title: "Edit lead",
           action: `/leads/${lead.id}`,
-          statuses: LEAD_STATUSES,
+    statuses: CRM_LEAD_STATUSES,
           activePath: "/leads",
           submitLabel: "Save changes",
           currentUser: req.currentUser,
@@ -443,7 +444,7 @@ function registerWebRoutes(app) {
           renderLeadForm({
             title: "Edit lead",
             action: `/leads/${id}`,
-            statuses: LEAD_STATUSES,
+    statuses: CRM_LEAD_STATUSES,
             errors,
             activePath: "/leads",
             submitLabel: "Save changes",
@@ -473,7 +474,7 @@ function registerWebRoutes(app) {
       }
 
       const assignedTo = Number(req.body.salesperson_id || req.body.assigned_to);
-      const assignees = await req.app.locals.db.listSalesUsers();
+  const assignees = await req.app.locals.db.listSalesUsers(req.currentUser);
       const assignmentError = validateAssignment(assignedTo, assignees);
 
       if (assignmentError) {

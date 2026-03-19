@@ -30,16 +30,35 @@ function createRingCentralRepository(db) {
   }
 
   async function getConnectionByUserId(userId) {
-    return db.get("SELECT * FROM ringcentral_connections WHERE user_id = ?", [userId]);
+    return db.get(
+      `
+        SELECT *
+        FROM ringcentral_connections
+        WHERE user_id = ?
+          AND dealership_id = (SELECT dealership_id FROM users WHERE id = ?)
+      `,
+      [userId, userId]
+    );
   }
 
-  async function getConnectionById(id) {
+  async function getConnectionById(id, dealershipId = null) {
+    if (dealershipId) {
+      return db.get("SELECT * FROM ringcentral_connections WHERE id = ? AND dealership_id = ?", [id, dealershipId]);
+    }
+
     return db.get("SELECT * FROM ringcentral_connections WHERE id = ?", [id]);
   }
 
-  async function getConnectionByExtensionId(extensionId) {
+  async function getConnectionByExtensionId(extensionId, dealershipId = null) {
     if (!extensionId) {
       return null;
+    }
+
+    if (dealershipId) {
+      return db.get(
+        "SELECT * FROM ringcentral_connections WHERE ringcentral_extension_id = ? AND dealership_id = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1",
+        [String(extensionId), dealershipId]
+      );
     }
 
     return db.get(
@@ -499,15 +518,21 @@ function createRingCentralRepository(db) {
   }
 
   async function listLeadMessages(leadId, limit = 20) {
+    const lead = await db.get("SELECT dealership_id FROM leads WHERE id = ?", [leadId]);
+    if (!lead) {
+      return [];
+    }
+
     return db.all(
       `
         SELECT *
         FROM lead_messages
         WHERE lead_id = ?
+          AND dealership_id = ?
         ORDER BY COALESCE(received_at, sent_at, created_at) DESC
         LIMIT ?
       `,
-      [leadId, limit]
+      [leadId, lead.dealership_id, limit]
     );
   }
 

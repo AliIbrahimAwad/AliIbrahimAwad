@@ -155,7 +155,7 @@ test("RingCentral SMS webhook ingestion stores the message, queues AI, and updat
     assert.ok(task);
     assert.match(String(task.title), /confirm appointment|follow up|appointment/i);
 
-    const activities = await db.all("SELECT * FROM activities WHERE lead_id = ? ORDER BY created_at DESC", [lead.id]);
+    const activities = await db.all("SELECT * FROM lead_activities WHERE lead_id = ? ORDER BY created_at DESC", [lead.id]);
     assert.ok(activities.some((activity) => String(activity.content).includes("appointment")));
   });
 });
@@ -246,6 +246,97 @@ test("RingCentral webhook resolves the correct CRM user by extension id", async 
     assert.equal(Number(message.crm_user_id), 2);
     assert.equal(message.provider_extension_id, "ext-2");
     assert.equal(Number(message.lead_id), Number(lead.id));
+  });
+});
+
+test("RingCentral outbound call initiation uses the rep's own RingOut device and leaves completed-call storage to reconciliation", async () => {
+  await withDb(async ({ db, temp }) => {
+    const lead = await db.createApiLead({
+      source: "website",
+      customer_name: "RingOut Shopper",
+      phone: "+1 (647) 555-0177",
+      email: "ringout@example.com",
+      vehicle_interest: "2024 SUV",
+      status: "new",
+    });
+
+    const fetchImpl = async (url, options = {}) => {
+      if (String(url).includes("/forwarding-number")) {
+        return new Response(
+          JSON.stringify({
+            records: [
+              {
+                phoneNumber: "+1 (647) 555-1888",
+                default: true,
+                status: "Enabled",
+                features: ["RingOut"],
+                type: "ForwardingNumber",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      if (String(url).includes("/ring-out")) {
+        const payload = JSON.parse(String(options.body || "{}"));
+        assert.equal(payload.from.phoneNumber, "+16475551888");
+        assert.equal(payload.to.phoneNumber, "+16475550177");
+        assert.equal(payload.playPrompt, false);
+
+        return new Response(
+          JSON.stringify({
+            id: "ringout-test-1",
+            creationTime: "2026-03-19T16:00:00.000Z",
+            status: {
+              callStatus: "InProgress",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    };
+
+    const service = await createRingCentralService(
+      {
+        recordingsDir: path.join(temp.dir, "recordings"),
+      },
+      { db, fetchImpl }
+    );
+
+    await service.store.upsertConnection({
+      user_id: 1,
+      ringcentral_account_id: "acct-1",
+      ringcentral_extension_id: "ext-1",
+      server_url: "https://platform.ringcentral.com",
+      access_token: "token",
+      refresh_token: "refresh",
+      token_type: "Bearer",
+      scope: "ReadCallLog RingOut",
+      status: "active",
+    });
+
+    const attempt = await service.initiateOutboundCall("+1 (647) 555-0177", {
+      crmUserId: 1,
+      dealership_id: 1,
+      lead_dealership_id: Number(lead.dealership_id),
+    });
+
+    assert.equal(attempt.id, "ringout-test-1");
+    assert.equal(attempt.status, "InProgress");
+    assert.equal(attempt.from_number, "+16475551888");
+    assert.equal(attempt.to_number, "+16475550177");
+
+    const callCount = await db.get("SELECT COUNT(*) AS count FROM lead_calls WHERE lead_id = ?", [lead.id]);
+    assert.equal(Number(callCount.count), 0);
   });
 });
 

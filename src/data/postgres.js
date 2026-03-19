@@ -4,7 +4,7 @@ const { Pool } = require("pg");
 const { getDefaultDealershipId } = require("../config/dealership");
 const { DEFAULT_EXECUTION_SETTINGS, normalizeExecutionSettings } = require("../config/executionSettings");
 const { categorizeOrganizedLead, evaluateLeadAttention } = require("../models/attention");
-const { canTransitionLeadStatus } = require("../models/leadStatus");
+const { canTransitionLeadStatus, CRM_LEAD_STATUSES } = require("../models/leadStatus");
 const {
   CrmDatabase,
   DEALER_PIPELINE_STATUSES,
@@ -16,7 +16,7 @@ const {
   toStoredStatus,
 } = require("./database");
 const { canViewAllLeads } = require("../models/user");
-const { LEAD_ACTIVITY_TYPES, LEAD_STATUSES } = require("../types/models");
+const { LEAD_ACTIVITY_TYPES } = require("../types/models");
 const { normalizePhone } = require("../utils/phones");
 const { toDateOnlyString } = require("../utils/dates");
 
@@ -270,6 +270,21 @@ class PostgresCrmDatabase extends CrmDatabase {
     await this.execute("UPDATE lead_activities SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
     await this.execute("UPDATE activities SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
     await this.execute("UPDATE imported_messages SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
+    await this.execute(
+      `
+        INSERT INTO lead_activities (dealership_id, lead_id, user_id, type, content, created_at)
+        SELECT activities.dealership_id, activities.lead_id, NULL, activities.type, activities.content, activities.created_at
+        FROM activities
+        LEFT JOIN lead_activities
+          ON lead_activities.dealership_id = activities.dealership_id
+         AND lead_activities.lead_id = activities.lead_id
+         AND lead_activities.user_id IS NULL
+         AND lead_activities.type = activities.type
+         AND lead_activities.content = activities.content
+         AND lead_activities.created_at = activities.created_at
+        WHERE lead_activities.id IS NULL
+      `
+    );
 
     const leadPhones = await this.all("SELECT id, phone FROM leads WHERE phone IS NOT NULL AND TRIM(phone) <> ''");
     for (const lead of leadPhones) {
@@ -331,17 +346,47 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   accessClauseForUser(user, alias = "leads") {
-    if (!user || canViewAllLeads(user)) {
-      return {
-        clause: "1 = 1",
-        params: [],
-      };
+    const params = [this.currentDealershipId(user)];
+    let clause = `${alias}.dealership_id = ?`;
+
+    if (user && !canViewAllLeads(user)) {
+      clause += ` AND ${alias}.assigned_to = ?`;
+      params.push(user.id);
     }
 
-    return {
-      clause: `${alias}.assigned_to = ?`,
-      params: [user.id],
-    };
+    return { clause, params };
+  }
+
+  currentDealershipId(user = null) {
+    return Number(user?.dealership_id || getDefaultDealershipId());
+  }
+
+  async getDealershipIdForLead(leadId) {
+    if (!leadId) {
+      return null;
+    }
+
+    const row = await this.get("SELECT dealership_id FROM leads WHERE id = ?", [leadId]);
+    return row ? Number(row.dealership_id || getDefaultDealershipId()) : null;
+  }
+
+  async getDealershipIdForUser(userId) {
+    if (!userId) {
+      return null;
+    }
+
+    const row = await this.get("SELECT dealership_id FROM users WHERE id = ?", [userId]);
+    return row ? Number(row.dealership_id || getDefaultDealershipId()) : null;
+  }
+
+  async resolveDealershipIdContext({ dealership_id = null, lead_id = null, user_id = null, user = null } = {}) {
+    return Number(
+      dealership_id ||
+        user?.dealership_id ||
+        (await this.getDealershipIdForLead(lead_id)) ||
+        (await this.getDealershipIdForUser(user_id)) ||
+        getDefaultDealershipId()
+    );
   }
 
   contactOrderSql() {
@@ -377,8 +422,12 @@ class PostgresCrmDatabase extends CrmDatabase {
         END AS display_name,
         sales_user.name AS assigned_user_name
       FROM leads
-      LEFT JOIN contacts ON contacts.id = leads.contact_id
-      LEFT JOIN users AS sales_user ON sales_user.id = leads.assigned_to
+      LEFT JOIN contacts
+        ON contacts.id = leads.contact_id
+       AND contacts.dealership_id = leads.dealership_id
+      LEFT JOIN users AS sales_user
+        ON sales_user.id = leads.assigned_to
+       AND sales_user.dealership_id = leads.dealership_id
     `;
   }
 
@@ -400,9 +449,15 @@ class PostgresCrmDatabase extends CrmDatabase {
           ELSE 'Lead #' || leads.id
         END AS lead_name
       FROM lead_activities
-      INNER JOIN leads ON leads.id = lead_activities.lead_id
-      LEFT JOIN contacts ON contacts.id = leads.contact_id
-      LEFT JOIN users ON users.id = lead_activities.user_id
+      INNER JOIN leads
+        ON leads.id = lead_activities.lead_id
+       AND leads.dealership_id = lead_activities.dealership_id
+      LEFT JOIN contacts
+        ON contacts.id = leads.contact_id
+       AND contacts.dealership_id = leads.dealership_id
+      LEFT JOIN users
+        ON users.id = lead_activities.user_id
+       AND users.dealership_id = lead_activities.dealership_id
     `;
   }
 
@@ -450,16 +505,18 @@ class PostgresCrmDatabase extends CrmDatabase {
         sales_user.name AS assigned_user_name,
         (
           SELECT content
-          FROM activities
-          WHERE activities.lead_id = leads.id
-          ORDER BY activities.created_at DESC, activities.id DESC
+          FROM lead_activities
+          WHERE lead_activities.lead_id = leads.id
+            AND lead_activities.dealership_id = leads.dealership_id
+          ORDER BY lead_activities.created_at DESC, lead_activities.id DESC
           LIMIT 1
         ) AS latest_activity_content,
         (
           SELECT created_at
-          FROM activities
-          WHERE activities.lead_id = leads.id
-          ORDER BY activities.created_at DESC, activities.id DESC
+          FROM lead_activities
+          WHERE lead_activities.lead_id = leads.id
+            AND lead_activities.dealership_id = leads.dealership_id
+          ORDER BY lead_activities.created_at DESC, lead_activities.id DESC
           LIMIT 1
         ) AS latest_activity_at
       FROM leads
@@ -506,11 +563,12 @@ class PostgresCrmDatabase extends CrmDatabase {
     };
   }
 
-  async listUsers() {
+  async listUsers(user = null) {
     return this.all(
       `
-        SELECT id, name, email, role, created_at
+        SELECT id, dealership_id, name, email, role, created_at
         FROM users
+        WHERE dealership_id = ?
         ORDER BY
           CASE role
             WHEN 'admin' THEN 1
@@ -518,14 +576,15 @@ class PostgresCrmDatabase extends CrmDatabase {
             ELSE 3
           END,
           LOWER(name) ASC
-      `
+      `,
+      [this.currentDealershipId(user)]
     );
   }
 
   async getUser(id) {
     const user = await this.get(
       `
-        SELECT id, name, email, password_hash, role, created_at
+        SELECT id, dealership_id, name, email, password_hash, role, created_at
         FROM users
         WHERE id = ?
       `,
@@ -542,7 +601,7 @@ class PostgresCrmDatabase extends CrmDatabase {
   async getUserByEmail(email) {
     return this.get(
       `
-        SELECT id, name, email, password_hash, role, created_at
+        SELECT id, dealership_id, name, email, password_hash, role, created_at
         FROM users
         WHERE LOWER(email) = LOWER(?)
       `,
@@ -638,19 +697,37 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   async listLeadActivitiesForApi(leadId) {
+    const dealershipId = await this.getDealershipIdForLead(leadId);
+    if (!dealershipId) {
+      return [];
+    }
+
     const rows = await this.all(
       `
-        SELECT id, lead_id, type, content, created_at
-        FROM activities
-        WHERE lead_id = ?
-        ORDER BY created_at DESC, id DESC
+        SELECT
+          lead_activities.id,
+          lead_activities.lead_id,
+          lead_activities.user_id,
+          lead_activities.type,
+          lead_activities.content,
+          lead_activities.created_at,
+          users.name AS actor_name
+        FROM lead_activities
+        LEFT JOIN users
+          ON users.id = lead_activities.user_id
+         AND users.dealership_id = lead_activities.dealership_id
+        WHERE lead_activities.lead_id = ?
+          AND lead_activities.dealership_id = ?
+        ORDER BY lead_activities.created_at DESC, lead_activities.id DESC
       `,
-      [leadId]
+      [leadId, dealershipId]
     );
 
     return rows.map((row) => ({
       id: Number(row.id),
       lead_id: Number(row.lead_id),
+      user_id: row.user_id == null ? null : Number(row.user_id),
+      actor_name: row.actor_name || null,
       type: row.type,
       content: row.content,
       created_at: row.created_at,
@@ -670,7 +747,7 @@ class PostgresCrmDatabase extends CrmDatabase {
     created_at = null,
   }) {
     const timestamp = created_at || new Date().toISOString();
-    const dealershipId = getDefaultDealershipId();
+    const dealershipId = await this.resolveDealershipIdContext({ lead_id, user_id });
 
     await this.execute(
       `
@@ -707,6 +784,11 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   async listLeadStatusAuditsForApi(leadId) {
+    const dealershipId = await this.getDealershipIdForLead(leadId);
+    if (!dealershipId) {
+      return [];
+    }
+
     const rows = await this.all(
       `
         SELECT
@@ -723,11 +805,12 @@ class PostgresCrmDatabase extends CrmDatabase {
           audits.created_at,
           users.name AS actor_name
         FROM lead_status_audits AS audits
-        LEFT JOIN users ON users.id = audits.user_id
+        LEFT JOIN users ON users.id = audits.user_id AND users.dealership_id = audits.dealership_id
         WHERE audits.lead_id = ?
+          AND audits.dealership_id = ?
         ORDER BY audits.created_at DESC, audits.id DESC
       `,
-      [leadId]
+      [leadId, dealershipId]
     );
 
     return rows.map((row) => ({
@@ -747,6 +830,11 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   async listLeadMessagesForApi(leadId) {
+    const dealershipId = await this.getDealershipIdForLead(leadId);
+    if (!dealershipId) {
+      return [];
+    }
+
     const rows = await this.all(
       `
         SELECT
@@ -764,11 +852,12 @@ class PostgresCrmDatabase extends CrmDatabase {
           lead_messages.provider_extension_id,
           users.name AS actor_name
         FROM lead_messages
-        LEFT JOIN users ON users.id = lead_messages.crm_user_id
+        LEFT JOIN users ON users.id = lead_messages.crm_user_id AND users.dealership_id = lead_messages.dealership_id
         WHERE lead_messages.lead_id = ?
+          AND lead_messages.dealership_id = ?
         ORDER BY COALESCE(lead_messages.received_at, lead_messages.sent_at, lead_messages.created_at) DESC, lead_messages.id DESC
       `,
-      [leadId]
+      [leadId, dealershipId]
     );
 
     return rows.map((row) => ({
@@ -788,6 +877,11 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   async listLeadCallsForApi(leadId) {
+    const dealershipId = await this.getDealershipIdForLead(leadId);
+    if (!dealershipId) {
+      return [];
+    }
+
     const rows = await this.all(
       `
         SELECT
@@ -816,14 +910,19 @@ class PostgresCrmDatabase extends CrmDatabase {
           analyses.reasoning_summary AS ai_reasoning_summary,
           users.name AS actor_name
         FROM lead_calls
-        LEFT JOIN call_recordings ON call_recordings.lead_call_id = lead_calls.id
+        LEFT JOIN call_recordings
+          ON call_recordings.lead_call_id = lead_calls.id
+         AND call_recordings.dealership_id = lead_calls.dealership_id
         LEFT JOIN communication_ai_analyses AS analyses
-          ON analyses.source_type = 'call' AND analyses.source_id = lead_calls.id
-        LEFT JOIN users ON users.id = lead_calls.crm_user_id
+          ON analyses.source_type = 'call'
+         AND analyses.source_id = lead_calls.id
+         AND analyses.dealership_id = lead_calls.dealership_id
+        LEFT JOIN users ON users.id = lead_calls.crm_user_id AND users.dealership_id = lead_calls.dealership_id
         WHERE lead_calls.lead_id = ?
+          AND lead_calls.dealership_id = ?
         ORDER BY lead_calls.start_time DESC, lead_calls.id DESC
       `,
-      [leadId]
+      [leadId, dealershipId]
     );
 
     const seen = new Set();
@@ -939,8 +1038,8 @@ class PostgresCrmDatabase extends CrmDatabase {
           FROM lead_messages
           INNER JOIN leads ON leads.id = lead_messages.lead_id
           LEFT JOIN contacts ON contacts.id = leads.contact_id
-          LEFT JOIN users ON users.id = lead_messages.crm_user_id
-          LEFT JOIN users AS sales_user ON sales_user.id = leads.assigned_to
+          LEFT JOIN users ON users.id = lead_messages.crm_user_id AND users.dealership_id = lead_messages.dealership_id
+          LEFT JOIN users AS sales_user ON sales_user.id = leads.assigned_to AND sales_user.dealership_id = leads.dealership_id
           WHERE ${access.clause}
           ORDER BY happened_at DESC, lead_messages.id DESC
           LIMIT ?
@@ -971,11 +1070,11 @@ class PostgresCrmDatabase extends CrmDatabase {
           FROM lead_calls
           INNER JOIN leads ON leads.id = lead_calls.lead_id
           LEFT JOIN contacts ON contacts.id = leads.contact_id
-          LEFT JOIN users ON users.id = lead_calls.crm_user_id
-          LEFT JOIN users AS sales_user ON sales_user.id = leads.assigned_to
-          LEFT JOIN call_recordings ON call_recordings.lead_call_id = lead_calls.id
+          LEFT JOIN users ON users.id = lead_calls.crm_user_id AND users.dealership_id = lead_calls.dealership_id
+          LEFT JOIN users AS sales_user ON sales_user.id = leads.assigned_to AND sales_user.dealership_id = leads.dealership_id
+          LEFT JOIN call_recordings ON call_recordings.lead_call_id = lead_calls.id AND call_recordings.dealership_id = lead_calls.dealership_id
           LEFT JOIN communication_ai_analyses AS analyses
-            ON analyses.source_type = 'call' AND analyses.source_id = lead_calls.id
+            ON analyses.source_type = 'call' AND analyses.source_id = lead_calls.id AND analyses.dealership_id = lead_calls.dealership_id
           WHERE ${access.clause}
           ORDER BY happened_at DESC, lead_calls.id DESC
           LIMIT ?
@@ -1086,12 +1185,18 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   async listLeadTasksForApi(leadId) {
+    const dealershipId = await this.getDealershipIdForLead(leadId);
+    if (!dealershipId) {
+      return [];
+    }
+
     const rows = await this.all(
       `
         SELECT tasks.*, users.name AS assigned_user_name
         FROM tasks
-        LEFT JOIN users ON users.id = tasks.user_id
+        LEFT JOIN users ON users.id = tasks.user_id AND users.dealership_id = tasks.dealership_id
         WHERE tasks.lead_id = ?
+          AND tasks.dealership_id = ?
         ORDER BY
           CASE tasks.status
             WHEN 'overdue' THEN 1
@@ -1101,22 +1206,24 @@ class PostgresCrmDatabase extends CrmDatabase {
           tasks.due_at ASC,
           tasks.created_at DESC
       `,
-      [leadId]
+      [leadId, dealershipId]
     );
     return rows.map((row) => this.formatTaskForApi(row));
   }
 
-  async listNotificationsForApi(userId, limit = 20) {
+  async listNotificationsForApi(userId, limit = 20, user = null) {
+    const dealershipId = this.currentDealershipId(user);
     const rows = await this.all(
       `
         SELECT notifications.*, leads.customer_name
         FROM notifications
-        LEFT JOIN leads ON leads.id = notifications.lead_id
+        LEFT JOIN leads ON leads.id = notifications.lead_id AND leads.dealership_id = notifications.dealership_id
         WHERE notifications.user_id = ?
+          AND notifications.dealership_id = ?
         ORDER BY notifications.created_at DESC
         LIMIT ?
       `,
-      [userId, limit]
+      [userId, dealershipId, limit]
     );
 
     return rows.map((row) => ({
@@ -1147,7 +1254,7 @@ class PostgresCrmDatabase extends CrmDatabase {
     }
 
     const timestamp = new Date().toISOString();
-    const dealershipId = getDefaultDealershipId();
+    const dealershipId = await this.resolveDealershipIdContext({ lead_id, user_id });
     const metadataJson = JSON.stringify(metadata || {});
 
     if (unique_key) {
@@ -1206,16 +1313,20 @@ class PostgresCrmDatabase extends CrmDatabase {
     );
   }
 
-  async markNotificationRead(id, userId) {
-    const notification = await this.get("SELECT * FROM notifications WHERE id = ? AND user_id = ?", [id, userId]);
+  async markNotificationRead(id, userId, user = null) {
+    const notification = await this.get(
+      "SELECT * FROM notifications WHERE id = ? AND user_id = ? AND dealership_id = ?",
+      [id, userId, this.currentDealershipId(user)]
+    );
     if (!notification) {
       throw new NotFoundError("Notification not found");
     }
 
-    await this.execute("UPDATE notifications SET status = ?, read_at = ? WHERE id = ?", [
+    await this.execute("UPDATE notifications SET status = ?, read_at = ? WHERE id = ? AND dealership_id = ?", [
       "read",
       new Date().toISOString(),
       id,
+      this.currentDealershipId(user),
     ]);
   }
 
@@ -1230,7 +1341,7 @@ class PostgresCrmDatabase extends CrmDatabase {
     metadata = {},
   }) {
     const timestamp = new Date().toISOString();
-    const dealershipId = getDefaultDealershipId();
+    const dealershipId = await this.resolveDealershipIdContext({ lead_id, user_id });
     const status = due_at && new Date(due_at).getTime() <= Date.now() ? "overdue" : "pending";
     const metadataJson = JSON.stringify(metadata || {});
     let inserted = null;
@@ -1313,14 +1424,15 @@ class PostgresCrmDatabase extends CrmDatabase {
       },
     });
     const task = await this.get(
-      "SELECT tasks.*, users.name AS assigned_user_name FROM tasks LEFT JOIN users ON users.id = tasks.user_id WHERE tasks.id = ?",
-      [inserted.id]
+      "SELECT tasks.*, users.name AS assigned_user_name FROM tasks LEFT JOIN users ON users.id = tasks.user_id AND users.dealership_id = tasks.dealership_id WHERE tasks.id = ? AND tasks.dealership_id = ?",
+      [inserted.id, dealershipId]
     );
     return this.formatTaskForApi(task);
   }
 
   async completeTask(id, actor) {
-    const task = await this.get("SELECT * FROM tasks WHERE id = ?", [id]);
+    const dealershipId = this.currentDealershipId(actor);
+    const task = await this.get("SELECT * FROM tasks WHERE id = ? AND dealership_id = ?", [id, dealershipId]);
     if (!task) {
       throw new NotFoundError("Task not found");
     }
@@ -1330,8 +1442,8 @@ class PostgresCrmDatabase extends CrmDatabase {
     }
 
     await this.execute(
-      "UPDATE tasks SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?",
-      ["completed", new Date().toISOString(), new Date().toISOString(), id]
+      "UPDATE tasks SET status = ?, completed_at = ?, updated_at = ? WHERE id = ? AND dealership_id = ?",
+      ["completed", new Date().toISOString(), new Date().toISOString(), id, dealershipId]
     );
     await this.createLeadActivity({
       lead_id: Number(task.lead_id),
@@ -1340,17 +1452,18 @@ class PostgresCrmDatabase extends CrmDatabase {
       content: `Task completed: ${task.title}`,
     });
     const updated = await this.get(
-      "SELECT tasks.*, users.name AS assigned_user_name FROM tasks LEFT JOIN users ON users.id = tasks.user_id WHERE tasks.id = ?",
-      [id]
+      "SELECT tasks.*, users.name AS assigned_user_name FROM tasks LEFT JOIN users ON users.id = tasks.user_id AND users.dealership_id = tasks.dealership_id WHERE tasks.id = ? AND tasks.dealership_id = ?",
+      [id, dealershipId]
     );
     return this.formatTaskForApi(updated);
   }
 
   async refreshTaskStatuses() {
     const now = new Date().toISOString();
+    const dealershipId = this.currentDealershipId();
     const overdueTasks = await this.all(
-      "SELECT * FROM tasks WHERE status = 'pending' AND due_at IS NOT NULL AND due_at <> '' AND due_at <= ?",
-      [now]
+      "SELECT * FROM tasks WHERE dealership_id = ? AND status = 'pending' AND due_at IS NOT NULL AND due_at <> '' AND due_at <= ?",
+      [dealershipId, now]
     );
 
     for (const task of overdueTasks) {
@@ -1369,7 +1482,7 @@ class PostgresCrmDatabase extends CrmDatabase {
     return overdueTasks.length;
   }
 
-  async getLatestAnalysisMap(leadIds = []) {
+  async getLatestAnalysisMap(leadIds = [], dealershipId = this.currentDealershipId()) {
     if (!leadIds.length) {
       return new Map();
     }
@@ -1379,9 +1492,10 @@ class PostgresCrmDatabase extends CrmDatabase {
         SELECT *
         FROM communication_ai_analyses
         WHERE lead_id = ANY(?)
+          AND dealership_id = ?
         ORDER BY created_at DESC
       `,
-      [leadIds]
+      [leadIds, dealershipId]
     );
     const map = new Map();
     rows.forEach((row) => {
@@ -1393,7 +1507,7 @@ class PostgresCrmDatabase extends CrmDatabase {
     return map;
   }
 
-  async getOpenTaskMap(leadIds = []) {
+  async getOpenTaskMap(leadIds = [], dealershipId = this.currentDealershipId()) {
     if (!leadIds.length) {
       return new Map();
     }
@@ -1402,12 +1516,13 @@ class PostgresCrmDatabase extends CrmDatabase {
       `
         SELECT tasks.*, users.name AS assigned_user_name
         FROM tasks
-        LEFT JOIN users ON users.id = tasks.user_id
+        LEFT JOIN users ON users.id = tasks.user_id AND users.dealership_id = tasks.dealership_id
         WHERE tasks.lead_id = ANY(?)
+          AND tasks.dealership_id = ?
           AND tasks.status IN ('pending', 'overdue')
         ORDER BY tasks.due_at ASC, tasks.created_at DESC
       `,
-      [leadIds]
+      [leadIds, dealershipId]
     );
 
     const map = new Map();
@@ -1420,7 +1535,7 @@ class PostgresCrmDatabase extends CrmDatabase {
     return map;
   }
 
-  async getMissedCallMap(leadIds = []) {
+  async getMissedCallMap(leadIds = [], dealershipId = this.currentDealershipId()) {
     if (!leadIds.length) {
       return new Map();
     }
@@ -1430,9 +1545,10 @@ class PostgresCrmDatabase extends CrmDatabase {
         SELECT *
         FROM lead_calls
         WHERE lead_id = ANY(?)
+          AND dealership_id = ?
         ORDER BY start_time DESC, created_at DESC
       `,
-      [leadIds]
+      [leadIds, dealershipId]
     );
 
     const map = new Map();
@@ -1460,9 +1576,10 @@ class PostgresCrmDatabase extends CrmDatabase {
         SELECT lead_id, direction, COALESCE(received_at, sent_at, created_at) AS happened_at
         FROM lead_messages
         WHERE lead_id = ANY(?)
+          AND dealership_id = ?
         ORDER BY happened_at DESC
       `,
-      [leadIds]
+      [leadIds, dealershipId]
     );
 
     messageRows.forEach((row) => {
@@ -1480,9 +1597,16 @@ class PostgresCrmDatabase extends CrmDatabase {
   async enforceFollowUpTasks() {
     await this.refreshTaskStatuses();
     const settings = await this.getExecutionSettings();
-    const rows = await this.all(`${this.apiLeadSelectSql()} ORDER BY leads.updated_at DESC`);
+    const dealershipId = this.currentDealershipId();
+    const rows = await this.all(
+      `${this.apiLeadSelectSql()} WHERE leads.dealership_id = ? ORDER BY leads.updated_at DESC`,
+      [dealershipId]
+    );
     const leads = rows.map((row) => this.formatApiLead(row));
-    const taskMap = await this.getOpenTaskMap(leads.map((lead) => Number(lead.id)));
+    const taskMap = await this.getOpenTaskMap(
+      leads.map((lead) => Number(lead.id)),
+      dealershipId
+    );
     const now = new Date();
 
     for (const lead of leads) {
@@ -1537,10 +1661,10 @@ class PostgresCrmDatabase extends CrmDatabase {
     const leads = rows.map((row) => this.formatApiLead(row));
     const leadIds = leads.map((lead) => Number(lead.id));
     const [taskMap, analysisMap, missedCallMap, notifications] = await Promise.all([
-      this.getOpenTaskMap(leadIds),
-      this.getLatestAnalysisMap(leadIds),
-      this.getMissedCallMap(leadIds),
-      user ? this.listNotificationsForApi(Number(user.id), 25) : [],
+      this.getOpenTaskMap(leadIds, this.currentDealershipId(user)),
+      this.getLatestAnalysisMap(leadIds, this.currentDealershipId(user)),
+      this.getMissedCallMap(leadIds, this.currentDealershipId(user)),
+      user ? this.listNotificationsForApi(Number(user.id), 25, user) : [],
     ]);
     const now = new Date();
 
@@ -1622,16 +1746,13 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   async createActivity({ lead_id, type, content, created_at = null }) {
-    const timestamp = created_at || new Date().toISOString();
-    const dealershipId = getDefaultDealershipId();
-
-    await this.execute(
-      `
-        INSERT INTO activities (dealership_id, lead_id, type, content, created_at)
-        VALUES (?, ?, ?, ?, ?)
-      `,
-      [dealershipId, lead_id, type, content, timestamp]
-    );
+    await this.createLeadActivity({
+      lead_id,
+      user_id: null,
+      type,
+      content,
+      created_at,
+    });
   }
 
   async createApiLead(input) {
@@ -1704,8 +1825,8 @@ class PostgresCrmDatabase extends CrmDatabase {
     return this.getApiLead(row.id);
   }
 
-  async updateApiLead(id, input) {
-    await this.getApiLead(id);
+  async updateApiLead(id, input, actor = null) {
+    const existingLead = await this.getApiLead(id, actor);
     const now = new Date().toISOString();
     const storedStatus = input.status ? toStoredStatus(input.status) : null;
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
@@ -1733,7 +1854,7 @@ class PostgresCrmDatabase extends CrmDatabase {
           listing_url = ?,
           message = ?,
           updated_at = ?
-        WHERE id = ?
+        WHERE id = ? AND dealership_id = ?
       `,
       [
         input.source || "website",
@@ -1756,14 +1877,15 @@ class PostgresCrmDatabase extends CrmDatabase {
         input.message || null,
         now,
         id,
+        existingLead.dealership_id,
       ]
     );
 
-    return this.getApiLead(id);
+    return this.getApiLead(id, actor);
   }
 
   async updateApiLeadStatus(id, status, actor = null, options = {}) {
-    const existingLead = await this.getApiLead(id);
+    const existingLead = await this.getApiLead(id, actor);
     const storedStatus = toStoredStatus(status);
     const nextStatus = fromStoredStatus(storedStatus);
 
@@ -1779,9 +1901,9 @@ class PostgresCrmDatabase extends CrmDatabase {
       `
         UPDATE leads
         SET status = ?, updated_at = ?
-        WHERE id = ?
+        WHERE id = ? AND dealership_id = ?
       `,
-      [storedStatus, new Date().toISOString(), id]
+      [storedStatus, new Date().toISOString(), id, existingLead.dealership_id]
     );
 
     await this.createActivity({
@@ -1801,7 +1923,7 @@ class PostgresCrmDatabase extends CrmDatabase {
       recommendation_only: Boolean(options.recommendation_only),
     });
 
-    return this.getApiLead(id);
+    return this.getApiLead(id, actor);
   }
 
   async getApiLeadWithActivities(id, user = null) {
@@ -1900,8 +2022,8 @@ class PostgresCrmDatabase extends CrmDatabase {
     };
   }
 
-  async createUser(input) {
-    const dealershipId = getDefaultDealershipId();
+  async createUser(input, actor = null) {
+    const dealershipId = this.currentDealershipId(actor);
     const row = await this.get(
       `
         INSERT INTO users (dealership_id, name, email, password_hash, role, created_at)
@@ -1914,8 +2036,11 @@ class PostgresCrmDatabase extends CrmDatabase {
     return this.getUser(row.id);
   }
 
-  async updateUser(id, input) {
-    await this.getUser(id);
+  async updateUser(id, input, actor = null) {
+    const existing = await this.getUser(id);
+    if (Number(existing.dealership_id || getDefaultDealershipId()) !== this.currentDealershipId(actor)) {
+      throw new NotFoundError("User not found");
+    }
     const fields = ["name = ?", "email = ?", "role = ?"];
     const params = [input.name, input.email.toLowerCase(), input.role];
 
@@ -1924,12 +2049,12 @@ class PostgresCrmDatabase extends CrmDatabase {
       params.push(input.password_hash);
     }
 
-    params.push(id);
+    params.push(id, this.currentDealershipId(actor));
     await this.execute(
       `
         UPDATE users
         SET ${fields.join(", ")}
-        WHERE id = ?
+        WHERE id = ? AND dealership_id = ?
       `,
       params
     );
@@ -1937,18 +2062,24 @@ class PostgresCrmDatabase extends CrmDatabase {
     return this.getUser(id);
   }
 
-  async deleteUser(id) {
+  async deleteUser(id, actor = null) {
     const user = await this.getUser(id);
+    if (Number(user.dealership_id || getDefaultDealershipId()) !== this.currentDealershipId(actor)) {
+      throw new NotFoundError("User not found");
+    }
 
     if (user.role === "admin") {
       const adminCount = Number(
         (
           await this.get(
-            `
+          `
               SELECT COUNT(*) AS count
               FROM users
               WHERE role = 'admin'
+                AND dealership_id = ?
             `
+          ,
+          [this.currentDealershipId(actor)]
           )
         ).count
       );
@@ -1958,37 +2089,42 @@ class PostgresCrmDatabase extends CrmDatabase {
       }
     }
 
-    await this.execute("DELETE FROM users WHERE id = ?", [id]);
+    await this.execute("DELETE FROM users WHERE id = ? AND dealership_id = ?", [id, this.currentDealershipId(actor)]);
   }
 
-  async listSalesUsers() {
+  async listSalesUsers(user = null) {
     return this.all(
       `
-        SELECT id, name, email, role, created_at
+        SELECT id, dealership_id, name, email, role, created_at
         FROM users
         WHERE role = 'sales'
+          AND dealership_id = ?
         ORDER BY LOWER(name) ASC, id ASC
-      `
+      `,
+      [this.currentDealershipId(user)]
     );
   }
 
-  async getAssignableSalesUser() {
+  async getAssignableSalesUser(user = null) {
     return this.get(
       `
-        SELECT id, name, email, role, created_at
+        SELECT id, dealership_id, name, email, role, created_at
         FROM users
         WHERE role = 'sales'
+          AND dealership_id = ?
         ORDER BY LOWER(name) ASC, id ASC
         LIMIT 1
-      `
+      `,
+      [this.currentDealershipId(user)]
     );
   }
 
-  async listContacts() {
+  async listContacts(user = null) {
     return this.all(
       `
         SELECT
           id,
+          dealership_id,
           first_name,
           last_name,
           email,
@@ -1998,24 +2134,27 @@ class PostgresCrmDatabase extends CrmDatabase {
           created_at,
           updated_at
         FROM contacts
+        WHERE dealership_id = ?
         ${this.contactOrderSql()}
-      `
+      `,
+      [this.currentDealershipId(user)]
     );
   }
 
-  async listContactsForSelect() {
-    const contacts = await this.listContacts();
+  async listContactsForSelect(user = null) {
+    const contacts = await this.listContacts(user);
     return contacts.map((contact) => ({
       ...contact,
       display_name: this.displayContactName(contact),
     }));
   }
 
-  async getContact(id) {
+  async getContact(id, user = null) {
     const contact = await this.get(
       `
         SELECT
           id,
+          dealership_id,
           first_name,
           last_name,
           email,
@@ -2026,8 +2165,9 @@ class PostgresCrmDatabase extends CrmDatabase {
           updated_at
         FROM contacts
         WHERE id = ?
+          AND dealership_id = ?
       `,
-      [id]
+      [id, this.currentDealershipId(user)]
     );
 
     if (!contact) {
@@ -2049,9 +2189,9 @@ class PostgresCrmDatabase extends CrmDatabase {
     );
   }
 
-  async createContact(input) {
+  async createContact(input, user = null) {
     const now = new Date().toISOString();
-    const dealershipId = getDefaultDealershipId();
+    const dealershipId = this.currentDealershipId(user);
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
     const row = await this.get(
       `
@@ -2083,11 +2223,11 @@ class PostgresCrmDatabase extends CrmDatabase {
       ]
     );
 
-    return this.getContact(row.id);
+    return this.getContact(row.id, user);
   }
 
-  async updateContact(id, input) {
-    await this.getContact(id);
+  async updateContact(id, input, user = null) {
+    await this.getContact(id, user);
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
     await this.execute(
       `
@@ -2116,12 +2256,12 @@ class PostgresCrmDatabase extends CrmDatabase {
       ]
     );
 
-    return this.getContact(id);
+    return this.getContact(id, user);
   }
 
-  async deleteContact(id) {
-    await this.getContact(id);
-    await this.execute("DELETE FROM contacts WHERE id = ?", [id]);
+  async deleteContact(id, user = null) {
+    await this.getContact(id, user);
+    await this.execute("DELETE FROM contacts WHERE id = ? AND dealership_id = ?", [id, this.currentDealershipId(user)]);
   }
 
   async listLeads(user) {
@@ -2226,18 +2366,21 @@ class PostgresCrmDatabase extends CrmDatabase {
     return this.getLead(id);
   }
 
-  async assignLead(id, assignedTo) {
-    await this.getLead(id);
+  async assignLead(id, assignedTo, actor = null) {
+    const lead = await this.getLead(id, actor);
     const assignee = await this.getUser(assignedTo);
+    if (Number(assignee.dealership_id || getDefaultDealershipId()) !== Number(lead.dealership_id || getDefaultDealershipId())) {
+      throw new ValidationError("Choose a valid salesperson.");
+    }
     await this.execute(
       `
         UPDATE leads
         SET
           assigned_to = ?,
           updated_at = ?
-        WHERE id = ?
+        WHERE id = ? AND dealership_id = ?
       `,
-      [assignedTo, new Date().toISOString(), id]
+      [assignedTo, new Date().toISOString(), id, lead.dealership_id]
     );
     await this.createActivity({
       lead_id: id,
@@ -2254,7 +2397,7 @@ class PostgresCrmDatabase extends CrmDatabase {
       metadata: { lead_id: Number(id) },
     });
 
-    return this.getLead(id);
+    return this.getLead(id, actor);
   }
 
   async updateLeadStatusIfNew(id, status = "contacted") {
@@ -2269,34 +2412,40 @@ class PostgresCrmDatabase extends CrmDatabase {
         SET
           status = ?,
           updated_at = ?
-        WHERE id = ?
+        WHERE id = ? AND dealership_id = ?
       `,
-      [status, new Date().toISOString(), id]
+      [status, new Date().toISOString(), id, lead.dealership_id]
     );
 
     return this.getLead(id);
   }
 
   async deleteLead(id) {
-    await this.getLead(id);
-    await this.execute("DELETE FROM leads WHERE id = ?", [id]);
+    const lead = await this.getLead(id);
+    await this.execute("DELETE FROM leads WHERE id = ? AND dealership_id = ?", [id, lead.dealership_id]);
   }
 
   async listLeadNotes(leadId) {
+    const dealershipId = await this.getDealershipIdForLead(leadId);
+    if (!dealershipId) {
+      return [];
+    }
+
     return this.all(
       `
         SELECT id, lead_id, body, created_at
         FROM notes
         WHERE lead_id = ?
+          AND dealership_id = ?
         ORDER BY created_at DESC, id DESC
       `,
-      [leadId]
+      [leadId, dealershipId]
     );
   }
 
   async addLeadNote(leadId, body, userId = null) {
     await this.getLead(leadId);
-    const dealershipId = getDefaultDealershipId();
+    const dealershipId = await this.resolveDealershipIdContext({ lead_id: leadId, user_id: userId });
     await this.execute(
       `
         INSERT INTO notes (dealership_id, lead_id, body, created_at)
@@ -2316,7 +2465,7 @@ class PostgresCrmDatabase extends CrmDatabase {
 
   async createLeadActivity(input) {
     const type = String(input.type || "").trim().toLowerCase();
-    const dealershipId = getDefaultDealershipId();
+    const dealershipId = await this.resolveDealershipIdContext(input);
     if (!LEAD_ACTIVITY_TYPES.includes(type)) {
       throw new ValidationError("Invalid lead activity type.");
     }
@@ -2355,13 +2504,19 @@ class PostgresCrmDatabase extends CrmDatabase {
   }
 
   async listLeadActivities(leadId) {
+    const dealershipId = await this.getDealershipIdForLead(leadId);
+    if (!dealershipId) {
+      return [];
+    }
+
     return this.all(
       `
         ${this.activitySelectSql()}
         WHERE lead_activities.lead_id = ?
+          AND lead_activities.dealership_id = ?
         ORDER BY lead_activities.created_at DESC, lead_activities.id DESC
       `,
-      [leadId]
+      [leadId, dealershipId]
     );
   }
 
@@ -2378,19 +2533,21 @@ class PostgresCrmDatabase extends CrmDatabase {
     );
   }
 
-  async findLeadByPhone(phone) {
+  async findLeadByPhone(phone, context = {}) {
     const normalizedPhone = normalizePhone(phone);
     if (!normalizedPhone) {
       return null;
     }
+    const dealershipId = Number(context.dealership_id || context.user?.dealership_id || getDefaultDealershipId());
 
     const matched = await this.get(
       `
         ${this.apiLeadSelectSql()}
-        WHERE leads.normalized_phone = ? OR contacts.normalized_phone = ?
+        WHERE leads.dealership_id = ?
+          AND (leads.normalized_phone = ? OR contacts.normalized_phone = ?)
         ORDER BY leads.updated_at DESC, leads.id DESC
       `,
-      [normalizedPhone, normalizedPhone]
+      [dealershipId, normalizedPhone, normalizedPhone]
     );
 
     return matched ? this.formatApiLead(matched) : null;
@@ -2414,7 +2571,7 @@ class PostgresCrmDatabase extends CrmDatabase {
     );
 
     const statusCounts = await Promise.all(
-      LEAD_STATUSES.map(async (status) => ({
+      CRM_LEAD_STATUSES.map(async (status) => ({
         status,
         count: Number(
           (
@@ -2424,7 +2581,7 @@ class PostgresCrmDatabase extends CrmDatabase {
                 FROM leads
                 WHERE status = ? AND ${access.clause}
               `,
-              [status, ...access.params]
+              [toStoredStatus(status), ...access.params]
             )
           ).count
         ),
@@ -2497,14 +2654,17 @@ class PostgresCrmDatabase extends CrmDatabase {
             `
               SELECT
                 users.id,
+                users.dealership_id,
                 users.name,
                 COUNT(leads.id) AS count
               FROM users
-              LEFT JOIN leads ON leads.assigned_to = users.id
+              LEFT JOIN leads ON leads.assigned_to = users.id AND leads.dealership_id = users.dealership_id
               WHERE users.role = 'sales'
-              GROUP BY users.id, users.name
+                AND users.dealership_id = ?
+              GROUP BY users.id, users.dealership_id, users.name
               ORDER BY LOWER(users.name) ASC
-            `
+            `,
+            [this.currentDealershipId(user)]
           )
         ).map((row) => ({
           ...row,
@@ -2529,14 +2689,15 @@ class PostgresCrmDatabase extends CrmDatabase {
     return user ? Number(user.id) : null;
   }
 
-  async getImportedMessageByExternalId(externalId) {
+  async getImportedMessageByExternalId(externalId, dealershipId = getDefaultDealershipId()) {
     return this.get(
       `
         SELECT id, external_id, source, lead_id, subject, sender, received_at, status, matched_reason, created_at
         FROM imported_messages
         WHERE external_id = ?
+          AND dealership_id = ?
       `,
-      [externalId]
+      [externalId, dealershipId]
     );
   }
 
@@ -2571,20 +2732,23 @@ class PostgresCrmDatabase extends CrmDatabase {
       ]
     );
 
-    return this.getImportedMessageByExternalId(input.external_id);
+    return this.getImportedMessageByExternalId(input.external_id, dealershipId);
   }
 
-  async findLeadDuplicate(input = {}) {
+  async findLeadDuplicate(input = {}, context = {}) {
     const email = String(input.email || "").trim().toLowerCase();
     const phone = normalizePhone(input.phone);
     const customerName = String(input.customer_name || "").trim().toLowerCase();
     const vehicleInterest = String(input.vehicle_interest || "").trim().toLowerCase();
+    const dealershipId = Number(context.dealership_id || context.user?.dealership_id || getDefaultDealershipId());
 
     const rows = await this.all(
       `
         ${this.apiLeadSelectSql()}
+        WHERE leads.dealership_id = ?
         ORDER BY leads.updated_at DESC, leads.id DESC
-      `
+      `,
+      [dealershipId]
     );
     const leads = rows.map((row) => this.formatApiLead(row));
 

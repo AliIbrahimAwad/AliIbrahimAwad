@@ -43,8 +43,10 @@
  * @property {string} created_at
  */
 
+const { CRM_LEAD_STATUSES } = require("../models/leadStatus");
+
 const USER_ROLES = ["admin", "manager", "sales"];
-const LEAD_STATUSES = ["new", "contacted", "appointment", "test_drive", "negotiation", "won", "lost"];
+const LEAD_STATUSES = CRM_LEAD_STATUSES;
 const LEAD_SOURCES = ["website", "autotrader", "cargurus", "manual"];
 const LEAD_ACTIVITY_TYPES = [
   "call",

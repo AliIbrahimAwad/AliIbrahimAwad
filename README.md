@@ -21,6 +21,7 @@ The integration expects these scopes:
 - `ReadCallRecording`
 - `ReadMessages`
 - `ReadPresence`
+- `RingOut`
 - `SMS`
 - `WebhookSubscriptions`
 
@@ -36,6 +37,11 @@ Important flags:
 - `RINGCENTRAL_SKIP_FORWARDED_CALLS=true`
 - `RINGCENTRAL_MAINTENANCE_PASSES=3`
 - `DEFAULT_DEALERSHIP_ID=1`
+
+For click-to-call:
+
+- each rep must authorize RingCentral with the `RingOut` scope available on the app
+- each rep's RingCentral extension must have at least one forwarding/device number or direct phone number configured so RingOut has a device to ring first
 
 ### Dealership ID foundation
 

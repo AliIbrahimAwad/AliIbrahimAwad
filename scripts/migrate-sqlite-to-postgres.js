@@ -44,7 +44,7 @@ async function main() {
     throw new Error("DATABASE_URL is required.");
   }
 
-  const source = await CrmDatabase.initialize({ dbPath: sqlitePath });
+  const source = await CrmDatabase.initialize({ dbPath: sqlitePath, allowSqlite: true });
   const target = await PostgresCrmDatabase.initialize({ connectionString });
 
   const users = source.all("SELECT id, name, email, password_hash, role, created_at FROM users ORDER BY id ASC");

@@ -51,7 +51,7 @@ function registerUserRoutes(app) {
         return;
       }
 
-      const users = await req.app.locals.db.listSalesUsers();
+      const users = await req.app.locals.db.listSalesUsers(req.currentUser);
       res.json({
         items: users.map((user) => ({
           id: Number(user.id),
@@ -69,7 +69,7 @@ function registerUserRoutes(app) {
     requireAuth,
     requireAdmin,
     asyncHandler(async (req, res) => {
-      const users = await req.app.locals.db.listUsers();
+      const users = await req.app.locals.db.listUsers(req.currentUser);
       res.json({
         items: users.map((user) => ({
           id: Number(user.id),
@@ -102,7 +102,7 @@ function registerUserRoutes(app) {
           email: payload.email,
           password_hash: passwordHash,
           role: payload.role,
-        });
+        }, req.currentUser);
 
         res.status(201).json({
           id: Number(user.id),
@@ -133,7 +133,7 @@ function registerUserRoutes(app) {
         return;
       }
 
-      await req.app.locals.db.deleteUser(userId);
+      await req.app.locals.db.deleteUser(userId, req.currentUser);
       res.status(204).end();
     })
   );
@@ -143,7 +143,7 @@ function registerUserRoutes(app) {
     requireAuth,
     requireAdmin,
     asyncHandler(async (req, res) => {
-      const users = await req.app.locals.db.listUsers();
+      const users = await req.app.locals.db.listUsers(req.currentUser);
       res.send(renderUsersListPage({ users, currentUser: req.currentUser }));
     })
   );
@@ -196,7 +196,7 @@ function registerUserRoutes(app) {
           email: payload.email,
           password_hash: passwordHash,
           role: payload.role,
-        });
+        }, req.currentUser);
         res.redirect("/users");
       } catch (error) {
         res.status(422).send(
@@ -225,6 +225,10 @@ function registerUserRoutes(app) {
     requireAdmin,
     asyncHandler(async (req, res) => {
       const user = await req.app.locals.db.getUser(Number(req.params.id));
+      if (Number(user.dealership_id) !== Number(req.currentUser.dealership_id)) {
+        res.status(404).send("Not found");
+        return;
+      }
       res.send(
         renderUserForm({
           title: "Edit user",
@@ -249,7 +253,11 @@ function registerUserRoutes(app) {
     requireAdmin,
     asyncHandler(async (req, res) => {
       const userId = Number(req.params.id);
-      await req.app.locals.db.getUser(userId);
+      const existingUser = await req.app.locals.db.getUser(userId);
+      if (Number(existingUser.dealership_id) !== Number(req.currentUser.dealership_id)) {
+        res.status(404).send("Not found");
+        return;
+      }
       const payload = sanitizeUserPayload(req.body);
       const errors = validateUserPayload(payload, { requirePassword: false });
 
@@ -275,7 +283,7 @@ function registerUserRoutes(app) {
           email: payload.email,
           role: payload.role,
           password_hash: passwordHash,
-        });
+        }, req.currentUser);
         res.redirect("/users");
       } catch (error) {
         res.status(422).send(

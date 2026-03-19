@@ -14,9 +14,10 @@ const { registerRingCentralRoutes } = require("./src/routes/ringcentral");
 const { registerUserRoutes } = require("./src/routes/users");
 const { registerWebRoutes } = require("./src/routes/web");
 const { renderDocument } = require("./src/views/layout");
-const { LEAD_STATUSES } = require("./src/types/models");
+const { CRM_LEAD_STATUSES } = require("./src/models/leadStatus");
 
 function shouldServeReactApp(options = {}) {
+  // Legacy server-rendered routes remain available only as an explicit compatibility mode.
   if (options.uiMode === "legacy") {
     return false;
   }
@@ -34,10 +35,9 @@ function shouldServeReactApp(options = {}) {
 
 async function createApp(options = {}) {
   const app = express();
-  const dbPath = options.dbPath || path.join(__dirname, "data", "crm.sqlite");
   const db = await initializeDatabase({
     dbClient: options.dbClient,
-    dbPath,
+    dbPath: options.dbPath,
     databaseSsl: options.databaseSsl,
     databaseUrl: options.databaseUrl,
   });
@@ -52,7 +52,7 @@ async function createApp(options = {}) {
   const serveReactApp = shouldServeReactApp(options) && fs.existsSync(frontendDistPath);
 
   app.locals.db = db;
-  app.locals.leadStatuses = LEAD_STATUSES;
+  app.locals.leadStatuses = CRM_LEAD_STATUSES;
   app.locals.ringcentral = ringcentral;
 
   app.use(express.urlencoded({ extended: false }));

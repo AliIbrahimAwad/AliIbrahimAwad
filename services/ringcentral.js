@@ -100,6 +100,55 @@ function extractPhone(endpoint) {
   return endpoint.phoneNumber || endpoint.extensionNumber || endpoint.address || "";
 }
 
+function scoreDevicePhoneCandidate(record = {}) {
+  let score = 0;
+  const usage = String(record.usageType || record.type || "").toLowerCase();
+  const status = String(record.status || "").toLowerCase();
+  const features = Array.isArray(record.features) ? record.features.map((feature) => String(feature).toLowerCase()) : [];
+
+  if (record.default === true || record.isDefault === true) {
+    score += 50;
+  }
+  if (status === "enabled" || status === "active" || status === "normal") {
+    score += 15;
+  }
+  if (features.some((feature) => feature.includes("ringout"))) {
+    score += 25;
+  }
+  if (usage.includes("forward")) {
+    score += 20;
+  }
+  if (usage.includes("direct")) {
+    score += 15;
+  }
+  if (usage.includes("main")) {
+    score += 10;
+  }
+  if (record.flipNumber === false) {
+    score += 5;
+  }
+
+  return score;
+}
+
+function pickBestDevicePhone(records = []) {
+  return records
+    .map((record) => {
+      const phoneNumber = normalizePhone(record.phoneNumber || record.phone_number || extractPhone(record));
+      if (!phoneNumber) {
+        return null;
+      }
+
+      return {
+        phoneNumber,
+        source: record.source || null,
+        score: scoreDevicePhoneCandidate(record),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.score - left.score)[0] || null;
+}
+
 function parseDirection(value) {
   return String(value || "").trim().toLowerCase() || "unknown";
 }
@@ -287,8 +336,10 @@ class RingCentralService {
   async completeOAuthConnection(userId, code) {
     const tokens = await this.client.exchangeCodeForTokens(code);
     const extension = await this.client.getExtensionInfo(tokens.access_token);
+    const user = await this.db.getUser(userId);
 
     const connection = await this.store.upsertConnection({
+      dealership_id: user.dealership_id,
       user_id: userId,
       ringcentral_account_id: extension.account?.id || extension.accountId || null,
       ringcentral_extension_id: extension.id || extension.extensionNumber || null,
@@ -392,12 +443,140 @@ class RingCentralService {
     });
   }
 
-  logCall(phone, duration = 0) {
+  hasRingOutScope(connection) {
+    const scopes = String(connection?.scope || this.client.scopes || "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((scope) => scope.toLowerCase());
+    return scopes.includes("ringout");
+  }
+
+  async resolveRingOutDevice(connection) {
+    let forwardingCandidate = null;
+    try {
+      const forwardingNumbers = await this.client.listForwardingNumbers(connection, this.store);
+      forwardingCandidate = pickBestDevicePhone(
+        Array.isArray(forwardingNumbers?.records)
+          ? forwardingNumbers.records.map((record) => ({ ...record, source: "forwarding_number" }))
+          : []
+      );
+    } catch (error) {
+      logStructured("info", "ringcentral_ringout_forwarding_lookup_failed", {
+        dealership_id: connection.dealership_id,
+        crm_user_id: Number(connection.user_id),
+        error: error.message,
+      });
+    }
+    if (forwardingCandidate) {
+      return forwardingCandidate;
+    }
+
+    let extensionPhoneCandidate = null;
+    try {
+      const extensionPhoneNumbers = await this.client.listExtensionPhoneNumbers(connection, this.store);
+      extensionPhoneCandidate = pickBestDevicePhone(
+        Array.isArray(extensionPhoneNumbers?.records)
+          ? extensionPhoneNumbers.records.map((record) => ({ ...record, source: "extension_phone_number" }))
+          : []
+      );
+    } catch (error) {
+      logStructured("info", "ringcentral_ringout_phone_lookup_failed", {
+        dealership_id: connection.dealership_id,
+        crm_user_id: Number(connection.user_id),
+        error: error.message,
+      });
+    }
+    if (extensionPhoneCandidate) {
+      return extensionPhoneCandidate;
+    }
+
+    let extensionContactCandidate = null;
+    try {
+      const extension = await this.client.getCurrentExtensionInfo(connection, this.store);
+      extensionContactCandidate = pickBestDevicePhone([
+        {
+          phoneNumber:
+            extension?.contact?.phoneNumber ||
+            extension?.contact?.businessPhone ||
+            extension?.contact?.mobilePhone ||
+            "",
+          default: true,
+          source: "extension_contact",
+        },
+      ]);
+    } catch (error) {
+      logStructured("info", "ringcentral_ringout_extension_lookup_failed", {
+        dealership_id: connection.dealership_id,
+        crm_user_id: Number(connection.user_id),
+        error: error.message,
+      });
+    }
+    if (extensionContactCandidate) {
+      return extensionContactCandidate;
+    }
+
+    throw new Error(
+      "RingCentral could not find a device number for this rep. Add a forwarding or direct phone number to the rep's RingCentral extension before using CRM click-to-call."
+    );
+  }
+
+  async initiateOutboundCall(phone, options = {}) {
+    const targetPhone = normalizePhone(phone);
+    const crmUserId = Number(options.crmUserId || 0);
+    const dealershipId = Number(options.dealership_id || options.user?.dealership_id || 0);
+
+    if (!targetPhone) {
+      throw new Error("A valid phone number is required before calling from the CRM.");
+    }
+
+    if (!crmUserId) {
+      throw new Error("A signed-in CRM rep is required before calling from the CRM.");
+    }
+
+    const connection = await this.getActiveConnectionForUser(crmUserId);
+    if (!connection) {
+      throw new Error("Connect RingCentral before calling from the CRM.");
+    }
+
+    if (dealershipId && Number(connection.dealership_id) !== dealershipId) {
+      throw new Error("The RingCentral connection for this rep does not match the current dealership.");
+    }
+
+    if (options.lead_dealership_id && Number(connection.dealership_id) !== Number(options.lead_dealership_id)) {
+      throw new Error("The RingCentral connection for this rep cannot access this lead.");
+    }
+
+    if (!this.hasRingOutScope(connection)) {
+      throw new Error(
+        "RingCentral click-to-call requires the RingOut scope. Add RingOut to the app scopes and reconnect this rep."
+      );
+    }
+
+    const device = await this.resolveRingOutDevice(connection);
+    const ringOut = await this.client.createRingOut(connection, this.store, {
+      fromPhoneNumber: device.phoneNumber,
+      toPhoneNumber: targetPhone,
+      playPrompt: false,
+    });
+
+    logStructured("info", "ringcentral_outbound_call_initiated", {
+      dealership_id: connection.dealership_id,
+      crm_user_id: Number(connection.user_id),
+      provider_extension_id: connection.ringcentral_extension_id,
+      to_number: targetPhone,
+      from_number: device.phoneNumber,
+      ringout_id: ringOut?.id || null,
+      ringout_status: ringOut?.status?.callStatus || null,
+    });
+
     return {
-      id: `call-${Date.now()}`,
-      phone,
-      duration: Number(duration) || 0,
-      createdAt: nowIso(),
+      id: ringOut?.id || null,
+      status: ringOut?.status?.callStatus || "InProgress",
+      from_number: device.phoneNumber,
+      to_number: targetPhone,
+      initiated_at: ringOut?.creationTime || nowIso(),
+      provider_extension_id: connection.ringcentral_extension_id || null,
+      raw: ringOut || {},
     };
   }
 
@@ -440,7 +619,9 @@ class RingCentralService {
     const toNumber = extractPhone(Array.isArray(message.to) ? message.to[0] : message.to || payload.to);
     const externalNumber = normalizePhone(getCounterpartyPhone({ direction, fromNumber, toNumber }));
     const providerExtensionId = extractExtensionIdFromMessagePayload(message, connection);
-    const lead = externalNumber ? await this.db.findLeadByPhone(externalNumber) : null;
+    const lead = externalNumber
+      ? await this.db.findLeadByPhone(externalNumber, { dealership_id: connection.dealership_id })
+      : null;
 
     if (!lead) {
       logStructured("info", "ringcentral_unmatched_sms_number", {
@@ -450,6 +631,7 @@ class RingCentralService {
     }
 
     const { created, record } = await this.store.upsertLeadMessage({
+      dealership_id: connection.dealership_id,
       lead_id: lead ? Number(lead.id) : null,
       provider: "ringcentral",
       provider_message_id: String(message.id || messageId),
@@ -475,6 +657,7 @@ class RingCentralService {
         content: record.body_text || "RingCentral SMS synced",
       });
       await this.store.enqueueJob({
+        dealership_id: connection.dealership_id,
         job_type: "analyze_sms_thread",
         unique_key: `analyze_sms:${record.id}`,
         payload: { lead_id: Number(lead.id), source_id: record.id },
@@ -618,7 +801,9 @@ class RingCentralService {
       const fromNumber = extractPhone(record.from);
       const toNumber = extractPhone(Array.isArray(record.to) ? record.to[0] : record.to);
       const externalNumber = normalizePhone(getCounterpartyPhone({ direction, fromNumber, toNumber }));
-      const lead = externalNumber ? await this.db.findLeadByPhone(externalNumber) : null;
+      const lead = externalNumber
+        ? await this.db.findLeadByPhone(externalNumber, { dealership_id: connection.dealership_id })
+        : null;
       const providerExtensionId = extractExtensionIdFromCallRecord(record, connection);
       const skipDecision = this.shouldSkipCallRecord(record, lead);
 
@@ -643,6 +828,7 @@ class RingCentralService {
 
       const recording = Array.isArray(record.recording) ? record.recording[0] : record.recording;
       const { created, record: savedCall } = await this.store.upsertLeadCall({
+        dealership_id: connection.dealership_id,
         lead_id: lead ? Number(lead.id) : null,
         provider: "ringcentral",
         provider_call_id: String(record.id),
@@ -675,6 +861,7 @@ class RingCentralService {
 
       if (recording?.id || recording?.contentUri) {
         const recordingEntry = await this.store.upsertCallRecording({
+          dealership_id: connection.dealership_id,
           lead_call_id: savedCall.id,
           provider: "ringcentral",
           provider_recording_id: recording?.id || null,
@@ -683,6 +870,7 @@ class RingCentralService {
           raw: recording || {},
         });
         await this.store.enqueueJob({
+          dealership_id: connection.dealership_id,
           job_type: "fetch_call_recording",
           unique_key: `fetch_recording:${recordingEntry.record.id}`,
           payload: { connection_id: connection.id, recording_id: recordingEntry.record.id },
@@ -733,6 +921,7 @@ class RingCentralService {
     fs.writeFileSync(filePath, buffer);
 
     return this.store.upsertCallRecording({
+      dealership_id: recordingRecord.dealership_id,
       lead_call_id: recordingRecord.lead_call_id,
       provider: "ringcentral",
       provider_recording_id: providerRecordingId || null,
@@ -746,9 +935,13 @@ class RingCentralService {
   }
 
   async analyzeCallRecording(recordingRecord) {
-    const leadCall = await this.db.get("SELECT * FROM lead_calls WHERE id = ?", [recordingRecord.lead_call_id]);
+    const leadCall = await this.db.get("SELECT * FROM lead_calls WHERE id = ? AND dealership_id = ?", [
+      recordingRecord.lead_call_id,
+      recordingRecord.dealership_id,
+    ]);
     if (!leadCall || !leadCall.lead_id) {
       await this.store.upsertCallRecording({
+        dealership_id: recordingRecord.dealership_id,
         lead_call_id: recordingRecord.lead_call_id,
         provider: "ringcentral",
         provider_recording_id: recordingRecord.provider_recording_id,
@@ -780,6 +973,7 @@ class RingCentralService {
     });
 
     await this.store.createCommunicationAnalysis({
+      dealership_id: lead.dealership_id,
       lead_id: Number(lead.id),
       source_type: "call",
       source_id: leadCall.id,
@@ -812,6 +1006,7 @@ class RingCentralService {
     });
 
     await this.store.upsertCallRecording({
+      dealership_id: recordingRecord.dealership_id,
       lead_call_id: recordingRecord.lead_call_id,
       provider: "ringcentral",
       provider_recording_id: recordingRecord.provider_recording_id,
@@ -846,6 +1041,7 @@ class RingCentralService {
     });
 
     await this.store.createCommunicationAnalysis({
+      dealership_id: lead.dealership_id,
       lead_id: Number(lead.id),
       source_type: "sms",
       source_id: sourceId,
@@ -887,7 +1083,9 @@ class RingCentralService {
   async processWebhookEnvelope(envelope) {
     const eventType = parseEventType(envelope.event);
     const eventKey = extractEventKey(envelope);
+    const connection = await this.resolveConnectionForEnvelope(envelope);
     const stored = await this.store.createWebhookEventIfNew({
+      dealership_id: connection?.dealership_id,
       event_key: eventKey,
       subscription_id: envelope.subscriptionId,
       event_type: eventType,
@@ -900,12 +1098,11 @@ class RingCentralService {
     }
 
     try {
-      const connection = await this.resolveConnectionForEnvelope(envelope);
-
       if (eventType === "sms" && connection) {
         await this.processSmsPayload(connection, envelope.body);
       } else if (eventType === "telephony_session" && connection) {
         await this.store.enqueueJob({
+          dealership_id: connection.dealership_id,
           job_type: "reconcile_call_session",
           unique_key: `reconcile_call_session:${envelope.body.telephonySessionId || envelope.body.sessionId || eventKey}`,
           payload: {
@@ -935,24 +1132,31 @@ class RingCentralService {
       const payload = decodeJson(job.payload_json, {});
       try {
         if (job.job_type === "reconcile_call_session") {
-          const connection = await this.store.getConnectionById(payload.connection_id);
+          const connection = await this.store.getConnectionById(payload.connection_id, job.dealership_id);
           const synced = connection ? await this.reconcileCallSession(connection, payload) : [];
           results.push({ job: job.id, type: job.job_type, synced: synced.length });
         } else if (job.job_type === "fetch_call_recording") {
-          const connection = await this.store.getConnectionById(payload.connection_id);
-          const recording = await this.db.get("SELECT * FROM call_recordings WHERE id = ?", [payload.recording_id]);
+          const connection = await this.store.getConnectionById(payload.connection_id, job.dealership_id);
+          const recording = await this.db.get("SELECT * FROM call_recordings WHERE id = ? AND dealership_id = ?", [
+            payload.recording_id,
+            job.dealership_id,
+          ]);
           if (!connection || !recording) {
             throw new Error("Recording fetch job is missing its connection or recording record.");
           }
           const saved = await this.fetchRecording(connection, recording);
           await this.store.enqueueJob({
+            dealership_id: saved.record.dealership_id,
             job_type: "analyze_call_recording",
             unique_key: `analyze_call_recording:${saved.record.id}`,
             payload: { recording_id: saved.record.id },
           });
           results.push({ job: job.id, type: job.job_type, recording_id: saved.record.id });
         } else if (job.job_type === "analyze_call_recording") {
-          const recording = await this.db.get("SELECT * FROM call_recordings WHERE id = ?", [payload.recording_id]);
+          const recording = await this.db.get("SELECT * FROM call_recordings WHERE id = ? AND dealership_id = ?", [
+            payload.recording_id,
+            job.dealership_id,
+          ]);
           const analysis = recording ? await this.analyzeCallRecording(recording) : null;
           results.push({ job: job.id, type: job.job_type, analyzed: Boolean(analysis) });
         } else if (job.job_type === "analyze_sms_thread") {
@@ -994,6 +1198,7 @@ class RingCentralService {
         const records = Array.isArray(response.records) ? response.records : [];
         for (const record of records) {
           await this.store.enqueueJob({
+            dealership_id: connection.dealership_id,
             job_type: "reconcile_call_session",
             unique_key: `reconcile_call_record:${record.id}`,
             payload: {

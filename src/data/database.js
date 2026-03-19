@@ -1,14 +1,13 @@
 const fs = require("fs");
 const path = require("path");
 const bcrypt = require("bcrypt");
-const initSqlJs = require("sql.js");
 
 const { getDefaultDealershipId } = require("../config/dealership");
 const { DEFAULT_EXECUTION_SETTINGS, normalizeExecutionSettings } = require("../config/executionSettings");
 const { categorizeOrganizedLead, evaluateLeadAttention } = require("../models/attention");
 const { canTransitionLeadStatus, CRM_LEAD_STATUSES } = require("../models/leadStatus");
 const { canViewAllLeads } = require("../models/user");
-const { LEAD_ACTIVITY_TYPES, LEAD_STATUSES } = require("../types/models");
+const { LEAD_ACTIVITY_TYPES } = require("../types/models");
 const { toDateOnlyString } = require("../utils/dates");
 const { normalizePhone } = require("../utils/phones");
 
@@ -248,7 +247,12 @@ class UnauthorizedError extends HttpError {
 }
 
 class CrmDatabase {
-  static async initialize({ dbPath }) {
+  static async initialize({ dbPath, allowSqlite = false }) {
+    if (!allowSqlite && process.env.NODE_ENV !== "test") {
+      throw new Error("SQLite is disabled for CRM runtime. Use PostgreSQL for application execution.");
+    }
+
+    const initSqlJs = require("sql.js");
     const SQL = await initSqlJs({
       locateFile: (file) => require.resolve(`sql.js/dist/${file}`),
     });
@@ -358,6 +362,21 @@ class CrmDatabase {
     this.execute("UPDATE lead_activities SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [dealershipId]);
     this.execute("UPDATE activities SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''", [dealershipId]);
     this.execute(
+      `
+        INSERT INTO lead_activities (dealership_id, lead_id, user_id, type, content, created_at)
+        SELECT activities.dealership_id, activities.lead_id, NULL, activities.type, activities.content, activities.created_at
+        FROM activities
+        LEFT JOIN lead_activities
+          ON lead_activities.dealership_id = activities.dealership_id
+         AND lead_activities.lead_id = activities.lead_id
+         AND lead_activities.user_id IS NULL
+         AND lead_activities.type = activities.type
+         AND lead_activities.content = activities.content
+         AND lead_activities.created_at = activities.created_at
+        WHERE lead_activities.id IS NULL
+      `
+    );
+    this.execute(
       "UPDATE imported_messages SET dealership_id = ? WHERE dealership_id IS NULL OR dealership_id = ''",
       [dealershipId]
     );
@@ -426,17 +445,15 @@ class CrmDatabase {
   }
 
   accessClauseForUser(user, alias = "leads") {
-    if (!user || canViewAllLeads(user)) {
-      return {
-        clause: "1 = 1",
-        params: [],
-      };
+    const params = [Number(user?.dealership_id || getDefaultDealershipId())];
+    let clause = `${alias}.dealership_id = ?`;
+
+    if (user && !canViewAllLeads(user)) {
+      clause += ` AND ${alias}.assigned_to = ?`;
+      params.push(user.id);
     }
 
-    return {
-      clause: `${alias}.assigned_to = ?`,
-      params: [user.id],
-    };
+    return { clause, params };
   }
 
   contactOrderSql() {
@@ -545,16 +562,18 @@ class CrmDatabase {
         sales_user.name AS assigned_user_name,
         (
           SELECT content
-          FROM activities
-          WHERE activities.lead_id = leads.id
-          ORDER BY activities.created_at DESC, activities.id DESC
+          FROM lead_activities
+          WHERE lead_activities.lead_id = leads.id
+            AND lead_activities.dealership_id = leads.dealership_id
+          ORDER BY lead_activities.created_at DESC, lead_activities.id DESC
           LIMIT 1
         ) AS latest_activity_content,
         (
           SELECT created_at
-          FROM activities
-          WHERE activities.lead_id = leads.id
-          ORDER BY activities.created_at DESC, activities.id DESC
+          FROM lead_activities
+          WHERE lead_activities.lead_id = leads.id
+            AND lead_activities.dealership_id = leads.dealership_id
+          ORDER BY lead_activities.created_at DESC, lead_activities.id DESC
           LIMIT 1
         ) AS latest_activity_at
       FROM leads
@@ -604,7 +623,7 @@ class CrmDatabase {
   listUsers() {
     return this.all(
       `
-        SELECT id, name, email, role, created_at
+        SELECT id, dealership_id, name, email, role, created_at
         FROM users
         ORDER BY
           CASE role
@@ -620,7 +639,7 @@ class CrmDatabase {
   getUser(id) {
     const user = this.get(
       `
-        SELECT id, name, email, password_hash, role, created_at
+        SELECT id, dealership_id, name, email, password_hash, role, created_at
         FROM users
         WHERE id = ?
       `,
@@ -637,7 +656,7 @@ class CrmDatabase {
   getUserByEmail(email) {
     return this.get(
       `
-        SELECT id, name, email, password_hash, role, created_at
+        SELECT id, dealership_id, name, email, password_hash, role, created_at
         FROM users
         WHERE LOWER(email) = LOWER(?)
       `,
@@ -733,17 +752,26 @@ class CrmDatabase {
   }
 
   listLeadActivitiesForApi(leadId) {
+    const lead = this.get("SELECT dealership_id FROM leads WHERE id = ?", [leadId]);
+    if (!lead) {
+      return [];
+    }
+
     return this.all(
       `
-        SELECT id, lead_id, type, content, created_at
-        FROM activities
-        WHERE lead_id = ?
-        ORDER BY created_at DESC, id DESC
+        SELECT lead_activities.id, lead_activities.lead_id, lead_activities.user_id, lead_activities.type, lead_activities.content, lead_activities.created_at, users.name AS actor_name
+        FROM lead_activities
+        LEFT JOIN users ON users.id = lead_activities.user_id AND users.dealership_id = lead_activities.dealership_id
+        WHERE lead_activities.lead_id = ?
+          AND lead_activities.dealership_id = ?
+        ORDER BY lead_activities.created_at DESC, lead_activities.id DESC
       `,
-      [leadId]
+      [leadId, lead.dealership_id]
     ).map((row) => ({
       id: Number(row.id),
       lead_id: Number(row.lead_id),
+      user_id: row.user_id == null ? null : Number(row.user_id),
+      actor_name: row.actor_name || null,
       type: row.type,
       content: row.content,
       created_at: row.created_at,
@@ -1670,16 +1698,13 @@ class CrmDatabase {
   }
 
   createActivity({ lead_id, type, content, created_at = null }) {
-    const timestamp = created_at || new Date().toISOString();
-    const dealershipId = getDefaultDealershipId();
-
-    this.execute(
-      `
-        INSERT INTO activities (dealership_id, lead_id, type, content, created_at)
-        VALUES (?, ?, ?, ?, ?)
-      `,
-      [dealershipId, lead_id, type, content, timestamp]
-    );
+    this.createLeadActivity({
+      lead_id,
+      user_id: null,
+      type,
+      content,
+      created_at,
+    });
   }
 
   createApiLead(input) {
@@ -2421,19 +2446,21 @@ class CrmDatabase {
     );
   }
 
-  findLeadByPhone(phone) {
+  findLeadByPhone(phone, context = {}) {
     const normalizedPhone = normalizePhone(phone);
     if (!normalizedPhone) {
       return null;
     }
+    const dealershipId = Number(context.dealership_id || context.user?.dealership_id || getDefaultDealershipId());
 
     const matched = this.get(
       `
         ${this.apiLeadSelectSql()}
-        WHERE leads.normalized_phone = ? OR contacts.normalized_phone = ?
+        WHERE leads.dealership_id = ?
+          AND (leads.normalized_phone = ? OR contacts.normalized_phone = ?)
         ORDER BY leads.updated_at DESC, leads.id DESC
       `,
-      [normalizedPhone, normalizedPhone]
+      [dealershipId, normalizedPhone, normalizedPhone]
     );
 
     return matched ? this.formatApiLead(matched) : null;
@@ -2454,7 +2481,7 @@ class CrmDatabase {
       ).count
     );
 
-    const statusCounts = LEAD_STATUSES.map((status) => ({
+    const statusCounts = CRM_LEAD_STATUSES.map((status) => ({
       status,
       count: Number(
         this.get(
@@ -2463,7 +2490,7 @@ class CrmDatabase {
             FROM leads
             WHERE status = ? AND ${access.clause}
           `,
-          [status, ...access.params]
+          [toStoredStatus(status), ...access.params]
         ).count
       ),
     }));
@@ -2553,14 +2580,15 @@ class CrmDatabase {
     };
   }
 
-  getImportedMessageByExternalId(externalId) {
+  getImportedMessageByExternalId(externalId, dealershipId = getDefaultDealershipId()) {
     return this.get(
       `
         SELECT id, external_id, source, lead_id, subject, sender, received_at, status, matched_reason, created_at
         FROM imported_messages
         WHERE external_id = ?
+          AND dealership_id = ?
       `,
-      [externalId]
+      [externalId, dealershipId]
     );
   }
 
@@ -2595,20 +2623,23 @@ class CrmDatabase {
       ]
     );
     this.save();
-    return this.getImportedMessageByExternalId(input.external_id);
+    return this.getImportedMessageByExternalId(input.external_id, dealershipId);
   }
 
-  findLeadDuplicate(input = {}) {
+  findLeadDuplicate(input = {}, context = {}) {
     const email = String(input.email || "").trim().toLowerCase();
     const phone = normalizePhone(input.phone);
     const customerName = String(input.customer_name || "").trim().toLowerCase();
     const vehicleInterest = String(input.vehicle_interest || "").trim().toLowerCase();
+    const dealershipId = Number(context.dealership_id || context.user?.dealership_id || getDefaultDealershipId());
 
     const rows = this.all(
       `
         ${this.apiLeadSelectSql()}
+        WHERE leads.dealership_id = ?
         ORDER BY leads.updated_at DESC, leads.id DESC
-      `
+      `,
+      [dealershipId]
     );
     const leads = rows.map((row) => this.formatApiLead(row));
 

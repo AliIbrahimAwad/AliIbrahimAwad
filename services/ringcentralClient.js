@@ -173,6 +173,45 @@ class RingCentralApiClient {
     });
   }
 
+  async getCurrentExtensionInfo(connection, store) {
+    return this.requestWithRefresh(connection, store, {
+      url: buildUrl(this.serverUrl, "/restapi/v1.0/account/~/extension/~"),
+    });
+  }
+
+  async listForwardingNumbers(connection, store) {
+    return this.requestWithRefresh(connection, store, {
+      url: buildUrl(this.serverUrl, "/restapi/v1.0/account/~/extension/~/forwarding-number"),
+    });
+  }
+
+  async listExtensionPhoneNumbers(connection, store) {
+    return this.requestWithRefresh(connection, store, {
+      url: buildUrl(this.serverUrl, "/restapi/v1.0/account/~/extension/~/phone-number"),
+    });
+  }
+
+  async createRingOut(connection, store, { fromPhoneNumber, toPhoneNumber, callerId, playPrompt = false } = {}) {
+    const payload = {
+      from: { phoneNumber: fromPhoneNumber },
+      to: { phoneNumber: toPhoneNumber },
+      playPrompt: Boolean(playPrompt),
+    };
+
+    if (callerId) {
+      payload.callerId = { phoneNumber: callerId };
+    }
+
+    return this.requestWithRefresh(connection, store, {
+      url: buildUrl(this.serverUrl, "/restapi/v1.0/account/~/extension/~/ring-out"),
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  }
+
   async createSubscription(connection, store, eventFilters = DEFAULT_EVENT_FILTERS) {
     if (!this.webhookUrl) {
       throw new Error("RINGCENTRAL_WEBHOOK_URL is required before creating subscriptions.");
@@ -200,6 +239,7 @@ class RingCentralApiClient {
     });
 
     return store.saveSubscription({
+      dealership_id: connection.dealership_id,
       connection_id: connection.id,
       subscription_id: response.id,
       event_filters: response.eventFilters || eventFilters,

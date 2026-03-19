@@ -738,8 +738,63 @@ test("API SMS endpoint sends a CRM message and returns refreshed lead detail", a
   }
 });
 
-test("API call endpoint logs an outbound CRM call and returns refreshed lead detail", async () => {
-  await withServer(async ({ app, server }) => {
+test("API call endpoint initiates a RingCentral RingOut call without creating a fake completed call", async () => {
+  const temp = createTempDbPath();
+  const fetchImpl = async (url, options = {}) => {
+    if (String(url).includes("/forwarding-number")) {
+      return new Response(
+        JSON.stringify({
+          records: [
+            {
+              phoneNumber: "+1 (647) 555-1999",
+              default: true,
+              status: "Enabled",
+              features: ["RingOut"],
+              type: "ForwardingNumber",
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    if (String(url).includes("/ring-out")) {
+      const payload = JSON.parse(String(options.body || "{}"));
+      assert.equal(payload.from.phoneNumber, "+16475551999");
+      assert.equal(payload.to.phoneNumber, "+16475550112");
+      assert.equal(payload.playPrompt, false);
+
+      return new Response(
+        JSON.stringify({
+          id: "ringout-1",
+          creationTime: "2026-03-19T15:00:00.000Z",
+          status: {
+            callStatus: "InProgress",
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  const app = await createApp({
+    dbPath: temp.dbPath,
+    uiMode: "legacy",
+    ringcentral: {
+      fetchImpl,
+    },
+  });
+  const server = app.listen(0);
+
+  try {
     const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
     const lead = app.locals.db.createApiLead({
       source: "website",
@@ -759,7 +814,7 @@ test("API call endpoint logs an outbound CRM call and returns refreshed lead det
       access_token: "token",
       refresh_token: "refresh",
       token_type: "Bearer",
-      scope: "ReadCallLog",
+      scope: "ReadCallLog RingOut",
       status: "active",
     });
 
@@ -771,11 +826,23 @@ test("API call endpoint logs an outbound CRM call and returns refreshed lead det
       path: `/api/leads/${lead.id}/call`,
     });
 
-    assert.equal(response.statusCode, 200);
+    assert.equal(response.statusCode, 202);
     const body = JSON.parse(response.body);
-    assert.equal(body.lead.status, "contacted");
-    assert.ok(body.timeline.some((item) => item.type === "call"));
-  });
+    assert.equal(body.ok, true);
+    assert.equal(body.call_attempt.id, "ringout-1");
+    assert.equal(body.call_attempt.status, "InProgress");
+    assert.equal(body.call_attempt.from_number, "+16475551999");
+    assert.equal(body.call_attempt.to_number, "+16475550112");
+
+    const storedLead = await app.locals.db.getApiLead(Number(lead.id), salesUser);
+    assert.equal(storedLead.status, "new");
+
+    const callCount = app.locals.db.get("SELECT COUNT(*) AS count FROM lead_calls WHERE lead_id = ?", [lead.id]);
+    assert.equal(Number(callCount.count), 0);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(temp.dir, { recursive: true, force: true });
+  }
 });
 
 test("API hold endpoint creates a hold task and note for the lead", async () => {
@@ -969,7 +1036,7 @@ test("RingCentral webhook logs phone activity and auto-updates lead status", asy
     assert.equal(updatedLead.status, "appointment");
 
     const activities = await app.locals.db.all(
-      "SELECT * FROM activities WHERE lead_id = ? ORDER BY created_at DESC",
+      "SELECT * FROM lead_activities WHERE lead_id = ? ORDER BY created_at DESC",
       [lead.id]
     );
     assert.ok(activities.some((activity) => /test drive appointment/i.test(String(activity.content))));

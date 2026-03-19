@@ -67,6 +67,7 @@ function formatLead(lead) {
     id: lead.id,
     customerName: lead.customer_name,
     assignedTo: lead.assigned_to ?? null,
+    rawPhone: lead.phone || "",
     phone: lead.phone ? formatPhoneNumber(lead.phone) : "Not available",
     email: lead.email || "No email on file",
     vehicleInterest: lead.vehicle_interest || "Vehicle inquiry",
@@ -600,7 +601,7 @@ export default function App() {
   const search = deferredQuery.trim().toLowerCase();
   const matchesSearch = (lead) =>
     !search ||
-    [lead.customerName, lead.vehicleInterest, lead.phone, lead.source, lead.messagePreview, lead.attentionReason, lead.aiSummary]
+    [lead.customerName, lead.vehicleInterest, lead.phone, lead.rawPhone, lead.source, lead.messagePreview, lead.attentionReason, lead.aiSummary]
       .join(" ")
       .toLowerCase()
       .includes(search);
@@ -816,20 +817,8 @@ export default function App() {
     try {
       setCallLogging(true);
       const payload = await logLeadCall(selectedLeadId);
-      setSelectedLeadDetails({
-        ...formatLead(payload.lead),
-        activities: payload.activities.map(formatActivity),
-        timeline: (payload.timeline || []).map(formatTimelineItem),
-        tasks: payload.tasks || [],
-      });
-      await refreshWorklist();
-      if (leadLibraryLoaded) {
-        await loadLeadLibrary();
-      }
-      if (conversationFeedLoaded) {
-        await loadConversationFeed();
-      }
       setError("");
+      return payload.call_attempt || null;
     } catch (callError) {
       setError(callError.message || "Unable to start the call.");
       throw callError;
