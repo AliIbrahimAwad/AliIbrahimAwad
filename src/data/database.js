@@ -1815,7 +1815,8 @@ class CrmDatabase extends BaseCrmDatabase {
         settings,
         now
       );
-      organized[category].push(payload);
+      const targetCategory = Object.prototype.hasOwnProperty.call(organized, category) ? category : "contacted";
+      organized[targetCategory].push(payload);
     });
 
     attention.sort((left, right) => {
