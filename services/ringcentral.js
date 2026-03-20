@@ -11,6 +11,7 @@ const {
 const { RingCentralApiClient, DEFAULT_EVENT_FILTERS, DEFAULT_SERVER_URL, buildUrl } = require("./ringcentralClient");
 const { createRingCentralRepository } = require("./ringcentralRepository");
 const { logStructured } = require("./structuredLogger");
+const { NotFoundError, ValidationError } = require("../src/data/core");
 const { normalizePhone } = require("../src/utils/phones");
 
 const DEFAULT_RECORDINGS_DIR = path.join(__dirname, "..", "data", "ringcentral", "recordings");
@@ -131,6 +132,34 @@ function scoreDevicePhoneCandidate(record = {}) {
   return score;
 }
 
+function scoreSmsPhoneCandidate(record = {}) {
+  let score = 0;
+  const usage = String(record.usageType || record.type || "").toLowerCase();
+  const status = String(record.status || "").toLowerCase();
+  const features = Array.isArray(record.features) ? record.features.map((feature) => String(feature).toLowerCase()) : [];
+  const hasSmsFeature = features.some(
+    (feature) => feature.includes("sms") || feature.includes("message") || feature.includes("text")
+  );
+
+  if (record.default === true || record.isDefault === true) {
+    score += 50;
+  }
+  if (status === "enabled" || status === "active" || status === "normal") {
+    score += 15;
+  }
+  if (hasSmsFeature) {
+    score += 40;
+  }
+  if (usage.includes("direct")) {
+    score += 20;
+  }
+  if (usage.includes("main")) {
+    score += 10;
+  }
+
+  return score;
+}
+
 function pickBestDevicePhone(records = []) {
   return records
     .map((record) => {
@@ -147,6 +176,37 @@ function pickBestDevicePhone(records = []) {
     })
     .filter(Boolean)
     .sort((left, right) => right.score - left.score)[0] || null;
+}
+
+function pickBestSmsPhone(records = []) {
+  const normalized = records
+    .map((record) => {
+      const phoneNumber = normalizePhone(record.phoneNumber || record.phone_number || extractPhone(record));
+      if (!phoneNumber) {
+        return null;
+      }
+
+      return {
+        phoneNumber,
+        source: record.source || null,
+        score: scoreSmsPhoneCandidate(record),
+        smsCapable: Array.isArray(record.features)
+          ? record.features.some((feature) => {
+              const normalizedFeature = String(feature).toLowerCase();
+              return (
+                normalizedFeature.includes("sms") ||
+                normalizedFeature.includes("message") ||
+                normalizedFeature.includes("text")
+              );
+            })
+          : false,
+      };
+    })
+    .filter(Boolean);
+
+  const smsCapable = normalized.filter((record) => record.smsCapable);
+  const candidates = smsCapable.length ? smsCapable : normalized;
+  return candidates.sort((left, right) => right.score - left.score)[0] || null;
 }
 
 function parseDirection(value) {
@@ -391,6 +451,202 @@ class RingCentralService {
     return connection;
   }
 
+  async listUnmatchedCommunications({ status = "", limit = 100 } = {}, user) {
+    return this.store.listUnmatchedCommunications({ status, limit }, user);
+  }
+
+  assertResolvableUnmatched(item) {
+    if (!item) {
+      throw new NotFoundError("Unmatched communication not found.");
+    }
+
+    if (["resolved", "dismissed"].includes(String(item.status || "").toLowerCase())) {
+      throw new ValidationError("This communication has already been resolved.");
+    }
+  }
+
+  async storeMatchedSmsForLead(item, lead) {
+    const message = item.raw || decodeJson(item.raw_json, {}) || {};
+    const { created, record } = await this.store.upsertLeadMessage({
+      dealership_id: Number(item.dealership_id),
+      lead_id: Number(lead.id),
+      provider: item.provider || "ringcentral",
+      provider_message_id: String(item.provider_message_id),
+      thread_id: message.conversationId || message.conversation?.id || null,
+      direction: item.direction || "inbound",
+      from_number: item.from_number || null,
+      to_number: item.to_number || null,
+      external_number: item.normalized_from_number || normalizePhone(item.from_number) || null,
+      subject: message.subject || null,
+      body_text: item.body_text || extractMessageBody(message),
+      message_status: message.messageStatus || null,
+      sent_at: message.creationTime || item.received_at || null,
+      received_at: item.received_at || message.lastModifiedTime || message.creationTime || null,
+      crm_user_id: item.crm_user_id == null ? null : Number(item.crm_user_id),
+      provider_extension_id: item.provider_extension_id || null,
+      raw: message,
+    });
+
+    if (created) {
+      await this.db.createActivity({
+        lead_id: Number(lead.id),
+        type: "sms",
+        content: record.body_text || "RingCentral SMS synced",
+      });
+      await this.store.enqueueJob({
+        dealership_id: Number(item.dealership_id),
+        job_type: "analyze_sms_thread",
+        unique_key: `analyze_sms:${record.id}`,
+        payload: { lead_id: Number(lead.id), source_id: record.id },
+      });
+    }
+
+    return record;
+  }
+
+  async storeMatchedCallForLead(item, lead) {
+    const record = item.raw || decodeJson(item.raw_json, {}) || {};
+    const recording = Array.isArray(record.recording) ? record.recording[0] : record.recording;
+    const { created, record: savedCall } = await this.store.upsertLeadCall({
+      dealership_id: Number(item.dealership_id),
+      lead_id: Number(lead.id),
+      provider: item.provider || "ringcentral",
+      provider_call_id: String(item.provider_call_id),
+      session_id: record.sessionId || item.provider_call_id || null,
+      telephony_session_id: record.telephonySessionId || null,
+      direction: item.direction || "inbound",
+      from_number: item.from_number || null,
+      to_number: item.to_number || null,
+      external_number: item.normalized_from_number || normalizePhone(item.from_number) || null,
+      result: record.result || null,
+      action: record.action || null,
+      duration_seconds: item.call_duration == null ? 0 : Number(item.call_duration),
+      start_time: item.received_at || record.startTime || null,
+      end_time: record.lastModifiedTime || null,
+      crm_user_id: item.crm_user_id == null ? null : Number(item.crm_user_id),
+      provider_extension_id: item.provider_extension_id || null,
+      recording_id: recording?.id || null,
+      recording_status: recording ? "available" : "none",
+      transcript_status: recording ? "pending" : "not_requested",
+      raw: record,
+    });
+
+    if (created) {
+      await this.db.createActivity({
+        lead_id: Number(lead.id),
+        type: "call_logged",
+        content: formatCallActivity(savedCall),
+      });
+    }
+
+    if (recording?.id || recording?.contentUri) {
+      const connection =
+        (item.provider_extension_id
+          ? await this.store.getConnectionByExtensionId(item.provider_extension_id, Number(item.dealership_id))
+          : null) ||
+        (item.crm_user_id == null ? null : await this.store.getConnectionByUserId(Number(item.crm_user_id)));
+      const recordingEntry = await this.store.upsertCallRecording({
+        dealership_id: Number(item.dealership_id),
+        lead_call_id: savedCall.id,
+        provider: item.provider || "ringcentral",
+        provider_recording_id: recording?.id || null,
+        content_uri: recording?.contentUri || null,
+        transcript_status: "pending",
+        raw: recording || {},
+      });
+      await this.store.enqueueJob({
+        dealership_id: Number(item.dealership_id),
+        job_type: "fetch_call_recording",
+        unique_key: `fetch_recording:${recordingEntry.record.id}`,
+        payload: { connection_id: connection?.id || null, recording_id: recordingEntry.record.id },
+      });
+    }
+
+    if (looksLikeMissedCall(record)) {
+      const settings = await this.db.getExecutionSettings();
+      await this.db.createOrRefreshTask({
+        lead_id: Number(lead.id),
+        user_id: lead.assigned_to ? Number(lead.assigned_to) : item.crm_user_id == null ? null : Number(item.crm_user_id),
+        type: "missed_call_callback",
+        title: "Return missed call",
+        due_at: plusMinutes(nowIso(), settings.missed_call_task_due_minutes),
+        source: "system",
+        unique_key: `missed-call:${savedCall.id}`,
+        metadata: {
+          provider_call_id: savedCall.provider_call_id,
+          external_number: savedCall.external_number,
+        },
+      });
+    }
+
+    return savedCall;
+  }
+
+  async assignUnmatchedCommunication(id, leadId, user) {
+    const item = await this.store.getUnmatchedCommunicationById(id, user);
+    this.assertResolvableUnmatched(item);
+
+    const lead = await this.db.getApiLead(Number(leadId), user);
+    if (Number(lead.dealership_id) !== Number(item.dealership_id)) {
+      throw new ValidationError("This communication does not belong to the selected dealership lead.");
+    }
+
+    if (item.type === "sms") {
+      await this.storeMatchedSmsForLead(item, lead);
+    } else if (item.type === "call") {
+      await this.storeMatchedCallForLead(item, lead);
+    } else {
+      throw new ValidationError("Unsupported communication type.");
+    }
+
+    await this.store.updateUnmatchedCommunication(
+      item.id,
+      {
+        status: "resolved",
+        resolved_lead_id: Number(lead.id),
+      },
+      user
+    );
+
+    return { lead_id: Number(lead.id) };
+  }
+
+  async createLeadFromUnmatched(id, input = {}, user) {
+    const item = await this.store.getUnmatchedCommunicationById(id, user);
+    this.assertResolvableUnmatched(item);
+
+    const lead = await this.db.createApiLead(
+      {
+        source: "ringcentral",
+        customer_name: String(input.customer_name || input.name || "").trim() || null,
+        phone: item.normalized_from_number || item.from_number || null,
+        email: null,
+        vehicle_interest: null,
+        message: item.body_text || null,
+        status: "new",
+        assigned_to: Number(user.id),
+        dealership_id: Number(user.dealership_id),
+      },
+      user
+    );
+
+    await this.assignUnmatchedCommunication(item.id, Number(lead.id), user);
+    return { lead_id: Number(lead.id) };
+  }
+
+  async dismissUnmatchedCommunication(id, user) {
+    const item = await this.store.getUnmatchedCommunicationById(id, user);
+    this.assertResolvableUnmatched(item);
+    await this.store.updateUnmatchedCommunication(
+      item.id,
+      {
+        status: "dismissed",
+        resolved_lead_id: null,
+      },
+      user
+    );
+  }
+
   async sendSMS(phone, message, options = {}) {
     if (!phone || !message) {
       throw new Error("Phone number and message are required.");
@@ -436,11 +692,69 @@ class RingCentralService {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        from: { extensionId: connection.ringcentral_extension_id || "~" },
+        from: { phoneNumber: (await this.resolveSmsSender(connection)).phoneNumber },
         to: [{ phoneNumber: phone }],
         text: message,
       }),
     });
+  }
+
+  async resolveSmsSender(connection) {
+    let extensionPhoneCandidate = null;
+    try {
+      const extensionPhoneNumbers = await this.client.listExtensionPhoneNumbers(connection, this.store);
+      extensionPhoneCandidate = pickBestSmsPhone(
+        Array.isArray(extensionPhoneNumbers?.records)
+          ? extensionPhoneNumbers.records.map((record) => ({ ...record, source: "extension_phone_number" }))
+          : []
+      );
+    } catch (error) {
+      logStructured("info", "ringcentral_sms_phone_lookup_failed", {
+        dealership_id: connection.dealership_id,
+        crm_user_id: Number(connection.user_id),
+        error: error.message,
+      });
+    }
+    if (extensionPhoneCandidate) {
+      return extensionPhoneCandidate;
+    }
+
+    let extensionContactCandidate = null;
+    try {
+      const extension = await this.client.getCurrentExtensionInfo(connection, this.store);
+      extensionContactCandidate = pickBestSmsPhone([
+        {
+          phoneNumber:
+            extension?.contact?.phoneNumber ||
+            extension?.contact?.businessPhone ||
+            extension?.contact?.mobilePhone ||
+            "",
+          default: true,
+          source: "extension_contact",
+        },
+      ]);
+    } catch (error) {
+      logStructured("info", "ringcentral_sms_extension_lookup_failed", {
+        dealership_id: connection.dealership_id,
+        crm_user_id: Number(connection.user_id),
+        error: error.message,
+      });
+    }
+    if (extensionContactCandidate) {
+      return extensionContactCandidate;
+    }
+
+    const configuredFromNumber = normalizePhone(this.config.fromPhoneNumber);
+    if (configuredFromNumber) {
+      return {
+        phoneNumber: configuredFromNumber,
+        source: "configured_from_number",
+      };
+    }
+
+    throw new Error(
+      "RingCentral could not find an SMS-capable number for this rep. Add a direct text-enabled number to the rep's RingCentral extension before sending CRM SMS."
+    );
   }
 
   hasRingOutScope(connection) {
@@ -628,6 +942,27 @@ class RingCentralService {
         external_number: externalNumber || null,
         provider_message_id: message.id || messageId || null,
       });
+
+      if (direction === "inbound") {
+        await this.store.upsertUnmatchedCommunication({
+          dealership_id: connection.dealership_id,
+          type: "sms",
+          direction: "inbound",
+          from_number: fromNumber || null,
+          to_number: toNumber || null,
+          normalized_from_number: normalizePhone(fromNumber) || null,
+          normalized_to_number: normalizePhone(toNumber) || null,
+          body_text: extractMessageBody(message),
+          received_at: message.lastModifiedTime || payload.lastModifiedTime || message.creationTime || nowIso(),
+          provider: "ringcentral",
+          provider_message_id: String(message.id || messageId),
+          crm_user_id: Number(connection.user_id),
+          provider_extension_id: providerExtensionId,
+          raw: message,
+        });
+      }
+
+      return null;
     }
 
     const { created, record } = await this.store.upsertLeadMessage({
@@ -808,6 +1143,25 @@ class RingCentralService {
       const skipDecision = this.shouldSkipCallRecord(record, lead);
 
       if (skipDecision.skip) {
+        if (!lead && direction === "inbound") {
+          await this.store.upsertUnmatchedCommunication({
+            dealership_id: connection.dealership_id,
+            type: "call",
+            direction: "inbound",
+            from_number: fromNumber || null,
+            to_number: toNumber || null,
+            normalized_from_number: normalizePhone(fromNumber) || null,
+            normalized_to_number: normalizePhone(toNumber) || null,
+            call_duration: Number(record.duration || 0),
+            received_at: record.startTime || eventTime,
+            provider: "ringcentral",
+            provider_call_id: String(record.id || ""),
+            crm_user_id: Number(connection.user_id),
+            provider_extension_id: providerExtensionId,
+            raw: record,
+          });
+        }
+
         logStructured("info", "ringcentral_call_skipped", {
           reason: skipDecision.reason,
           external_number: externalNumber || null,
@@ -824,6 +1178,27 @@ class RingCentralService {
           external_number: externalNumber || null,
           provider_call_id: record.id || null,
         });
+
+        if (direction === "inbound") {
+          await this.store.upsertUnmatchedCommunication({
+            dealership_id: connection.dealership_id,
+            type: "call",
+            direction: "inbound",
+            from_number: fromNumber || null,
+            to_number: toNumber || null,
+            normalized_from_number: normalizePhone(fromNumber) || null,
+            normalized_to_number: normalizePhone(toNumber) || null,
+            call_duration: Number(record.duration || 0),
+            received_at: record.startTime || eventTime,
+            provider: "ringcentral",
+            provider_call_id: String(record.id || ""),
+            crm_user_id: Number(connection.user_id),
+            provider_extension_id: providerExtensionId,
+            raw: record,
+          });
+        }
+
+        continue;
       }
 
       const recording = Array.isArray(record.recording) ? record.recording[0] : record.recording;

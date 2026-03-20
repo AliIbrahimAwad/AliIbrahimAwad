@@ -946,8 +946,30 @@ test("conversations API returns recent calls and SMS items", async () => {
 
 test("API SMS endpoint sends a CRM message and returns refreshed lead detail", async () => {
   const temp = createTempDbPath();
-  const fetchImpl = async (url) => {
+  const fetchImpl = async (url, options = {}) => {
+    if (String(url).includes("/phone-number")) {
+      return new Response(
+        JSON.stringify({
+          records: [
+            {
+              phoneNumber: "+16475551212",
+              usageType: "DirectNumber",
+              features: ["SMS"],
+              default: true,
+              status: "Normal",
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
+
     if (String(url).includes("/sms")) {
+      const payload = JSON.parse(options.body || "{}");
+      assert.equal(payload.from?.phoneNumber, "+16475551212");
       return new Response(
         JSON.stringify({
           id: "msg-api-sms-1",
