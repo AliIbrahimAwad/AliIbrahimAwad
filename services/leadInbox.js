@@ -59,8 +59,42 @@ function getFieldNextLine(text, label) {
   return cleanValue(match ? match[1] : "");
 }
 
-function getField(text, label) {
-  return getFieldSameLine(text, label) || getFieldNextLine(text, label);
+function buildInlineBoundary(nextLabels = []) {
+  const escapedNextLabels = nextLabels.map((nextLabel) =>
+    nextLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  );
+
+  return nextLabels.length > 0
+    ? `(?=\\s+(?:${escapedNextLabels.join("|")})(?:\\s*:|\\s)|\\r?\\n|$)`
+    : "(?=\\r?\\n|$)";
+}
+
+function buildMultilineBoundary(nextLabels = []) {
+  const escapedNextLabels = nextLabels.map((nextLabel) =>
+    nextLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  );
+
+  return nextLabels.length > 0
+    ? `(?=\\s+(?:${escapedNextLabels.join("|")})(?:\\s*:|\\s)|\\n\\s*[A-Za-z][A-Za-z0-9 ?#&()/.-]{1,40}(?:\\s*:|\\s)|$)`
+    : "(?=\\n\\s*[A-Za-z][A-Za-z0-9 ?#&()/.-]{1,40}(?:\\s*:|\\s)|$)";
+}
+
+function getDelimitedField(text, label, nextLabels = [], { multiline = false } = {}) {
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const boundary = multiline ? buildMultilineBoundary(nextLabels) : buildInlineBoundary(nextLabels);
+  const valuePattern = multiline ? "[\\s\\S]*?" : "[^\\r\\n]*?";
+  const match = String(text || "").match(new RegExp(`${escapedLabel}\\s*:?\\s*(${valuePattern})${boundary}`, "i"));
+  return cleanValue(match ? match[1] : "");
+}
+
+function getField(text, label, nextLabels = []) {
+  return nextLabels.length > 0
+    ? getDelimitedField(text, label, nextLabels) || getFieldSameLine(text, label) || getFieldNextLine(text, label)
+    : getFieldSameLine(text, label) || getFieldNextLine(text, label) || getDelimitedField(text, label, nextLabels);
+}
+
+function getMultilineField(text, label, nextLabels = []) {
+  return getDelimitedField(text, label, nextLabels, { multiline: true }) || getField(text, label, nextLabels);
 }
 
 function combineVehicle(parts = []) {
@@ -129,19 +163,50 @@ function parseAutoTraderEmail(text, message = {}) {
     };
   }
 
+  const inlineName = getField(text, "Name", ["Email", "Phone", "Subject", "Trade-In?", "Trade-In"]);
+  const inlineEmail = getField(text, "Email", ["Phone", "Subject", "Trade-In?", "Trade-In", "description"]);
+  const inlinePhone = getField(text, "Phone", ["Subject", "Trade-In?", "Trade-In", "description", "Message"]);
+  const inlineStock = getField(text, "Stock Number", ["Price", "Stock", "VIN", "Condition", "Dealer"]);
+  const inlineVin = getField(text, "VIN", ["Stock Number", "Price", "Condition", "Dealer"]);
+  const inlineMessage = getMultilineField(text, "Message", [
+    "Dealer Price",
+    "Price",
+    "Term Requested",
+    "Finance Rate",
+    "Cash Down",
+    "Trade In",
+    "Trade-In",
+    "Loan Amount",
+    "Fee",
+    "Cost of borrowing",
+    "Ad Details",
+    "Dealer",
+  ]);
+  const inlineVehicleLine =
+    getField(text, "Subject", ["Trade-In?", "Trade-In", "description", "Message"]) ||
+    getField(text, "description", ["Message", "Dealer Price", "Price"]);
+  const inlineVehicleInterest = cleanValue(
+    String(inlineVehicleLine || "")
+      .replace(/^important sales lead from autotrader\.ca/i, "")
+      .replace(/^important sales lead/i, "")
+      .replace(/^auto\s*trader/i, "")
+      .replace(/^trade-in\??\s*:\s*[^ ]+(?:\s+description:)?/i, "")
+      .trim()
+  );
+
   return {
     source: "autotrader",
-    customer_name: getField(text, "Name"),
-    phone: cleanPhone(getField(text, "Phone")),
-    email: getField(text, "Email"),
+    customer_name: inlineName || getField(text, "Name"),
+    phone: cleanPhone(inlinePhone || getField(text, "Phone")),
+    email: inlineEmail || getField(text, "Email"),
     vehicle_interest: combineVehicle([
       getField(text, "Year"),
       getField(text, "Make"),
       getField(text, "Model"),
       getField(text, "Trim"),
-    ]),
-    vehicle_id: getField(text, "Vin"),
-    stock_number: getField(text, "Stock Number"),
+    ]) || inlineVehicleInterest,
+    vehicle_id: inlineVin || getField(text, "Vin"),
+    stock_number: inlineStock || getField(text, "Stock Number"),
     vehicle_year: getField(text, "Year"),
     vehicle_make: getField(text, "Make"),
     vehicle_model: getField(text, "Model"),
@@ -149,7 +214,7 @@ function parseAutoTraderEmail(text, message = {}) {
     vehicle_condition: getField(text, "Condition"),
     vehicle_price: getField(text, "Price"),
     listing_url: getField(text, "SourceUrl"),
-    message: getField(text, "Comment"),
+    message: inlineMessage || getField(text, "Comment"),
     lead_type: getField(text, "Lead type"),
     sender: getSenderEmail(message),
   };
@@ -162,19 +227,31 @@ function parseCarGurusEmail(text, message = {}) {
   return {
     source: "cargurus",
     customer_name: cleanValue([firstName, lastName].filter(Boolean).join(" ")),
-    phone: cleanPhone(getField(text, "Telephone")),
-    email: getField(text, "Email"),
-    vehicle_interest: getField(text, "Vehicle"),
-    vehicle_id: getField(text, "VIN"),
-    stock_number: getField(text, "Stock Number"),
-    vehicle_year: getField(text, "Vehicle")?.match(/\b(19|20)\d{2}\b/)?.[0] || null,
-    vehicle_make: cleanValue(getField(text, "Vehicle")?.split(" ").slice(1, 2).join(" ")),
-    vehicle_model: cleanValue(getField(text, "Vehicle")?.split(" ").slice(2).join(" ")),
+    phone: cleanPhone(getField(text, "Telephone", ["Postal code", "Comments", "Vehicle", "VIN"])),
+    email: getField(text, "Email", ["Telephone", "Postal code", "Comments", "Vehicle"]),
+    vehicle_interest: getField(text, "Vehicle", ["Stock Number", "Listed Price", "View Listing on CarGurus"]),
+    vehicle_id: getField(text, "VIN", ["Vehicle", "Stock Number", "Listed Price"]),
+    stock_number: getField(text, "Stock Number", ["Listed Price", "View Listing on CarGurus"]),
+    vehicle_year:
+      getField(text, "Vehicle", ["Stock Number", "Listed Price", "View Listing on CarGurus"])?.match(/\b(19|20)\d{2}\b/)?.[0] ||
+      null,
+    vehicle_make: cleanValue(
+      getField(text, "Vehicle", ["Stock Number", "Listed Price", "View Listing on CarGurus"])
+        ?.split(" ")
+        .slice(1, 2)
+        .join(" ")
+    ),
+    vehicle_model: cleanValue(
+      getField(text, "Vehicle", ["Stock Number", "Listed Price", "View Listing on CarGurus"])
+        ?.split(" ")
+        .slice(2)
+        .join(" ")
+    ),
     vehicle_trim: null,
     vehicle_condition: null,
-    vehicle_price: getField(text, "Listed Price"),
+    vehicle_price: getField(text, "Listed Price", ["View Listing on CarGurus"]),
     listing_url: getField(text, "View Listing on CarGurus"),
-    message: getField(text, "Comments"),
+    message: getMultilineField(text, "Comments", ["Listing", "VIN", "Vehicle", "Stock Number"]),
     lead_type: "general_inquiry",
     sender: getSenderEmail(message),
   };
@@ -192,9 +269,9 @@ function parseWebsiteLeadEmail(text, message = {}) {
 
   return {
     source: "website",
-    customer_name: getField(text, "Full Name"),
-    phone: cleanPhone(getField(text, "Phone Number")),
-    email: getField(text, "Email"),
+    customer_name: getField(text, "Full Name", ["Email", "Phone Number", "Preferred Contact Method", "Message"]),
+    phone: cleanPhone(getField(text, "Phone Number", ["Preferred Contact Method", "Message", "This form submitted at"])),
+    email: getField(text, "Email", ["Phone Number", "Preferred Contact Method", "Message"]),
     vehicle_interest: derivedVehicle,
     vehicle_id: null,
     stock_number: listingUrl ? listingUrl.match(/-([A-Za-z]\d+)\//)?.[1] || null : null,
@@ -205,7 +282,7 @@ function parseWebsiteLeadEmail(text, message = {}) {
     vehicle_condition: null,
     vehicle_price: null,
     listing_url: listingUrl,
-    message: getField(text, "Message"),
+    message: getMultilineField(text, "Message", ["This form submitted at", "Preferred Contact Method"]),
     lead_type: "website_form",
     sender: getSenderEmail(message),
   };
@@ -273,11 +350,23 @@ function buildGenericEmailParse(message, text) {
   return {
     source: detectLeadSource(message, text),
     customer_name: customerName,
-    phone: cleanPhone(getField(text, "Phone") || getField(text, "Phone Number") || extractPhone(text)),
-    email: getField(text, "Email") || extractEmail(text) || senderEmail || null,
-    vehicle_interest: getField(text, "Vehicle") || getField(text, "Vehicle Interest") || null,
-    vehicle_id: getField(text, "VIN") || extractVin(text),
-    stock_number: getField(text, "Stock Number") || extractStockNumber(text),
+    phone:
+      cleanPhone(
+        getField(text, "Phone", ["Email", "Subject", "Message"]) ||
+          getField(text, "Phone Number", ["Email", "Preferred Contact Method", "Message"]) ||
+          extractPhone(text)
+      ),
+    email:
+      getField(text, "Email", ["Phone", "Phone Number", "Subject", "Message", "Comments"]) ||
+      extractEmail(text) ||
+      senderEmail ||
+      null,
+    vehicle_interest:
+      getField(text, "Vehicle", ["Vehicle Interest", "VIN", "Stock Number", "Message"]) ||
+      getField(text, "Vehicle Interest", ["VIN", "Stock Number", "Message"]) ||
+      null,
+    vehicle_id: getField(text, "VIN", ["Stock Number", "Message"]) || extractVin(text),
+    stock_number: getField(text, "Stock Number", ["VIN", "Message"]) || extractStockNumber(text),
     vehicle_year: null,
     vehicle_make: null,
     vehicle_model: null,
@@ -286,8 +375,8 @@ function buildGenericEmailParse(message, text) {
     vehicle_price: null,
     listing_url: extractFirstMatch(text, /(https?:\/\/[^\s]+)/i),
     message:
-      getField(text, "Message") ||
-      getField(text, "Comments") ||
+      getMultilineField(text, "Message", ["Comments", "Inquiry", "This form submitted at"]) ||
+      getMultilineField(text, "Comments", ["Inquiry", "This form submitted at"]) ||
       getField(text, "Inquiry") ||
       text ||
       subject,

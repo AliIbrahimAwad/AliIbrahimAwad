@@ -51,6 +51,46 @@ SourceUrl:
   assert.match(lead.vehicle_interest, /Ram 2500/);
 });
 
+test("parses inline AutoTrader sales lead emails without swallowing the whole body into the name", () => {
+  const text = `
+Name: Morgan
+Email: morganleighcox@gmail.com
+Phone: 6471234567
+Subject: Important Sales Lead from AutoTrader.ca
+Trade-In?: No
+description:
+Message Hi, I found your listing on AutoTrader iPhone App and would like to know more about the vehicle. Please send me more information about your 2021 Tesla Model 3 Standard Range Plus.
+Dealer Price:
+Term Requested:
+Finance Rate:
+Cash Down: Not specified
+Trade In: Not specified
+Loan Amount:
+Fee: Not specified
+Cost of borrowing:
+Ad Details Dealer: LOOLOO AUTO SALES
+Condition: Used
+Stock Number: D9779
+Price: $21,995
+`;
+
+  const lead = parseAutoTraderEmail(text, {
+    from: {
+      emailAddress: {
+        address: "no-reply@trader.ca",
+      },
+    },
+  });
+
+  assert.equal(lead.source, "autotrader");
+  assert.equal(lead.customer_name, "Morgan");
+  assert.equal(lead.email, "morganleighcox@gmail.com");
+  assert.equal(lead.phone, "6471234567");
+  assert.equal(lead.stock_number, "D9779");
+  assert.match(lead.message, /would like to know more about the vehicle/i);
+  assert.doesNotMatch(lead.customer_name, /autotrader|stock number|dealer price/i);
+});
+
 test("parses AutoTrader CARFAX request emails", () => {
   const text = `
 A potential customer has viewed your ad on www.autotrader.ca and is requesting a CARFAX Canada report on the vehicle. Please send the CARFAX Canada report to: saifhanoudi11@yahoo.com, Phone: 6479658360.
