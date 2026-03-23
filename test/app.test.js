@@ -766,6 +766,81 @@ test("manager can convert an 'Other' intake item into a lead through the API", a
   });
 });
 
+test("manual API lead creation merges duplicates by normalized phone before insert", async () => {
+  await withServer(async ({ app }) => {
+    const original = await app.locals.db.createApiLead({
+      source: "website",
+      customer_name: "Morgan Lite",
+      phone: "(647) 555-0199",
+      email: null,
+      vehicle_interest: "Vehicle inquiry",
+      message: "Short message",
+      status: "new",
+    });
+
+    const merged = await app.locals.db.createApiLead(
+      {
+        source: "manual",
+        customer_name: "Morgan Driver",
+        phone: "+1 647-555-0199",
+        email: "Morgan.Driver@Example.com",
+        vehicle_interest: "2021 Tesla Model 3 Standard Range Plus",
+        message: "Customer wants pricing and availability details.",
+        status: "contacted",
+      },
+      null,
+      { returnDedupeMeta: true }
+    );
+
+    assert.equal(Number(merged.id), Number(original.id));
+    assert.equal(merged._dedupe?.merged, true);
+    assert.equal(merged._dedupe?.reason, "normalized_phone");
+
+    const allLeads = app.locals.db.listApiLeads({ user: { id: 1, role: "admin", dealership_id: 1 } });
+    assert.equal(allLeads.items.length, 1);
+    assert.equal(allLeads.items[0].email, "Morgan.Driver@Example.com");
+    assert.equal(allLeads.items[0].customer_name, "Morgan Lite");
+    assert.equal(allLeads.items[0].status, "contacted");
+  });
+});
+
+test("converting an 'Other' intake item reuses an existing lead by normalized email", async () => {
+  await withServer(async ({ app }) => {
+    const existingLead = await app.locals.db.createApiLead({
+      source: "website",
+      customer_name: "Jamie Driver",
+      email: "customer@example.com",
+      phone: null,
+      stock_number: "D9489",
+      vehicle_interest: "2020 Toyota Camry SE",
+      status: "new",
+    });
+
+    const item = app.locals.db.createEmailIntakeItem({
+      external_id: "<other-duplicate@example.com>",
+      source: "website",
+      subject: "Contact us about a used Camry",
+      sender: "customer@example.com",
+      message: "Can someone help me with the 2020 Toyota Camry on the lot?",
+      received_at: "2026-03-22T15:00:00.000Z",
+      classification: "other",
+      status: "open",
+      customer_name: "Jamie Driver",
+      email: "Customer@Example.com",
+      stock_number: "D9489",
+      vehicle_display: "2020 Toyota Camry SE",
+    });
+
+    const result = app.locals.db.convertEmailIntakeItemToLead(item.id, {});
+
+    assert.equal(Number(result.lead.lead.id), Number(existingLead.id));
+    assert.equal(result.item.status, "converted_to_lead");
+
+    const allLeads = app.locals.db.listApiLeads({ user: { id: 1, role: "admin", dealership_id: 1 } });
+    assert.equal(allLeads.items.length, 1);
+  });
+});
+
 test("email intake merges direct leads by customer identity plus stock number", async () => {
   await withServer(async ({ app }) => {
     const existingLead = app.locals.db.createApiLead({
@@ -1378,6 +1453,60 @@ test("API can create a lead from an unmatched SMS and attach it to the timeline"
     );
     assert.ok(message);
     assert.equal(Number(message.lead_id), Number(body.lead.id));
+  });
+});
+
+test("API unmatched conversion reuses an existing lead by normalized phone", async () => {
+  await withServer(async ({ app, server }) => {
+    const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
+    const existingLead = await app.locals.db.createApiLead(
+      {
+        source: "website",
+        customer_name: "Queue Shopper",
+        phone: "(647) 555-0333",
+        email: null,
+        vehicle_interest: "2023 SUV",
+        status: "new",
+        assigned_to: Number(salesUser.id),
+        dealership_id: Number(salesUser.dealership_id),
+      },
+      salesUser
+    );
+
+    const queued = await app.locals.ringcentral.store.upsertUnmatchedCommunication({
+      dealership_id: Number(salesUser.dealership_id),
+      type: "sms",
+      direction: "inbound",
+      from_number: "+16475550333",
+      to_number: "+16475551212",
+      normalized_from_number: "+16475550333",
+      normalized_to_number: "+16475551212",
+      body_text: "Can you text me the price?",
+      received_at: "2026-03-19T17:00:00.000Z",
+      provider: "ringcentral",
+      provider_message_id: "unmatched-create-lead-duplicate-1",
+      crm_user_id: Number(salesUser.id),
+      provider_extension_id: "ext-sales",
+      raw: {},
+    });
+
+    const client = createClient(server);
+    await login(client, "sales@crm.local", "sales123");
+
+    const response = await client.request({
+      method: "POST",
+      path: `/api/unmatched/${queued.record.id}/create-lead`,
+      json: {
+        customer_name: "Queue Shopper",
+      },
+    });
+
+    assert.equal(response.statusCode, 201);
+    const body = JSON.parse(response.body);
+    assert.equal(Number(body.lead.id), Number(existingLead.id));
+
+    const allLeads = app.locals.db.listApiLeads({ user: { id: 1, role: "admin", dealership_id: 1 } });
+    assert.equal(allLeads.items.length, 1);
   });
 });
 

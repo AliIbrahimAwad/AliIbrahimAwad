@@ -24,6 +24,10 @@ function normalizeLeadPhoneForStorage(value) {
   return normalizePhone(value) || null;
 }
 
+function normalizeLeadEmailForStorage(value) {
+  return stringOrNull(value)?.toLowerCase() || null;
+}
+
 function parseJson(value, fallback = null) {
   if (!value) {
     return fallback;
@@ -49,6 +53,132 @@ function stringOrNull(value) {
 
 function normalizeInventoryIdentity(value) {
   return stringOrNull(value)?.toUpperCase() || null;
+}
+
+function normalizeComparableText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isWeakLeadName(value) {
+  const normalized = normalizeComparableText(value);
+  return !normalized || normalized.startsWith("lead #") || normalized.includes("@");
+}
+
+function isWeakLeadEmail(value) {
+  const normalized = normalizeLeadEmailForStorage(value);
+  return !normalized || normalized.startsWith("no-reply@") || normalized.startsWith("noreply@");
+}
+
+function isWeakLeadVehicle(value) {
+  const normalized = normalizeComparableText(value);
+  return !normalized || normalized === "vehicle inquiry";
+}
+
+function isWeakLeadMessage(value) {
+  const normalized = normalizeComparableText(value);
+  return (
+    !normalized ||
+    normalized === "vehicle inquiry" ||
+    normalized.includes("requested a carfax canada report")
+  );
+}
+
+function preferLeadValue(existingValue, incomingValue, options = {}) {
+  const existing = stringOrNull(existingValue);
+  const incoming = stringOrNull(incomingValue);
+  if (!incoming) {
+    return existing;
+  }
+
+  if (!existing) {
+    return incoming;
+  }
+
+  if (typeof options.isWeak === "function") {
+    const existingWeak = options.isWeak(existing);
+    const incomingWeak = options.isWeak(incoming);
+    if (existingWeak && !incomingWeak) {
+      return incoming;
+    }
+    if (!existingWeak && incomingWeak) {
+      return existing;
+    }
+  }
+
+  if (options.preferLonger && incoming.length > existing.length) {
+    return incoming;
+  }
+
+  return existing;
+}
+
+function buildMergedLeadInput(existingLead, incomingInput = {}) {
+  const existingStatus = toStoredStatus(existingLead.status || "new");
+  const incomingStatus = incomingInput.status ? toStoredStatus(incomingInput.status) : null;
+
+  return {
+    source: existingLead.source || incomingInput.source || "website",
+    status: existingStatus === "new" && incomingStatus && incomingStatus !== "new" ? incomingStatus : existingStatus,
+    assigned_to: existingLead.assigned_to || incomingInput.assigned_to || null,
+    customer_name: preferLeadValue(existingLead.customer_name, incomingInput.customer_name, { isWeak: isWeakLeadName }),
+    phone: preferLeadValue(existingLead.phone, incomingInput.phone),
+    email: preferLeadValue(existingLead.email, incomingInput.email, { isWeak: isWeakLeadEmail }),
+    vehicle_interest: preferLeadValue(existingLead.vehicle_interest, incomingInput.vehicle_interest, {
+      isWeak: isWeakLeadVehicle,
+    }),
+    vehicle_id: preferLeadValue(existingLead.vehicle_id, incomingInput.vehicle_id),
+    stock_number: preferLeadValue(existingLead.stock_number, incomingInput.stock_number),
+    vehicle_year: preferLeadValue(existingLead.vehicle_year, incomingInput.vehicle_year),
+    vehicle_make: preferLeadValue(existingLead.vehicle_make, incomingInput.vehicle_make),
+    vehicle_model: preferLeadValue(existingLead.vehicle_model, incomingInput.vehicle_model),
+    vehicle_trim: preferLeadValue(existingLead.vehicle_trim, incomingInput.vehicle_trim),
+    vehicle_condition: preferLeadValue(existingLead.vehicle_condition, incomingInput.vehicle_condition),
+    vehicle_price: preferLeadValue(existingLead.vehicle_price, incomingInput.vehicle_price),
+    lead_type: preferLeadValue(existingLead.lead_type, incomingInput.lead_type),
+    listing_url: preferLeadValue(existingLead.listing_url, incomingInput.listing_url),
+    message: preferLeadValue(existingLead.message, incomingInput.message, {
+      isWeak: isWeakLeadMessage,
+      preferLonger: true,
+    }),
+    inventory_id: existingLead.inventory_id || incomingInput.inventory_id || null,
+  };
+}
+
+function logLeadDedupeDecision(payload = {}) {
+  console.info(
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: "info",
+      event: payload.event || "lead_dedupe_decision",
+      ...payload,
+    })
+  );
+}
+
+function attachLeadDedupeMeta(lead, meta = null, options = {}) {
+  if (!options.returnDedupeMeta || !meta) {
+    return lead;
+  }
+
+  return {
+    ...lead,
+    _dedupe: meta,
+  };
+}
+
+function isLeadIdentityUniqueConstraintError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  const constraint = String(error?.constraint || "").toLowerCase();
+  if (error?.code !== "23505") {
+    return false;
+  }
+
+  return (
+    constraint.includes("idx_leads_dealership_normalized_phone_unique") ||
+    constraint.includes("idx_leads_dealership_normalized_email_unique") ||
+    message.includes("idx_leads_dealership_normalized_phone_unique") ||
+    message.includes("idx_leads_dealership_normalized_email_unique")
+  );
 }
 
 function parseIntegerField(value) {
@@ -156,6 +286,27 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     this.pool = pool;
   }
 
+  async ensureOptionalUniqueIndex(indexName, sql) {
+    const existing = await this.get("SELECT to_regclass(?) AS index_name", [`public.${indexName}`]);
+    if (existing?.index_name) {
+      return;
+    }
+
+    try {
+      await this.execute(sql);
+    } catch (error) {
+      console.warn(
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          level: "warn",
+          event: "lead_identity_unique_index_skipped",
+          index: indexName,
+          error: String(error?.message || error),
+        })
+      );
+    }
+  }
+
   async close() {
     await this.pool.end();
   }
@@ -218,6 +369,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         phone TEXT,
         normalized_phone TEXT,
         email TEXT,
+        normalized_email TEXT,
         vehicle_interest TEXT,
         vehicle_id TEXT,
         stock_number TEXT,
@@ -402,6 +554,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS phone TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS normalized_phone TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS email TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS normalized_email TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_interest TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS vehicle_id TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS stock_number TEXT;
@@ -419,6 +572,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
 
       CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_leads_normalized_phone ON leads(normalized_phone);
+      CREATE INDEX IF NOT EXISTS idx_leads_normalized_email ON leads(normalized_email);
       CREATE INDEX IF NOT EXISTS idx_leads_inventory_id ON leads(inventory_id);
       CREATE INDEX IF NOT EXISTS idx_contacts_normalized_phone ON contacts(normalized_phone);
       CREATE INDEX IF NOT EXISTS idx_activities_lead_id_created_at ON activities(lead_id, created_at DESC);
@@ -486,6 +640,15 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       ]);
     }
 
+    await this.execute("UPDATE leads SET normalized_email = ? WHERE email IS NULL OR BTRIM(email) = ''", [null]);
+    const leadEmails = await this.all("SELECT id, email FROM leads WHERE email IS NOT NULL AND BTRIM(email) <> ''");
+    for (const lead of leadEmails) {
+      await this.execute("UPDATE leads SET normalized_email = ? WHERE id = ?", [
+        normalizeLeadEmailForStorage(lead.email),
+        lead.id,
+      ]);
+    }
+
     const contactPhones = await this.all(
       "SELECT id, phone FROM contacts WHERE phone IS NOT NULL AND TRIM(phone) <> ''"
     );
@@ -495,6 +658,23 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         contact.id,
       ]);
     }
+
+    await this.ensureOptionalUniqueIndex(
+      "idx_leads_dealership_normalized_phone_unique",
+      `
+        CREATE UNIQUE INDEX idx_leads_dealership_normalized_phone_unique
+        ON leads(dealership_id, normalized_phone)
+        WHERE normalized_phone IS NOT NULL AND BTRIM(normalized_phone) <> ''
+      `
+    );
+    await this.ensureOptionalUniqueIndex(
+      "idx_leads_dealership_normalized_email_unique",
+      `
+        CREATE UNIQUE INDEX idx_leads_dealership_normalized_email_unique
+        ON leads(dealership_id, normalized_email)
+        WHERE normalized_email IS NOT NULL AND BTRIM(normalized_email) <> ''
+      `
+    );
   }
 
   async seedDefaultUsers() {
@@ -1997,66 +2177,115 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     });
   }
 
-  async createApiLead(input, user = null) {
+  async createApiLead(input, user = null, options = {}) {
     const now = new Date().toISOString();
     const storedStatus = toStoredStatus(input.status || "new");
     const dealershipId =
       parsePositiveInteger(input.dealership_id) || (user ? this.currentDealershipId(user) : getDefaultDealershipId());
-    const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
     const assignedTo = input.assigned_to == null ? null : parsePositiveInteger(input.assigned_to);
     const inventoryId = await this.resolveLeadInventoryId(input, dealershipId);
     const inventory = inventoryId
       ? await this.get("SELECT * FROM inventory WHERE id = ? AND dealership_id = ?", [inventoryId, dealershipId])
       : null;
     const leadPayload = this.normalizeLeadPayloadForStorage(input, inventory);
+    const normalizedPhone = normalizeLeadPhoneForStorage(leadPayload.phone);
+    const normalizedEmail = normalizeLeadEmailForStorage(leadPayload.email);
+    const duplicateInput = {
+      ...input,
+      ...leadPayload,
+      dealership_id: dealershipId,
+      assigned_to: assignedTo,
+      inventory_id: inventoryId,
+      status: storedStatus || "new",
+    };
 
-    const row = await this.get(
-      `
-        INSERT INTO leads (
-          dealership_id,
-          source,
-          status,
-          assigned_to,
-          customer_name,
-          phone,
-          normalized_phone,
-          email,
-          vehicle_interest,
-          vehicle_id,
-          stock_number,
-          vehicle_year,
-          vehicle_make,
-          vehicle_model,
-          vehicle_trim,
-          vehicle_condition,
-          vehicle_price,
-          lead_type,
-          listing_url,
-          message,
-          inventory_id,
-          created_at,
-          updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            RETURNING id
-          `,
+    const mergeDuplicateLead = async (duplicate, event = "lead_dedupe_decision") => {
+      const existingLead = await this.getApiLead(duplicate.lead.id, user);
+      const mergedInput = buildMergedLeadInput(existingLead, duplicateInput);
+      const lead = await this.updateApiLead(existingLead.id, mergedInput, user);
+      await this.createActivity({
+        lead_id: existingLead.id,
+        type: "note_added",
+        content: `Merged duplicate lead by ${duplicate.reason}.`,
+        created_at: now,
+      });
+      logLeadDedupeDecision({
+        event,
+        action: "merged_existing_lead",
+        reason: duplicate.reason,
+        lead_id: Number(existingLead.id),
+        dealership_id: dealershipId,
+        source: duplicateInput.source || "website",
+        normalized_phone: normalizedPhone,
+        normalized_email: normalizedEmail,
+      });
+      return attachLeadDedupeMeta(
+        lead,
+        {
+          merged: true,
+          created: false,
+          reason: duplicate.reason,
+          lead_id: Number(existingLead.id),
+        },
+        options
+      );
+    };
+
+    const duplicate = await this.findLeadDuplicate(duplicateInput, { dealership_id: dealershipId });
+    if (duplicate) {
+      return mergeDuplicateLead(duplicate);
+    }
+
+    try {
+      const row = await this.get(
+        `
+          INSERT INTO leads (
+            dealership_id,
+            source,
+            status,
+            assigned_to,
+            customer_name,
+            phone,
+            normalized_phone,
+            email,
+            normalized_email,
+            vehicle_interest,
+            vehicle_id,
+            stock_number,
+            vehicle_year,
+            vehicle_make,
+            vehicle_model,
+            vehicle_trim,
+            vehicle_condition,
+            vehicle_price,
+            lead_type,
+            listing_url,
+            message,
+            inventory_id,
+            created_at,
+            updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          RETURNING id
+        `,
         [
-        dealershipId,
-        input.source || "website",
-        storedStatus || "new",
-        assignedTo,
-        leadPayload.customer_name,
-        leadPayload.phone,
-        normalizedPhone,
-        leadPayload.email,
-        leadPayload.vehicle_interest,
-        leadPayload.vehicle_id,
-        leadPayload.stock_number,
-        leadPayload.vehicle_year,
-        leadPayload.vehicle_make,
-        leadPayload.vehicle_model,
-        leadPayload.vehicle_trim,
-        leadPayload.vehicle_condition,
-        leadPayload.vehicle_price,
+          dealershipId,
+          input.source || "website",
+          storedStatus || "new",
+          assignedTo,
+          leadPayload.customer_name,
+          leadPayload.phone,
+          normalizedPhone,
+          leadPayload.email,
+          normalizedEmail,
+          leadPayload.vehicle_interest,
+          leadPayload.vehicle_id,
+          leadPayload.stock_number,
+          leadPayload.vehicle_year,
+          leadPayload.vehicle_make,
+          leadPayload.vehicle_model,
+          leadPayload.vehicle_trim,
+          leadPayload.vehicle_condition,
+          leadPayload.vehicle_price,
           input.lead_type || null,
           input.listing_url || null,
           input.message || null,
@@ -2064,28 +2293,60 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
           now,
           now,
         ]
-    );
+      );
 
-    await this.createActivity({
-      lead_id: row.id,
-      type: "lead_created",
-      content: `Lead created from ${input.source || "website"}`,
-      created_at: now,
-    });
+      await this.createActivity({
+        lead_id: row.id,
+        type: "lead_created",
+        content: `Lead created from ${input.source || "website"}`,
+        created_at: now,
+      });
+      logLeadDedupeDecision({
+        action: "created_new_lead",
+        reason: "no_match",
+        lead_id: Number(row.id),
+        dealership_id: dealershipId,
+        source: input.source || "website",
+        normalized_phone: normalizedPhone,
+        normalized_email: normalizedEmail,
+      });
 
-    return this.getApiLead(row.id, user);
+      return attachLeadDedupeMeta(
+        await this.getApiLead(row.id, user),
+        {
+          merged: false,
+          created: true,
+          reason: null,
+          lead_id: Number(row.id),
+        },
+        options
+      );
+    } catch (error) {
+      if (!isLeadIdentityUniqueConstraintError(error)) {
+        throw error;
+      }
+
+      const raceDuplicate = await this.findLeadDuplicate(duplicateInput, { dealership_id: dealershipId });
+      if (!raceDuplicate) {
+        throw error;
+      }
+
+      return mergeDuplicateLead(raceDuplicate, "lead_dedupe_race_recovered");
+    }
   }
 
   async updateApiLead(id, input, actor = null) {
     const existingLead = await this.getApiLead(id, actor);
     const now = new Date().toISOString();
     const storedStatus = input.status ? toStoredStatus(input.status) : null;
-    const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
+    const assignedTo = input.assigned_to == null ? null : parsePositiveInteger(input.assigned_to);
     const inventoryId = await this.resolveLeadInventoryId(input, Number(existingLead.dealership_id), existingLead.inventory_id);
     const inventory = inventoryId
       ? await this.get("SELECT * FROM inventory WHERE id = ? AND dealership_id = ?", [inventoryId, existingLead.dealership_id])
       : null;
     const leadPayload = this.normalizeLeadPayloadForStorage(input, inventory);
+    const normalizedPhone = normalizeLeadPhoneForStorage(leadPayload.phone);
+    const normalizedEmail = normalizeLeadEmailForStorage(leadPayload.email);
 
     await this.execute(
       `
@@ -2093,10 +2354,12 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         SET
           source = ?,
           status = COALESCE(?, status),
+          assigned_to = COALESCE(?, assigned_to),
           customer_name = ?,
           phone = ?,
           normalized_phone = ?,
           email = ?,
+          normalized_email = ?,
           vehicle_interest = ?,
           vehicle_id = ?,
           stock_number = ?,
@@ -2114,12 +2377,14 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         WHERE id = ? AND dealership_id = ?
       `,
       [
-        input.source || "website",
+        input.source || existingLead.source || "website",
         storedStatus,
+        assignedTo,
         leadPayload.customer_name,
         leadPayload.phone,
         normalizedPhone,
         leadPayload.email,
+        normalizedEmail,
         leadPayload.vehicle_interest,
         leadPayload.vehicle_id,
         leadPayload.stock_number,
@@ -3905,114 +4170,62 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
   }
 
   async findLeadDuplicate(input = {}, context = {}) {
-    const email = String(input.email || "").trim().toLowerCase();
-    const phone = normalizePhone(input.phone);
-    const customerName = String(input.customer_name || "").trim().toLowerCase();
-    const vehicleInterest = String(input.vehicle_interest || "").trim().toLowerCase();
+    const phone = normalizeLeadPhoneForStorage(input.phone);
+    const email = normalizeLeadEmailForStorage(input.email);
+    const customerName = normalizeComparableText(input.customer_name);
     const stockNumber = normalizeInventoryIdentity(input.stock_number);
     const vin = normalizeInventoryIdentity(input.vehicle_id || input.vin);
     const dealershipId = Number(context.dealership_id || context.user?.dealership_id || getDefaultDealershipId());
+    const excludeLeadId = parsePositiveInteger(context.exclude_lead_id);
+    const buildMatch = async (whereClause, params, reason) => {
+      const row = await this.get(
+        `
+          ${this.apiLeadSelectSql()}
+          WHERE leads.dealership_id = ?
+            AND ${whereClause}
+            ${excludeLeadId ? "AND leads.id <> ?" : ""}
+          ORDER BY leads.updated_at DESC, leads.id DESC
+          LIMIT 1
+        `,
+        excludeLeadId ? [dealershipId, ...params, excludeLeadId] : [dealershipId, ...params]
+      );
 
-    const rows = await this.all(
-      `
-        ${this.apiLeadSelectSql()}
-        WHERE leads.dealership_id = ?
-        ORDER BY leads.updated_at DESC, leads.id DESC
-      `,
-      [dealershipId]
-    );
-    const leads = rows.map((row) => this.formatApiLead(row));
-    const matchesLeadIdentity = (lead, predicate) => {
-      const leadStockNumber = normalizeInventoryIdentity(lead.stock_number || lead.inventory?.stock_number);
-      const leadVin = normalizeInventoryIdentity(lead.vehicle_id || lead.inventory?.vin);
-      return predicate({
-        lead,
-        leadEmail: String(lead.email || "").trim().toLowerCase(),
-        leadPhone: normalizePhone(lead.phone),
-        leadName: String(lead.customer_name || "").trim().toLowerCase(),
-        leadVehicle: String(lead.vehicle_interest || "").trim().toLowerCase(),
-        leadStockNumber,
-        leadVin,
-      });
+      return row ? { lead: this.formatApiLead(row), reason } : null;
     };
 
-    if (email && stockNumber) {
-      const emailStockMatch = leads.find((lead) =>
-        matchesLeadIdentity(lead, ({ leadEmail, leadStockNumber }) => leadEmail === email && leadStockNumber === stockNumber)
-      );
-      if (emailStockMatch) {
-        return { lead: emailStockMatch, reason: "email_stock" };
-      }
-    }
-
-    if (phone && stockNumber) {
-      const phoneStockMatch = leads.find((lead) =>
-        matchesLeadIdentity(lead, ({ leadPhone, leadStockNumber }) => leadPhone === phone && leadStockNumber === stockNumber)
-      );
-      if (phoneStockMatch) {
-        return { lead: phoneStockMatch, reason: "phone_stock" };
-      }
-    }
-
-    if (customerName && stockNumber) {
-      const nameStockMatch = leads.find((lead) =>
-        matchesLeadIdentity(lead, ({ leadName, leadStockNumber }) => leadName === customerName && leadStockNumber === stockNumber)
-      );
-      if (nameStockMatch) {
-        return { lead: nameStockMatch, reason: "name_stock" };
-      }
-    }
-
-    if (email && vin) {
-      const emailVinMatch = leads.find((lead) =>
-        matchesLeadIdentity(lead, ({ leadEmail, leadVin }) => leadEmail === email && leadVin === vin)
-      );
-      if (emailVinMatch) {
-        return { lead: emailVinMatch, reason: "email_vin" };
-      }
-    }
-
-    if (phone && vin) {
-      const phoneVinMatch = leads.find((lead) =>
-        matchesLeadIdentity(lead, ({ leadPhone, leadVin }) => leadPhone === phone && leadVin === vin)
-      );
-      if (phoneVinMatch) {
-        return { lead: phoneVinMatch, reason: "phone_vin" };
-      }
-    }
-
-    if (customerName && vin) {
-      const nameVinMatch = leads.find((lead) =>
-        matchesLeadIdentity(lead, ({ leadName, leadVin }) => leadName === customerName && leadVin === vin)
-      );
-      if (nameVinMatch) {
-        return { lead: nameVinMatch, reason: "name_vin" };
+    if (phone) {
+      const phoneMatch = await buildMatch("leads.normalized_phone = ?", [phone], "normalized_phone");
+      if (phoneMatch) {
+        return phoneMatch;
       }
     }
 
     if (email) {
-      const emailMatch = leads.find((lead) => String(lead.email || "").trim().toLowerCase() === email);
+      const emailMatch = await buildMatch("leads.normalized_email = ?", [email], "normalized_email");
       if (emailMatch) {
-        return { lead: emailMatch, reason: "email" };
+        return emailMatch;
       }
     }
 
-    if (phone) {
-      const phoneMatch = leads.find((lead) => normalizePhone(lead.phone) === phone);
-      if (phoneMatch) {
-        return { lead: phoneMatch, reason: "phone" };
+    if (customerName && stockNumber) {
+      const nameStockMatch = await buildMatch(
+        "LOWER(BTRIM(COALESCE(leads.customer_name, ''))) = ? AND UPPER(BTRIM(COALESCE(leads.stock_number, inventory.stock_number, ''))) = ?",
+        [customerName, stockNumber],
+        "name_stock"
+      );
+      if (nameStockMatch) {
+        return nameStockMatch;
       }
     }
 
-    if (customerName && vehicleInterest) {
-      const nameVehicleMatch = leads.find((lead) => {
-        const leadName = String(lead.customer_name || "").trim().toLowerCase();
-        const leadVehicle = String(lead.vehicle_interest || "").trim().toLowerCase();
-        return leadName === customerName && leadVehicle === vehicleInterest;
-      });
-
-      if (nameVehicleMatch) {
-        return { lead: nameVehicleMatch, reason: "name_vehicle" };
+    if (customerName && vin) {
+      const nameVinMatch = await buildMatch(
+        "LOWER(BTRIM(COALESCE(leads.customer_name, ''))) = ? AND UPPER(BTRIM(COALESCE(leads.vehicle_id, inventory.vin, ''))) = ?",
+        [customerName, vin],
+        "name_vin"
+      );
+      if (nameVinMatch) {
+        return nameVinMatch;
       }
     }
 

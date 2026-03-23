@@ -516,22 +516,13 @@ async function createLeadInboxService({ db, graph }) {
     let duplicate = null;
 
     if (classification === "direct_lead") {
-      duplicate = await db.findLeadDuplicate(parsedLead, {
-        dealership_id: parsedLead.dealership_id,
-      });
-
-      if (duplicate) {
-        const existingLead = await db.getApiLead(duplicate.lead.id);
-        const merged = mergeLeadData(existingLead, parsedLead);
-        lead = await db.updateApiLead(existingLead.id, merged);
-        await db.createActivity({
-          lead_id: lead.id,
-          type: "note_added",
-          content: `Duplicate ${parsedLead.source} email matched by ${duplicate.reason}.`,
-        });
-      } else {
-        lead = await db.createApiLead(parsedLead);
-      }
+      lead = await db.createApiLead(parsedLead, null, { returnDedupeMeta: true });
+      duplicate = lead?._dedupe?.merged
+        ? {
+            lead,
+            reason: lead._dedupe.reason,
+          }
+        : null;
     }
 
     const intakeItem = await db.createEmailIntakeItem(buildIntakePayload(message, parsedLead, classification, lead));
