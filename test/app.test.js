@@ -766,6 +766,68 @@ test("manager can convert an 'Other' intake item into a lead through the API", a
   });
 });
 
+test("email intake merges direct leads by customer identity plus stock number", async () => {
+  await withServer(async ({ app }) => {
+    const existingLead = app.locals.db.createApiLead({
+      source: "autotrader",
+      customer_name: "Morgan",
+      email: null,
+      phone: null,
+      stock_number: "D9779",
+      vehicle_interest: "2021 Tesla Model 3 Standard Range Plus",
+      message: "Existing lead",
+    });
+
+    const importer = await createLeadInboxService({
+      db: app.locals.db,
+      graph: {
+        async markProcessed() {},
+        async listMessages() {
+          return [];
+        },
+      },
+    });
+
+    const result = await importer.importMessage({
+      id: "message-merge-1",
+      internetMessageId: "<message-merge-1@example.com>",
+      subject: "Important Sales Lead from AutoTrader.ca",
+      receivedDateTime: "2026-03-23T14:00:00.000Z",
+      from: {
+        emailAddress: {
+          address: "no-reply@trader.ca",
+        },
+      },
+      body: {
+        contentType: "text",
+        content: `Name: Morgan
+Phone: 6471234567
+Subject: Important Sales Lead from AutoTrader.ca
+Trade-In?: No
+description:
+Message Hi, I found your listing and want to know if this Tesla is available.
+Stock Number: D9779
+Price: $21,995`,
+      },
+    });
+
+    assert.equal(result.imported, true);
+    assert.equal(result.duplicate, true);
+    assert.equal(result.reason, "name_stock");
+    assert.equal(result.lead.id, existingLead.id);
+
+    const allLeads = app.locals.db.listApiLeads({ user: { id: 1, role: "admin", dealership_id: 1 } });
+    assert.equal(allLeads.items.length, 1);
+
+    const intakeItems = app.locals.db.listEmailIntakeItems(
+      { classification: "direct_lead" },
+      { id: 1, role: "admin", dealership_id: 1 }
+    );
+    assert.equal(intakeItems.items.length, 1);
+    assert.equal(intakeItems.items[0].lead_id, existingLead.id);
+  });
+});
+
 test("manual lead status updates reject invalid jumps", async () => {
   await withServer(async ({ server }) => {
     const client = createClient(server);

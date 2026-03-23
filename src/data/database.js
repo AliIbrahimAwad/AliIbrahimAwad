@@ -3768,6 +3768,8 @@ class CrmDatabase extends BaseCrmDatabase {
     const phone = normalizePhone(input.phone);
     const customerName = String(input.customer_name || "").trim().toLowerCase();
     const vehicleInterest = String(input.vehicle_interest || "").trim().toLowerCase();
+    const stockNumber = normalizeInventoryIdentity(input.stock_number);
+    const vin = normalizeInventoryIdentity(input.vehicle_id || input.vin);
     const dealershipId = Number(context.dealership_id || context.user?.dealership_id || getDefaultDealershipId());
 
     const rows = this.all(
@@ -3779,6 +3781,73 @@ class CrmDatabase extends BaseCrmDatabase {
       [dealershipId]
     );
     const leads = rows.map((row) => this.formatApiLead(row));
+    const matchesLeadIdentity = (lead, predicate) => {
+      const leadStockNumber = normalizeInventoryIdentity(lead.stock_number || lead.inventory?.stock_number);
+      const leadVin = normalizeInventoryIdentity(lead.vehicle_id || lead.inventory?.vin);
+      return predicate({
+        lead,
+        leadEmail: String(lead.email || "").trim().toLowerCase(),
+        leadPhone: normalizePhone(lead.phone),
+        leadName: String(lead.customer_name || "").trim().toLowerCase(),
+        leadVehicle: String(lead.vehicle_interest || "").trim().toLowerCase(),
+        leadStockNumber,
+        leadVin,
+      });
+    };
+
+    if (email && stockNumber) {
+      const emailStockMatch = leads.find((lead) =>
+        matchesLeadIdentity(lead, ({ leadEmail, leadStockNumber }) => leadEmail === email && leadStockNumber === stockNumber)
+      );
+      if (emailStockMatch) {
+        return { lead: emailStockMatch, reason: "email_stock" };
+      }
+    }
+
+    if (phone && stockNumber) {
+      const phoneStockMatch = leads.find((lead) =>
+        matchesLeadIdentity(lead, ({ leadPhone, leadStockNumber }) => leadPhone === phone && leadStockNumber === stockNumber)
+      );
+      if (phoneStockMatch) {
+        return { lead: phoneStockMatch, reason: "phone_stock" };
+      }
+    }
+
+    if (customerName && stockNumber) {
+      const nameStockMatch = leads.find((lead) =>
+        matchesLeadIdentity(lead, ({ leadName, leadStockNumber }) => leadName === customerName && leadStockNumber === stockNumber)
+      );
+      if (nameStockMatch) {
+        return { lead: nameStockMatch, reason: "name_stock" };
+      }
+    }
+
+    if (email && vin) {
+      const emailVinMatch = leads.find((lead) =>
+        matchesLeadIdentity(lead, ({ leadEmail, leadVin }) => leadEmail === email && leadVin === vin)
+      );
+      if (emailVinMatch) {
+        return { lead: emailVinMatch, reason: "email_vin" };
+      }
+    }
+
+    if (phone && vin) {
+      const phoneVinMatch = leads.find((lead) =>
+        matchesLeadIdentity(lead, ({ leadPhone, leadVin }) => leadPhone === phone && leadVin === vin)
+      );
+      if (phoneVinMatch) {
+        return { lead: phoneVinMatch, reason: "phone_vin" };
+      }
+    }
+
+    if (customerName && vin) {
+      const nameVinMatch = leads.find((lead) =>
+        matchesLeadIdentity(lead, ({ leadName, leadVin }) => leadName === customerName && leadVin === vin)
+      );
+      if (nameVinMatch) {
+        return { lead: nameVinMatch, reason: "name_vin" };
+      }
+    }
 
     if (email) {
       const emailMatch = leads.find((lead) => String(lead.email || "").trim().toLowerCase() === email);
