@@ -24,14 +24,11 @@ export function sourceTone(source) {
 
 export function statusTone(status) {
   switch (String(status || "").toLowerCase()) {
-    case "hot":
     case "sold":
       return "text-ember-400 bg-ember-500/15";
-    case "warm":
     case "contacted":
       return "text-ice-300 bg-ice-500/15";
     case "new":
-    case "new lead":
       return "text-lime-400 bg-lime-500/15";
     case "appointment":
       return "text-sky-300 bg-sky-500/15";

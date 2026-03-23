@@ -47,15 +47,6 @@ function categorizeOrganizedLead(lead, latestAnalysis, lastActivityAt, settings,
     return status;
   }
 
-  if (status === "contacted") {
-    const hotLeadScore = Number(latestAnalysis?.hot_lead_score || 0);
-    const appointmentIntent = Boolean(latestAnalysis?.appointment_intent);
-    const activityHours = lastActivityAt ? hoursBetween(now, lastActivityAt) : Infinity;
-    if (appointmentIntent || hotLeadScore >= 65 || activityHours <= settings.inactivity_threshold_hours / 2) {
-      return "engaged";
-    }
-  }
-
   return "contacted";
 }
 

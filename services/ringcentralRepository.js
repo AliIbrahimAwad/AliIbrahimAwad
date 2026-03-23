@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 
 const { getDefaultDealershipId } = require("../src/config/dealership");
+const { canViewAllLeads } = require("../src/models/user");
 
 function nowIso() {
   return new Date().toISOString();
@@ -18,10 +19,35 @@ function boolFlag(value) {
   return value ? 1 : 0;
 }
 
+function isUniqueConstraintError(error, keyName = "") {
+  const message = String(error?.message || "").toLowerCase();
+  if (error?.code === "23505") {
+    return true;
+  }
+
+  if (!message) {
+    return false;
+  }
+
+  return keyName ? message.includes(String(keyName).toLowerCase()) : message.includes("unique");
+}
+
 function plusMinutes(dateString, minutes) {
   const next = new Date(dateString || Date.now());
   next.setMinutes(next.getMinutes() + minutes);
   return next.toISOString();
+}
+
+function decodeJson(value, fallback = null) {
+  if (!value) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch (_error) {
+    return fallback;
+  }
 }
 
 function createRingCentralRepository(db) {
@@ -285,6 +311,216 @@ function createRingCentralRepository(db) {
     return { created: true, event: await db.get("SELECT * FROM ringcentral_webhook_events WHERE id = ?", [record.id]) };
   }
 
+  function unmatchedAccess(user) {
+    const clauses = ["unmatched_communications.dealership_id = ?"];
+    const params = [Number(user?.dealership_id || getDefaultDealershipId())];
+
+    if (!canViewAllLeads(user)) {
+      clauses.push("unmatched_communications.crm_user_id = ?");
+      params.push(Number(user?.id || 0));
+    }
+
+    return { clause: clauses.join(" AND "), params };
+  }
+
+  async function getUnmatchedCommunicationByProviderId(provider, providerMessageId = null, providerCallId = null) {
+    if (providerMessageId) {
+      return db.get(
+        "SELECT * FROM unmatched_communications WHERE provider = ? AND provider_message_id = ?",
+        [provider, providerMessageId]
+      );
+    }
+
+    if (providerCallId) {
+      return db.get(
+        "SELECT * FROM unmatched_communications WHERE provider = ? AND provider_call_id = ?",
+        [provider, providerCallId]
+      );
+    }
+
+    return null;
+  }
+
+  async function upsertUnmatchedCommunication(input) {
+    const existing = await getUnmatchedCommunicationByProviderId(
+      input.provider,
+      input.provider_message_id || null,
+      input.provider_call_id || null
+    );
+    const timestamp = nowIso();
+    const record = {
+      id: existing?.id || uniqueId("unmatched"),
+      dealership_id: existing?.dealership_id || dealershipId(input),
+      type: input.type,
+      direction: input.direction || "inbound",
+      from_number: input.from_number || null,
+      to_number: input.to_number || null,
+      normalized_from_number: input.normalized_from_number || null,
+      normalized_to_number: input.normalized_to_number || null,
+      body_text: input.body_text || null,
+      call_duration: input.call_duration == null ? null : Number(input.call_duration),
+      received_at: input.received_at || null,
+      provider: input.provider || "ringcentral",
+      provider_message_id: input.provider_message_id || null,
+      provider_call_id: input.provider_call_id || null,
+      crm_user_id: input.crm_user_id == null ? null : Number(input.crm_user_id),
+      provider_extension_id: input.provider_extension_id || null,
+      raw_json: encodeJson(input.raw || {}),
+      status: existing?.status || input.status || "new",
+      resolved_lead_id: existing?.resolved_lead_id ?? input.resolved_lead_id ?? null,
+      created_at: existing?.created_at || timestamp,
+      updated_at: timestamp,
+    };
+
+    if (existing) {
+      await db.execute(
+        `
+          UPDATE unmatched_communications
+          SET type = ?, direction = ?, from_number = ?, to_number = ?, normalized_from_number = ?, normalized_to_number = ?,
+              body_text = ?, call_duration = ?, received_at = ?, crm_user_id = ?, provider_extension_id = ?, raw_json = ?,
+              updated_at = ?
+          WHERE id = ?
+        `,
+        [
+          record.type,
+          record.direction,
+          record.from_number,
+          record.to_number,
+          record.normalized_from_number,
+          record.normalized_to_number,
+          record.body_text,
+          record.call_duration,
+          record.received_at,
+          record.crm_user_id,
+          record.provider_extension_id,
+          record.raw_json,
+          record.updated_at,
+          record.id,
+        ]
+      );
+      return {
+        created: false,
+        record: await db.get("SELECT * FROM unmatched_communications WHERE id = ?", [record.id]),
+      };
+    }
+
+    await db.execute(
+      `
+        INSERT INTO unmatched_communications (
+          id, dealership_id, type, direction, from_number, to_number, normalized_from_number, normalized_to_number,
+          body_text, call_duration, received_at, provider, provider_message_id, provider_call_id, crm_user_id,
+          provider_extension_id, raw_json, status, resolved_lead_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        record.id,
+        record.dealership_id,
+        record.type,
+        record.direction,
+        record.from_number,
+        record.to_number,
+        record.normalized_from_number,
+        record.normalized_to_number,
+        record.body_text,
+        record.call_duration,
+        record.received_at,
+        record.provider,
+        record.provider_message_id,
+        record.provider_call_id,
+        record.crm_user_id,
+        record.provider_extension_id,
+        record.raw_json,
+        record.status,
+        record.resolved_lead_id,
+        record.created_at,
+        record.updated_at,
+      ]
+    );
+    return {
+      created: true,
+      record: await db.get("SELECT * FROM unmatched_communications WHERE id = ?", [record.id]),
+    };
+  }
+
+  async function listUnmatchedCommunications({ status = "", limit = 100 } = {}, user) {
+    const access = unmatchedAccess(user);
+    const clauses = [access.clause];
+    const params = [...access.params];
+    const safeStatus = String(status || "").trim().toLowerCase();
+    const safeLimit = Math.max(1, Math.min(250, Number(limit) || 100));
+
+    if (safeStatus) {
+      clauses.push("unmatched_communications.status = ?");
+      params.push(safeStatus);
+    }
+
+    const rows = await db.all(
+      `
+        SELECT unmatched_communications.*, leads.customer_name AS resolved_lead_name
+        FROM unmatched_communications
+        LEFT JOIN leads
+          ON leads.id = unmatched_communications.resolved_lead_id
+         AND leads.dealership_id = unmatched_communications.dealership_id
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY COALESCE(unmatched_communications.received_at, unmatched_communications.created_at) DESC,
+                 unmatched_communications.id DESC
+        LIMIT ?
+      `,
+      [...params, safeLimit]
+    );
+
+    return rows.map((row) => ({
+      ...row,
+      raw: decodeJson(row.raw_json, {}),
+    }));
+  }
+
+  async function getUnmatchedCommunicationById(id, user) {
+    const access = unmatchedAccess(user);
+    const row = await db.get(
+      `
+        SELECT unmatched_communications.*, leads.customer_name AS resolved_lead_name
+        FROM unmatched_communications
+        LEFT JOIN leads
+          ON leads.id = unmatched_communications.resolved_lead_id
+         AND leads.dealership_id = unmatched_communications.dealership_id
+        WHERE unmatched_communications.id = ?
+          AND ${access.clause}
+      `,
+      [id, ...access.params]
+    );
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      ...row,
+      raw: decodeJson(row.raw_json, {}),
+    };
+  }
+
+  async function updateUnmatchedCommunication(id, input = {}, user) {
+    const existing = await getUnmatchedCommunicationById(id, user);
+    if (!existing) {
+      return null;
+    }
+
+    const nextStatus = input.status || existing.status;
+    const resolvedLeadId = input.resolved_lead_id === undefined ? existing.resolved_lead_id : input.resolved_lead_id;
+
+    await db.execute(
+      `
+        UPDATE unmatched_communications
+        SET status = ?, resolved_lead_id = ?, updated_at = ?
+        WHERE id = ? AND dealership_id = ?
+      `,
+      [nextStatus, resolvedLeadId, nowIso(), id, existing.dealership_id]
+    );
+
+    return getUnmatchedCommunicationById(id, user);
+  }
+
   async function markWebhookEventProcessed(id) {
     await db.execute(
       "UPDATE ringcentral_webhook_events SET process_status = ?, processed_at = ?, updated_at = ?, error_message = NULL WHERE id = ?",
@@ -338,29 +574,37 @@ function createRingCentralRepository(db) {
       return db.get("SELECT * FROM processing_jobs WHERE id = ?", [record.id]);
     }
 
-    await db.execute(
-      `
-        INSERT INTO processing_jobs (
-          id, dealership_id, job_type, unique_key, payload_json, status, attempts, last_error,
-          run_after, locked_at, completed_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        record.id,
-        record.dealership_id,
-        record.job_type,
-        record.unique_key,
-        record.payload_json,
-        record.status,
-        record.attempts,
-        record.last_error,
-        record.run_after,
-        record.locked_at,
-        record.completed_at,
-        record.created_at,
-        record.updated_at,
-      ]
-    );
+    try {
+      await db.execute(
+        `
+          INSERT INTO processing_jobs (
+            id, dealership_id, job_type, unique_key, payload_json, status, attempts, last_error,
+            run_after, locked_at, completed_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          record.id,
+          record.dealership_id,
+          record.job_type,
+          record.unique_key,
+          record.payload_json,
+          record.status,
+          record.attempts,
+          record.last_error,
+          record.run_after,
+          record.locked_at,
+          record.completed_at,
+          record.created_at,
+          record.updated_at,
+        ]
+      );
+    } catch (error) {
+      if (isUniqueConstraintError(error, "idx_processing_jobs_unique_key")) {
+        return db.get("SELECT * FROM processing_jobs WHERE unique_key = ?", [record.unique_key]);
+      }
+      throw error;
+    }
+
     return db.get("SELECT * FROM processing_jobs WHERE id = ?", [record.id]);
   }
 
@@ -845,12 +1089,17 @@ function createRingCentralRepository(db) {
     getLeadCallByProviderId,
     getLeadMessageByProviderId,
     getSubscriptionByConnectionId,
+    getUnmatchedCommunicationById,
+    getUnmatchedCommunicationByProviderId,
     listActiveConnections,
     listLeadMessages,
+    listUnmatchedCommunications,
     markWebhookEventFailed,
     markWebhookEventProcessed,
     saveSubscription,
     summarizeJobs,
+    updateUnmatchedCommunication,
+    upsertUnmatchedCommunication,
     upsertCallRecording,
     upsertConnection,
     upsertLeadCall,

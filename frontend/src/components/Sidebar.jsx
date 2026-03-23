@@ -1,4 +1,5 @@
 import {
+  AlertCircle,
   BarChart3,
   BellRing,
   CarFront,
@@ -11,7 +12,9 @@ import {
 
 const sections = [
   { label: "Dashboard", icon: LayoutDashboard },
+  { label: "Intake", icon: BellRing },
   { label: "Leads", icon: ClipboardList },
+  { label: "Unmatched", icon: AlertCircle },
   { label: "Inventory", icon: CarFront },
   { label: "Conversations", icon: MessageSquareMore },
   { label: "Team", icon: Users },
@@ -19,7 +22,17 @@ const sections = [
 ];
 
 export function Sidebar({ activeSection = "Dashboard", onSelectSection, currentUser }) {
-  const visibleSections = currentUser?.role === "admin" ? sections : sections.filter((section) => section.label !== "Team");
+  const visibleSections = sections.filter((section) => {
+    if (section.label === "Team") {
+      return currentUser?.role === "admin";
+    }
+
+    if (section.label === "Intake") {
+      return currentUser?.role === "admin" || currentUser?.role === "manager";
+    }
+
+    return true;
+  });
 
   return (
     <aside className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-ink-900/85 p-5 shadow-card backdrop-blur xl:min-h-[calc(100vh-3rem)]">

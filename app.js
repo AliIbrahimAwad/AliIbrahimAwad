@@ -5,6 +5,8 @@ const http = require("http");
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, ".env"), quiet: true });
 
+const { createLeadInboxService } = require("./services/leadInbox");
+const { buildGraphService } = require("./services/microsoftGraph");
 const { createRingCentralService } = require("./services/ringcentral");
 const { initializeDatabase } = require("./src/data");
 const { attachCurrentUser } = require("./src/middleware/auth");
@@ -33,6 +35,57 @@ function shouldServeReactApp(options = {}) {
   return true;
 }
 
+function canStartLeadInboxPolling(options = {}) {
+  if (options.disableLeadInboxPolling) {
+    return false;
+  }
+
+  if (options.graphService) {
+    return true;
+  }
+
+  return Boolean(
+    process.env.MICROSOFT_TENANT_ID &&
+      process.env.MICROSOFT_CLIENT_ID &&
+      process.env.MICROSOFT_CLIENT_SECRET &&
+      process.env.MICROSOFT_GRAPH_USER
+  );
+}
+
+async function configureLeadInbox(app, db, options = {}) {
+  if (!canStartLeadInboxPolling(options)) {
+    app.locals.leadInbox = null;
+    return;
+  }
+
+  const graph = options.graphService || buildGraphService(options.graphConfig || {});
+  const leadInbox = await createLeadInboxService({ db, graph });
+  const limit = Math.max(1, Math.min(100, Number(options.leadInboxLimit || process.env.LEAD_IMPORT_MAX_MESSAGES) || 25));
+  const intervalMs = Math.max(
+    15_000,
+    Number(options.leadInboxIntervalMs || process.env.LEAD_IMPORT_POLL_INTERVAL_MS) || 60_000
+  );
+
+  app.locals.leadInbox = leadInbox;
+
+  const runImport = async () => {
+    try {
+      await leadInbox.importUnreadLeads({ limit });
+    } catch (error) {
+      console.error("Lead inbox poll failed.", error);
+    }
+  };
+
+  if (options.runLeadInboxImmediately !== false) {
+    const startupTimer = setTimeout(runImport, 1_000);
+    startupTimer.unref?.();
+  }
+
+  const interval = setInterval(runImport, intervalMs);
+  interval.unref?.();
+  app.locals.stopLeadInboxPolling = () => clearInterval(interval);
+}
+
 async function createApp(options = {}) {
   const app = express();
   const db = await initializeDatabase({
@@ -54,6 +107,7 @@ async function createApp(options = {}) {
   app.locals.db = db;
   app.locals.leadStatuses = CRM_LEAD_STATUSES;
   app.locals.ringcentral = ringcentral;
+  app.locals.stopLeadInboxPolling = null;
 
   app.use(express.urlencoded({ extended: false }));
   app.use(express.json({ limit: "10mb" }));
@@ -79,6 +133,7 @@ async function createApp(options = {}) {
   registerApiRoutes(app);
   registerRingCentralRoutes(app);
   registerUserRoutes(app);
+  await configureLeadInbox(app, db, options);
 
   if (serveReactApp) {
     app.use(express.static(frontendDistPath, { index: false }));

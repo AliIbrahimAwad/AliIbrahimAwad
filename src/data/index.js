@@ -1,10 +1,4 @@
-const {
-  CrmDatabase,
-  HttpError,
-  NotFoundError,
-  UnauthorizedError,
-  ValidationError,
-} = require("./database");
+const { HttpError, NotFoundError, UnauthorizedError, ValidationError } = require("./core");
 const { PostgresCrmDatabase } = require("./postgres");
 
 async function initializeDatabase(options = {}) {
@@ -22,6 +16,7 @@ async function initializeDatabase(options = {}) {
   }
 
   if (explicitSqlitePath && allowSqlite) {
+    const { CrmDatabase } = require("./database");
     return CrmDatabase.initialize({ dbPath: explicitSqlitePath, allowSqlite: true });
   }
 
@@ -31,7 +26,6 @@ async function initializeDatabase(options = {}) {
 }
 
 module.exports = {
-  CrmDatabase,
   HttpError,
   NotFoundError,
   PostgresCrmDatabase,

@@ -1,3 +1,37 @@
+function getTimeZoneOffsetMinutes(date, timeZone) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    timeZoneName: "shortOffset",
+  });
+  const zonePart = formatter.formatToParts(date).find((part) => part.type === "timeZoneName")?.value || "GMT+0";
+  const match = zonePart.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/i);
+  if (!match) {
+    return 0;
+  }
+
+  const sign = match[1] === "-" ? -1 : 1;
+  const hours = Number(match[2] || 0);
+  const minutes = Number(match[3] || 0);
+  return sign * (hours * 60 + minutes);
+}
+
+function getTodayCutoffIso(timeZone = process.env.LEAD_IMPORT_TIMEZONE || "America/Toronto") {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = formatter.formatToParts(new Date());
+  const year = Number(parts.find((part) => part.type === "year")?.value || 0);
+  const month = Number(parts.find((part) => part.type === "month")?.value || 1);
+  const day = Number(parts.find((part) => part.type === "day")?.value || 1);
+  const utcMidnight = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+  const offsetMinutes = getTimeZoneOffsetMinutes(utcMidnight, timeZone);
+
+  return new Date(utcMidnight.getTime() - offsetMinutes * 60_000).toISOString();
+}
+
 function buildGraphService(config = {}) {
   const tenantId = config.tenantId || process.env.MICROSOFT_TENANT_ID || "";
   const clientId = config.clientId || process.env.MICROSOFT_CLIENT_ID || "";
@@ -5,7 +39,7 @@ function buildGraphService(config = {}) {
   const userId = config.userId || process.env.MICROSOFT_GRAPH_USER || "";
   const folderName = config.folderName || process.env.LEAD_IMPORT_FOLDER || "Inbox";
   const processedFolderName = config.processedFolderName || process.env.LEAD_IMPORT_PROCESSED_FOLDER || "";
-  const cutoff = config.cutoff || process.env.LEAD_IMPORT_CUTOFF || "";
+  const cutoff = config.cutoff || process.env.LEAD_IMPORT_CUTOFF || getTodayCutoffIso();
 
   let cachedToken = null;
   let cachedTokenExpiresAt = 0;

@@ -43,6 +43,10 @@ function getSenderEmail(message = {}) {
   return String(message.from?.emailAddress?.address || "").trim().toLowerCase();
 }
 
+function getSenderName(message = {}) {
+  return cleanValue(message.from?.emailAddress?.name || "");
+}
+
 function getFieldSameLine(text, label) {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = text.match(new RegExp(`^\\s*${escaped}\\s*:?\\s*(.+)$`, "im"));
@@ -84,7 +88,11 @@ function detectLeadSource(message, text) {
     return "website";
   }
 
-  return null;
+  if (haystack.includes("contact us") || haystack.includes("contact-us")) {
+    return "website";
+  }
+
+  return "email";
 }
 
 function parseAutoTraderEmail(text, message = {}) {
@@ -168,7 +176,6 @@ function parseCarGurusEmail(text, message = {}) {
     listing_url: getField(text, "View Listing on CarGurus"),
     message: getField(text, "Comments"),
     lead_type: "general_inquiry",
-    postal_code: getField(text, "Postal code"),
     sender: getSenderEmail(message),
   };
 }
@@ -200,7 +207,6 @@ function parseWebsiteLeadEmail(text, message = {}) {
     listing_url: listingUrl,
     message: getField(text, "Message"),
     lead_type: "website_form",
-    preferred_contact_method: getField(text, "Preferred Contact Method"),
     sender: getSenderEmail(message),
   };
 }
@@ -222,6 +228,107 @@ function parseLeadEmail(message) {
   }
 
   return null;
+}
+
+function extractFirstMatch(text, regex, group = 1) {
+  const match = String(text || "").match(regex);
+  return cleanValue(match ? match[group] : "");
+}
+
+function extractEmail(text) {
+  return extractFirstMatch(text, /([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i);
+}
+
+function extractPhone(text) {
+  return cleanPhone(
+    extractFirstMatch(
+      text,
+      /(\+?\d[\d().\-\s]{7,}\d)/
+    )
+  );
+}
+
+function extractVin(text) {
+  return extractFirstMatch(text, /\b([A-HJ-NPR-Z0-9]{17})\b/i);
+}
+
+function extractStockNumber(text) {
+  return (
+    extractFirstMatch(text, /\bstock(?:\s*(?:number|#))?\s*[:#-]?\s*([A-Z]\d{2,}|[A-Z0-9-]{3,})\b/i) ||
+    extractFirstMatch(text, /\b([A-Z]\d{3,5})\b/)
+  );
+}
+
+function buildGenericEmailParse(message, text) {
+  const senderEmail = getSenderEmail(message);
+  const senderName = getSenderName(message);
+  const subject = cleanValue(message.subject || "");
+  const customerName =
+    getField(text, "Full Name") ||
+    getField(text, "Name") ||
+    getField(text, "Customer Name") ||
+    senderName ||
+    null;
+
+  return {
+    source: detectLeadSource(message, text),
+    customer_name: customerName,
+    phone: cleanPhone(getField(text, "Phone") || getField(text, "Phone Number") || extractPhone(text)),
+    email: getField(text, "Email") || extractEmail(text) || senderEmail || null,
+    vehicle_interest: getField(text, "Vehicle") || getField(text, "Vehicle Interest") || null,
+    vehicle_id: getField(text, "VIN") || extractVin(text),
+    stock_number: getField(text, "Stock Number") || extractStockNumber(text),
+    vehicle_year: null,
+    vehicle_make: null,
+    vehicle_model: null,
+    vehicle_trim: null,
+    vehicle_condition: null,
+    vehicle_price: null,
+    listing_url: extractFirstMatch(text, /(https?:\/\/[^\s]+)/i),
+    message:
+      getField(text, "Message") ||
+      getField(text, "Comments") ||
+      getField(text, "Inquiry") ||
+      text ||
+      subject,
+    lead_type: null,
+    subject,
+    sender: senderEmail,
+  };
+}
+
+function classifyParsedEmail(parsed, message, text) {
+  const source = String(parsed.source || "").toLowerCase();
+  if (source === "autotrader" || source === "cargurus") {
+    return "direct_lead";
+  }
+
+  const subject = String(message.subject || "").toLowerCase();
+  const haystack = `${subject}\n${String(text || "").toLowerCase()}`;
+  const directSignals = [
+    "availability",
+    "available",
+    "finance",
+    "financing",
+    "trade-in",
+    "trade in",
+    "appointment",
+    "test drive",
+    "buy",
+    "buying",
+    "purchase",
+    "interested in",
+    "vehicle",
+    "stock",
+    "vin",
+  ];
+  const hasVehicleContext = Boolean(parsed.stock_number || parsed.vehicle_id || parsed.vehicle_interest);
+
+  if (hasVehicleContext || directSignals.some((term) => haystack.includes(term))) {
+    return "direct_lead";
+  }
+
+  return "other";
 }
 
 function mergeLeadData(existingLead, importedLead) {
@@ -246,6 +353,55 @@ function mergeLeadData(existingLead, importedLead) {
   };
 }
 
+function deriveIntakeStatusFromLead(lead) {
+  if (!lead) {
+    return "unassigned";
+  }
+
+  if (String(lead.status || "").toLowerCase() !== "new") {
+    return "contacted";
+  }
+
+  return lead.assigned_to ? "assigned" : "unassigned";
+}
+
+function buildIntakePayload(message, parsed, classification, lead = null) {
+  const externalId = String(message.internetMessageId || message.id || "").trim();
+  const vehicleDisplay =
+    lead?.inventory
+      ? [lead.inventory.year, lead.inventory.make, lead.inventory.model, lead.inventory.trim].filter(Boolean).join(" ")
+      : [lead?.vehicle_year, lead?.vehicle_make, lead?.vehicle_model, lead?.vehicle_trim]
+          .filter(Boolean)
+          .join(" ") || parsed.vehicle_interest || null;
+
+  return {
+    external_id: externalId,
+    source: parsed.source || "email",
+    subject: cleanValue(message.subject || ""),
+    sender: getSenderEmail(message),
+    message: parsed.message || normalizeContent(message) || null,
+    received_at: message.receivedDateTime || new Date().toISOString(),
+    classification,
+    status: classification === "direct_lead" ? deriveIntakeStatusFromLead(lead) : "open",
+    assigned_to: lead?.assigned_to || null,
+    lead_id: lead?.id || null,
+    customer_name: parsed.customer_name || null,
+    phone: parsed.phone || null,
+    email: parsed.email || null,
+    stock_number: lead?.stock_number || parsed.stock_number || null,
+    inventory_id: lead?.inventory_id || null,
+    vehicle_display: vehicleDisplay || null,
+    raw_payload_json: JSON.stringify({
+      id: message.id || null,
+      internetMessageId: message.internetMessageId || null,
+      subject: message.subject || null,
+      receivedDateTime: message.receivedDateTime || null,
+      from: message.from || null,
+      bodyPreview: message.bodyPreview || null,
+    }),
+  };
+}
+
 async function createLeadInboxService({ db, graph }) {
   async function importMessage(message) {
     const externalId = String(message.internetMessageId || message.id || "").trim();
@@ -258,58 +414,59 @@ async function createLeadInboxService({ db, graph }) {
       return { skipped: true, reason: "already_imported" };
     }
 
-    const parsedLead = parseLeadEmail(message);
-    if (!parsedLead) {
-      await db.recordImportedMessage({
-        external_id: externalId,
-        source: "unknown",
-        subject: message.subject,
-        sender: getSenderEmail(message),
-        received_at: message.receivedDateTime,
-        status: "ignored",
-        matched_reason: "unknown_format",
+    const text = normalizeContent(message);
+    const parsedLead = parseLeadEmail(message) || buildGenericEmailParse(message, text);
+    const classification = classifyParsedEmail(parsedLead, message, text);
+    let lead = null;
+    let duplicate = null;
+
+    if (classification === "direct_lead") {
+      duplicate = await db.findLeadDuplicate(parsedLead, {
+        dealership_id: parsedLead.dealership_id,
       });
-      return { skipped: true, reason: "unknown_format" };
+
+      if (duplicate) {
+        const existingLead = await db.getApiLead(duplicate.lead.id);
+        const merged = mergeLeadData(existingLead, parsedLead);
+        lead = await db.updateApiLead(existingLead.id, merged);
+        await db.createActivity({
+          lead_id: lead.id,
+          type: "note_added",
+          content: `Duplicate ${parsedLead.source} email matched by ${duplicate.reason}.`,
+        });
+      } else {
+        lead = await db.createApiLead(parsedLead);
+      }
     }
 
-  const duplicate = await db.findLeadDuplicate(parsedLead, {
-    dealership_id: parsedLead.dealership_id,
-  });
-    if (duplicate) {
-      const existingLead = await db.getApiLead(duplicate.lead.id);
-      const merged = mergeLeadData(existingLead, parsedLead);
-      const updatedLead = await db.updateApiLead(existingLead.id, merged);
-      await db.createActivity({
-        lead_id: updatedLead.id,
-        type: "note_added",
-        content: `Duplicate ${parsedLead.source} lead email matched by ${duplicate.reason}.`,
-      });
-      await db.recordImportedMessage({
-        external_id: externalId,
-        source: parsedLead.source,
-        lead_id: updatedLead.id,
-        subject: message.subject,
-        sender: getSenderEmail(message),
-        received_at: message.receivedDateTime,
-        status: "duplicate",
-        matched_reason: duplicate.reason,
-      });
-      await graph.markProcessed(message);
-      return { duplicate: true, lead: updatedLead, reason: duplicate.reason };
-    }
-
-    const createdLead = await db.createApiLead(parsedLead);
+    const intakeItem = await db.createEmailIntakeItem(buildIntakePayload(message, parsedLead, classification, lead));
     await db.recordImportedMessage({
       external_id: externalId,
-      source: parsedLead.source,
-      lead_id: createdLead.id,
+      source: parsedLead.source || "email",
+      lead_id: lead?.id || null,
       subject: message.subject,
       sender: getSenderEmail(message),
       received_at: message.receivedDateTime,
-      status: "imported",
+      status: duplicate ? "duplicate" : "imported",
+      matched_reason: duplicate ? duplicate.reason : classification,
     });
     await graph.markProcessed(message);
-    return { imported: true, lead: createdLead };
+
+    if (duplicate) {
+      return {
+        imported: true,
+        duplicate: true,
+        reason: duplicate.reason,
+        item: intakeItem,
+        lead,
+      };
+    }
+
+    return {
+      imported: true,
+      item: intakeItem,
+      lead,
+    };
   }
 
   async function importUnreadLeads({ limit = 25 } = {}) {
@@ -330,6 +487,8 @@ async function createLeadInboxService({ db, graph }) {
 }
 
 module.exports = {
+  buildGenericEmailParse,
+  classifyParsedEmail,
   createLeadInboxService,
   detectLeadSource,
   mergeLeadData,

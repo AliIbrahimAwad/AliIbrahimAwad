@@ -95,6 +95,28 @@ function normalizeInventoryStatus(value) {
   return "inactive";
 }
 
+function buildVehicleDisplay(input = {}) {
+  return stringOrNull(
+    [input.year, input.make, input.model, input.trim]
+      .map((value) => stringOrNull(value))
+      .filter(Boolean)
+      .join(" ")
+  );
+}
+
+function normalizeEmailIntakeClassification(value) {
+  return String(value || "").trim().toLowerCase() === "direct_lead" ? "direct_lead" : "other";
+}
+
+function normalizeEmailIntakeStatus(classification, value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (classification === "direct_lead") {
+    return ["unassigned", "assigned", "contacted"].includes(normalized) ? normalized : "unassigned";
+  }
+
+  return ["open", "resolved", "converted_to_lead"].includes(normalized) ? normalized : "open";
+}
+
 function sanitizeSqlParam(value) {
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeSqlParam(item));
@@ -251,6 +273,31 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS email_intake_items (
+        id BIGSERIAL PRIMARY KEY,
+        dealership_id BIGINT NOT NULL DEFAULT 1,
+        external_id TEXT NOT NULL UNIQUE,
+        source TEXT NOT NULL,
+        subject TEXT,
+        sender TEXT,
+        message TEXT,
+        received_at TEXT,
+        classification TEXT NOT NULL DEFAULT 'other',
+        status TEXT NOT NULL,
+        assigned_to BIGINT REFERENCES users(id) ON DELETE SET NULL,
+        lead_id BIGINT REFERENCES leads(id) ON DELETE SET NULL,
+        customer_name TEXT,
+        phone TEXT,
+        normalized_phone TEXT,
+        email TEXT,
+        stock_number TEXT,
+        inventory_id BIGINT REFERENCES inventory(id) ON DELETE SET NULL,
+        vehicle_display TEXT,
+        raw_payload_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS inventory (
         id BIGSERIAL PRIMARY KEY,
         dealership_id BIGINT NOT NULL DEFAULT 1,
@@ -391,6 +438,12 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         ON inventory_import_runs(dealership_id, started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_inventory_import_errors_run_id
         ON inventory_import_errors(import_run_id, row_number);
+      CREATE INDEX IF NOT EXISTS idx_email_intake_items_class_status_received
+        ON email_intake_items(dealership_id, classification, status, received_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_email_intake_items_assigned_to
+        ON email_intake_items(assigned_to, status, received_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_email_intake_items_lead_id
+        ON email_intake_items(lead_id);
       CREATE INDEX IF NOT EXISTS idx_tasks_user_status_due_at ON tasks(user_id, status, due_at);
       CREATE INDEX IF NOT EXISTS idx_tasks_lead_status_due_at ON tasks(lead_id, status, due_at);
       CREATE INDEX IF NOT EXISTS idx_notifications_user_status_created_at ON notifications(user_id, status, created_at DESC);
@@ -1952,6 +2005,10 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
     const assignedTo = input.assigned_to == null ? null : parsePositiveInteger(input.assigned_to);
     const inventoryId = await this.resolveLeadInventoryId(input, dealershipId);
+    const inventory = inventoryId
+      ? await this.get("SELECT * FROM inventory WHERE id = ? AND dealership_id = ?", [inventoryId, dealershipId])
+      : null;
+    const leadPayload = this.normalizeLeadPayloadForStorage(input, inventory);
 
     const row = await this.get(
       `
@@ -1987,19 +2044,19 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         input.source || "website",
         storedStatus || "new",
         assignedTo,
-        input.customer_name || null,
-        input.phone || null,
+        leadPayload.customer_name,
+        leadPayload.phone,
         normalizedPhone,
-        input.email || null,
-        input.vehicle_interest || null,
-        input.vehicle_id || null,
-        input.stock_number || null,
-        input.vehicle_year || null,
-        input.vehicle_make || null,
-        input.vehicle_model || null,
-        input.vehicle_trim || null,
-        input.vehicle_condition || null,
-        input.vehicle_price || null,
+        leadPayload.email,
+        leadPayload.vehicle_interest,
+        leadPayload.vehicle_id,
+        leadPayload.stock_number,
+        leadPayload.vehicle_year,
+        leadPayload.vehicle_make,
+        leadPayload.vehicle_model,
+        leadPayload.vehicle_trim,
+        leadPayload.vehicle_condition,
+        leadPayload.vehicle_price,
           input.lead_type || null,
           input.listing_url || null,
           input.message || null,
@@ -2025,6 +2082,10 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     const storedStatus = input.status ? toStoredStatus(input.status) : null;
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
     const inventoryId = await this.resolveLeadInventoryId(input, Number(existingLead.dealership_id), existingLead.inventory_id);
+    const inventory = inventoryId
+      ? await this.get("SELECT * FROM inventory WHERE id = ? AND dealership_id = ?", [inventoryId, existingLead.dealership_id])
+      : null;
+    const leadPayload = this.normalizeLeadPayloadForStorage(input, inventory);
 
     await this.execute(
       `
@@ -2055,19 +2116,19 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       [
         input.source || "website",
         storedStatus,
-        input.customer_name || null,
-        input.phone || null,
+        leadPayload.customer_name,
+        leadPayload.phone,
         normalizedPhone,
-        input.email || null,
-        input.vehicle_interest || null,
-        input.vehicle_id || null,
-        input.stock_number || null,
-        input.vehicle_year || null,
-        input.vehicle_make || null,
-        input.vehicle_model || null,
-        input.vehicle_trim || null,
-        input.vehicle_condition || null,
-        input.vehicle_price || null,
+        leadPayload.email,
+        leadPayload.vehicle_interest,
+        leadPayload.vehicle_id,
+        leadPayload.stock_number,
+        leadPayload.vehicle_year,
+        leadPayload.vehicle_make,
+        leadPayload.vehicle_model,
+        leadPayload.vehicle_trim,
+        leadPayload.vehicle_condition,
+        leadPayload.vehicle_price,
         input.lead_type || null,
         input.listing_url || null,
         input.message || null,
@@ -2119,6 +2180,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       auto_applied: Boolean(options.auto_applied),
       recommendation_only: Boolean(options.recommendation_only),
     });
+    await this.refreshEmailIntakeStateForLead(id);
 
     return this.getApiLead(id, actor);
   }
@@ -2449,6 +2511,40 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     }
 
     return fallbackInventoryId == null ? null : Number(fallbackInventoryId);
+  }
+
+  normalizeLeadPayloadForStorage(input = {}, inventory = null) {
+    if (!inventory) {
+      return {
+        customer_name: input.customer_name || null,
+        phone: input.phone || null,
+        email: input.email || null,
+        vehicle_interest: input.vehicle_interest || null,
+        vehicle_id: input.vehicle_id || null,
+        stock_number: input.stock_number || null,
+        vehicle_year: input.vehicle_year || null,
+        vehicle_make: input.vehicle_make || null,
+        vehicle_model: input.vehicle_model || null,
+        vehicle_trim: input.vehicle_trim || null,
+        vehicle_condition: input.vehicle_condition || null,
+        vehicle_price: input.vehicle_price || null,
+      };
+    }
+
+    return {
+      customer_name: input.customer_name || null,
+      phone: input.phone || null,
+      email: input.email || null,
+      vehicle_interest: buildVehicleDisplay(inventory) || input.vehicle_interest || null,
+      vehicle_id: inventory.vin || input.vehicle_id || null,
+      stock_number: inventory.stock_number || input.stock_number || null,
+      vehicle_year: inventory.year == null ? input.vehicle_year || null : String(inventory.year),
+      vehicle_make: inventory.make || input.vehicle_make || null,
+      vehicle_model: inventory.model || input.vehicle_model || null,
+      vehicle_trim: inventory.trim || input.vehicle_trim || null,
+      vehicle_condition: inventory.condition || input.vehicle_condition || null,
+      vehicle_price: inventory.price == null ? input.vehicle_price || null : String(inventory.price),
+    };
   }
 
   async upsertInventoryRecord(input) {
@@ -3070,6 +3166,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       unique_key: `lead-assigned:${id}:${assignedTo}`,
       metadata: { lead_id: Number(id) },
     });
+    await this.refreshEmailIntakeStateForLead(id);
 
     return this.getLead(id, actor);
   }
@@ -3095,6 +3192,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       `,
       [status, new Date().toISOString(), id, lead.dealership_id]
     );
+    await this.refreshEmailIntakeStateForLead(id);
 
     return user
       ? this.getLead(id, user)
@@ -3385,6 +3483,391 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       `,
       [externalId, dealershipId]
     );
+  }
+
+  emailIntakeSelectSql() {
+    return `
+      SELECT
+        email_intake_items.id,
+        email_intake_items.dealership_id,
+        email_intake_items.external_id,
+        email_intake_items.source,
+        email_intake_items.subject,
+        email_intake_items.sender,
+        email_intake_items.message,
+        email_intake_items.received_at,
+        email_intake_items.classification,
+        email_intake_items.status,
+        email_intake_items.assigned_to,
+        email_intake_items.lead_id,
+        email_intake_items.customer_name,
+        email_intake_items.phone,
+        email_intake_items.normalized_phone,
+        email_intake_items.email,
+        email_intake_items.stock_number,
+        email_intake_items.inventory_id,
+        email_intake_items.vehicle_display,
+        email_intake_items.raw_payload_json,
+        email_intake_items.created_at,
+        email_intake_items.updated_at,
+        users.name AS assigned_user_name,
+        leads.status AS lead_status,
+        inventory.vin AS inventory_vin,
+        inventory.year AS inventory_year,
+        inventory.make AS inventory_make,
+        inventory.model AS inventory_model,
+        inventory.trim AS inventory_trim
+      FROM email_intake_items
+      LEFT JOIN users ON users.id = email_intake_items.assigned_to
+      LEFT JOIN leads ON leads.id = email_intake_items.lead_id
+      LEFT JOIN inventory ON inventory.id = email_intake_items.inventory_id
+    `;
+  }
+
+  formatEmailIntakeItem(row) {
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: Number(row.id),
+      dealership_id: Number(row.dealership_id),
+      external_id: row.external_id,
+      source: row.source,
+      subject: row.subject || "",
+      sender: row.sender || "",
+      message: row.message || "",
+      received_at: row.received_at || null,
+      classification: row.classification,
+      status: row.status,
+      assigned_to: row.assigned_to == null ? null : Number(row.assigned_to),
+      assigned_user_name: row.assigned_user_name || null,
+      lead_id: row.lead_id == null ? null : Number(row.lead_id),
+      lead_status: row.lead_status || null,
+      customer_name: row.customer_name || null,
+      phone: row.phone || null,
+      normalized_phone: row.normalized_phone || null,
+      email: row.email || null,
+      stock_number: row.stock_number || null,
+      inventory_id: row.inventory_id == null ? null : Number(row.inventory_id),
+      vehicle_display:
+        row.vehicle_display ||
+        buildVehicleDisplay({
+          year: row.inventory_year,
+          make: row.inventory_make,
+          model: row.inventory_model,
+          trim: row.inventory_trim,
+        }) ||
+        null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  async getEmailIntakeItemByExternalId(externalId, dealershipId = getDefaultDealershipId()) {
+    return this.formatEmailIntakeItem(
+      await this.get(
+        `
+          ${this.emailIntakeSelectSql()}
+          WHERE email_intake_items.external_id = ?
+            AND email_intake_items.dealership_id = ?
+        `,
+        [externalId, dealershipId]
+      )
+    );
+  }
+
+  async getEmailIntakeItem(id, user = null) {
+    const dealershipId = this.currentDealershipId(user);
+    const row = await this.get(
+      `
+        ${this.emailIntakeSelectSql()}
+        WHERE email_intake_items.id = ?
+          AND email_intake_items.dealership_id = ?
+      `,
+      [id, dealershipId]
+    );
+
+    if (!row) {
+      throw new NotFoundError("Email intake item not found");
+    }
+
+    return this.formatEmailIntakeItem(row);
+  }
+
+  async getEmailIntakeSummary(user = null) {
+    const dealershipId = this.currentDealershipId(user);
+    const rows = await this.all(
+      `
+        SELECT classification, status, COUNT(*) AS count
+        FROM email_intake_items
+        WHERE dealership_id = ?
+        GROUP BY classification, status
+      `,
+      [dealershipId]
+    );
+    const summary = { direct_leads_pending: 0, others_pending: 0 };
+
+    rows.forEach((row) => {
+      if (row.classification === "direct_lead" && row.status === "unassigned") {
+        summary.direct_leads_pending = Number(row.count || 0);
+      }
+      if (row.classification === "other" && row.status === "open") {
+        summary.others_pending = Number(row.count || 0);
+      }
+    });
+
+    return summary;
+  }
+
+  async listEmailIntakeItems(filters = {}, user = null) {
+    const dealershipId = this.currentDealershipId(user);
+    const clauses = ["email_intake_items.dealership_id = ?"];
+    const params = [dealershipId];
+    const limit = Math.max(1, Math.min(200, Number(filters.limit) || 100));
+    const offset = Math.max(0, Number(filters.offset) || 0);
+    const classification = filters.classification ? normalizeEmailIntakeClassification(filters.classification) : "";
+
+    if (classification) {
+      clauses.push("email_intake_items.classification = ?");
+      params.push(classification);
+    }
+
+    const pendingOnly = filters.pending_only !== false;
+    if (pendingOnly && classification) {
+      clauses.push(classification === "direct_lead" ? "email_intake_items.status = 'unassigned'" : "email_intake_items.status = 'open'");
+    } else if (filters.status) {
+      clauses.push("email_intake_items.status = ?");
+      params.push(normalizeEmailIntakeStatus(classification || "other", filters.status));
+    }
+
+    if (String(filters.search || "").trim()) {
+      const term = `%${String(filters.search).trim().toLowerCase()}%`;
+      clauses.push(`
+        (
+          LOWER(COALESCE(email_intake_items.customer_name, '')) LIKE ?
+          OR LOWER(COALESCE(email_intake_items.phone, '')) LIKE ?
+          OR LOWER(COALESCE(email_intake_items.email, '')) LIKE ?
+          OR LOWER(COALESCE(email_intake_items.subject, '')) LIKE ?
+          OR LOWER(COALESCE(email_intake_items.message, '')) LIKE ?
+          OR LOWER(COALESCE(email_intake_items.vehicle_display, '')) LIKE ?
+          OR LOWER(COALESCE(email_intake_items.stock_number, '')) LIKE ?
+        )
+      `);
+      params.push(term, term, term, term, term, term, term);
+    }
+
+    const countRow = await this.get(
+      `SELECT COUNT(*) AS count FROM email_intake_items WHERE ${clauses.join(" AND ")}`,
+      params
+    );
+    const rows = await this.all(
+      `
+        ${this.emailIntakeSelectSql()}
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY COALESCE(email_intake_items.received_at, email_intake_items.created_at) DESC, email_intake_items.id DESC
+        LIMIT ? OFFSET ?
+      `,
+      [...params, limit, offset]
+    );
+
+    return {
+      items: rows.map((row) => this.formatEmailIntakeItem(row)),
+      total: Number(countRow?.count || 0),
+      summary: await this.getEmailIntakeSummary(user),
+    };
+  }
+
+  async createEmailIntakeItem(input = {}, user = null) {
+    const now = new Date().toISOString();
+    const dealershipId =
+      parsePositiveInteger(input.dealership_id) || (user ? this.currentDealershipId(user) : getDefaultDealershipId());
+    const classification = normalizeEmailIntakeClassification(input.classification);
+    const status = normalizeEmailIntakeStatus(classification, input.status);
+    const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
+    const inventoryId =
+      parsePositiveInteger(input.inventory_id) ||
+      (await this.resolveLeadInventoryId(
+        {
+          stock_number: input.stock_number,
+          vehicle_id: input.vehicle_id || input.vin,
+        },
+        dealershipId
+      ));
+    const inventory = inventoryId
+      ? await this.get("SELECT * FROM inventory WHERE id = ? AND dealership_id = ?", [inventoryId, dealershipId])
+      : null;
+
+    await this.execute(
+      `
+        INSERT INTO email_intake_items (
+          dealership_id,
+          external_id,
+          source,
+          subject,
+          sender,
+          message,
+          received_at,
+          classification,
+          status,
+          assigned_to,
+          lead_id,
+          customer_name,
+          phone,
+          normalized_phone,
+          email,
+          stock_number,
+          inventory_id,
+          vehicle_display,
+          raw_payload_json,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        dealershipId,
+        input.external_id,
+        input.source || "email",
+        input.subject || null,
+        input.sender || null,
+        input.message || null,
+        input.received_at || now,
+        classification,
+        status,
+        parsePositiveInteger(input.assigned_to),
+        parsePositiveInteger(input.lead_id),
+        input.customer_name || null,
+        input.phone || null,
+        normalizedPhone,
+        input.email || null,
+        inventory?.stock_number || input.stock_number || null,
+        inventoryId,
+        buildVehicleDisplay(inventory || {}) || input.vehicle_display || null,
+        input.raw_payload_json || null,
+        now,
+        now,
+      ]
+    );
+
+    return this.getEmailIntakeItemByExternalId(input.external_id, dealershipId);
+  }
+
+  async refreshEmailIntakeStateForLead(leadId) {
+    const lead = await this.getApiLead(leadId);
+    const intakeStatus = lead.status === "new" ? (lead.assigned_to ? "assigned" : "unassigned") : "contacted";
+    await this.execute(
+      `
+        UPDATE email_intake_items
+        SET assigned_to = ?, status = ?, updated_at = ?
+        WHERE lead_id = ?
+          AND dealership_id = ?
+          AND classification = 'direct_lead'
+      `,
+      [lead.assigned_to || null, intakeStatus, new Date().toISOString(), leadId, lead.dealership_id]
+    );
+  }
+
+  async assignEmailIntakeItem(id, assignedTo, user = null) {
+    const item = await this.getEmailIntakeItem(id, user);
+    if (item.classification !== "direct_lead") {
+      throw new ValidationError("Only direct leads can be assigned.");
+    }
+
+    let leadId = item.lead_id;
+    if (!leadId) {
+      const lead = await this.createApiLead(
+        {
+          source: item.source,
+          customer_name: item.customer_name,
+          phone: item.phone,
+          email: item.email,
+          stock_number: item.stock_number,
+          vehicle_interest: item.vehicle_display,
+          message: item.message,
+          inventory_id: item.inventory_id,
+        },
+        user
+      );
+      leadId = Number(lead.id);
+    }
+
+    await this.assignLead(leadId, assignedTo, user);
+    await this.execute(
+      `
+        UPDATE email_intake_items
+        SET assigned_to = ?, lead_id = ?, status = 'assigned', updated_at = ?
+        WHERE id = ? AND dealership_id = ?
+      `,
+      [assignedTo, leadId, new Date().toISOString(), id, item.dealership_id]
+    );
+    await this.refreshEmailIntakeStateForLead(leadId);
+
+    return this.getEmailIntakeItem(id, user);
+  }
+
+  async resolveEmailIntakeItem(id, user = null) {
+    const item = await this.getEmailIntakeItem(id, user);
+    if (item.classification !== "other") {
+      throw new ValidationError("Only 'Others' items can be resolved.");
+    }
+
+    await this.execute(
+      `
+        UPDATE email_intake_items
+        SET status = 'resolved', updated_at = ?
+        WHERE id = ? AND dealership_id = ?
+      `,
+      [new Date().toISOString(), id, item.dealership_id]
+    );
+
+    return this.getEmailIntakeItem(id, user);
+  }
+
+  async convertEmailIntakeItemToLead(id, input = {}, user = null) {
+    const item = await this.getEmailIntakeItem(id, user);
+    if (item.classification !== "other") {
+      throw new ValidationError("Only 'Others' items can be converted into leads.");
+    }
+
+    let leadId = item.lead_id;
+    if (!leadId) {
+      const lead = await this.createApiLead(
+        {
+          source: item.source,
+          customer_name: input.customer_name || item.customer_name,
+          phone: item.phone,
+          email: item.email,
+          stock_number: item.stock_number,
+          vehicle_interest: item.vehicle_display,
+          message: input.message || item.message,
+          inventory_id: item.inventory_id,
+          assigned_to: input.assigned_to || null,
+          status: "new",
+        },
+        user
+      );
+      leadId = Number(lead.id);
+    }
+
+    const normalizedAssignedTo = parsePositiveInteger(input.assigned_to);
+    if (normalizedAssignedTo) {
+      await this.assignLead(leadId, normalizedAssignedTo, user);
+    }
+
+    const lead = await this.getApiLead(leadId, user);
+    await this.execute(
+      `
+        UPDATE email_intake_items
+        SET lead_id = ?, assigned_to = ?, status = 'converted_to_lead', updated_at = ?
+        WHERE id = ? AND dealership_id = ?
+      `,
+      [leadId, lead.assigned_to || null, new Date().toISOString(), id, item.dealership_id]
+    );
+
+    return {
+      item: await this.getEmailIntakeItem(id, user),
+      lead: await this.getApiLeadWithActivities(leadId, user),
+    };
   }
 
   async recordImportedMessage(input) {

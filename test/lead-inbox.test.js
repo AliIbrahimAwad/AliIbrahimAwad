@@ -2,6 +2,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  buildGenericEmailParse,
+  classifyParsedEmail,
+  createLeadInboxService,
   parseAutoTraderEmail,
   parseCarGurusEmail,
   parseLeadEmail,
@@ -162,4 +165,78 @@ test("detects lead source from message metadata and content", () => {
 
   const parsed = parseLeadEmail(message);
   assert.equal(parsed.source, "cargurus");
+});
+
+test("generic email parsing still captures an intake candidate when the format is unknown", () => {
+  const message = {
+    subject: "Contact us about your Camry",
+    body: {
+      contentType: "text",
+      content:
+        "Hello,\nName: Jamie Driver\nPhone: +1 (647) 555-0199\nEmail: jamie@example.com\nStock Number: D9489\nI'm interested in availability.",
+    },
+    from: {
+      emailAddress: {
+        name: "Jamie Driver",
+        address: "jamie@example.com",
+      },
+    },
+  };
+
+  const parsed = buildGenericEmailParse(message, message.body.content);
+  assert.equal(parsed.customer_name, "Jamie Driver");
+  assert.equal(parsed.email, "jamie@example.com");
+  assert.equal(parsed.stock_number, "D9489");
+  assert.equal(classifyParsedEmail(parsed, message, message.body.content), "direct_lead");
+});
+
+test("lead inbox importer creates an 'Other' intake item instead of ignoring unknown emails", async () => {
+  const importedMessages = [];
+  const intakeItems = [];
+  const importer = await createLeadInboxService({
+    db: {
+      async getImportedMessageByExternalId() {
+        return null;
+      },
+      async findLeadDuplicate() {
+        return null;
+      },
+      async createApiLead() {
+        throw new Error("Direct lead creation should not run for this email.");
+      },
+      async createEmailIntakeItem(payload) {
+        intakeItems.push(payload);
+        return { id: 1, classification: payload.classification, status: payload.status, lead_id: null };
+      },
+      async recordImportedMessage(payload) {
+        importedMessages.push(payload);
+        return payload;
+      },
+    },
+    graph: {
+      async markProcessed() {},
+    },
+  });
+
+  const result = await importer.importMessage({
+    id: "message-2",
+    internetMessageId: "<message-2@example.com>",
+    subject: "Vendor invoice question",
+    receivedDateTime: "2026-03-22T14:15:00.000Z",
+    from: {
+      emailAddress: {
+        name: "Office Vendor",
+        address: "vendor@example.com",
+      },
+    },
+    body: {
+      contentType: "text",
+      content: "Hello team, I wanted to ask about invoicing and admin setup.",
+    },
+  });
+
+  assert.equal(result.imported, true);
+  assert.equal(intakeItems[0].classification, "other");
+  assert.equal(intakeItems[0].status, "open");
+  assert.equal(importedMessages[0].matched_reason, "other");
 });

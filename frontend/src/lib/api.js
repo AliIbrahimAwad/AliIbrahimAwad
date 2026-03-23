@@ -87,6 +87,43 @@ export function getInventory(params = {}) {
   return request(`/api/inventory${suffix ? `?${suffix}` : ""}`);
 }
 
+export function getEmailIntakeItems(params = {}) {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, String(value));
+    }
+  });
+
+  const suffix = query.toString();
+  return request(`/api/intake-items${suffix ? `?${suffix}` : ""}`);
+}
+
+export function getEmailIntakeSummary() {
+  return request("/api/intake-items/summary");
+}
+
+export function assignEmailIntakeItem(id, assignedTo) {
+  return request(`/api/intake-items/${id}/assign`, {
+    method: "POST",
+    body: JSON.stringify({ assigned_to: assignedTo }),
+  });
+}
+
+export function resolveEmailIntakeItem(id) {
+  return request(`/api/intake-items/${id}/resolve`, {
+    method: "POST",
+  });
+}
+
+export function convertEmailIntakeItem(id, payload = {}) {
+  return request(`/api/intake-items/${id}/convert`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getInventoryById(id) {
   return request(`/api/inventory/${id}`);
 }

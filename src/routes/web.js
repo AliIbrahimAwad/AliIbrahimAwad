@@ -180,6 +180,7 @@ async function renderLeadDetailResponse(req, res, lead, options = {}) {
 }
 
 function registerWebRoutes(app) {
+  // Deprecated compatibility routes. React remains the primary product path.
   app.get(
     "/",
     requireAuth,
@@ -240,7 +241,7 @@ function registerWebRoutes(app) {
         return;
       }
 
-      const contact = await req.app.locals.db.createContact(payload);
+      const contact = await req.app.locals.db.createContact(payload, req.currentUser);
       res.redirect(`/contacts/${contact.id}`);
     })
   );
@@ -311,7 +312,7 @@ function registerWebRoutes(app) {
         return;
       }
 
-      await req.app.locals.db.updateContact(id, payload);
+      await req.app.locals.db.updateContact(id, payload, req.currentUser);
       res.redirect(`/contacts/${id}`);
     })
   );
@@ -321,7 +322,7 @@ function registerWebRoutes(app) {
     requireAuth,
     asyncHandler(async (req, res) => {
       await req.app.locals.db.getContact(Number(req.params.id), req.currentUser);
-      await req.app.locals.db.deleteContact(Number(req.params.id));
+      await req.app.locals.db.deleteContact(Number(req.params.id), req.currentUser);
       res.redirect("/contacts");
     })
   );
@@ -382,7 +383,7 @@ function registerWebRoutes(app) {
         return;
       }
 
-      const lead = await req.app.locals.db.createLead(payload);
+      const lead = await req.app.locals.db.createLead(payload, req.currentUser);
       res.redirect(`/leads/${lead.id}`);
     })
   );
@@ -456,7 +457,7 @@ function registerWebRoutes(app) {
         return;
       }
 
-      await req.app.locals.db.updateLead(id, payload);
+      await req.app.locals.db.updateLead(id, payload, req.currentUser);
       res.redirect(`/leads/${id}`);
     })
   );
@@ -485,7 +486,7 @@ function registerWebRoutes(app) {
         return;
       }
 
-      await req.app.locals.db.assignLead(id, assignedTo);
+      await req.app.locals.db.assignLead(id, assignedTo, req.currentUser);
       res.redirect(`/leads/${id}`);
     })
   );
@@ -562,7 +563,7 @@ function registerWebRoutes(app) {
     requireAuth,
     asyncHandler(async (req, res) => {
       await req.app.locals.db.getLead(Number(req.params.id), req.currentUser);
-      await req.app.locals.db.deleteLead(Number(req.params.id));
+      await req.app.locals.db.deleteLead(Number(req.params.id), req.currentUser);
       res.redirect("/leads");
     })
   );

@@ -69,6 +69,51 @@ const COMMUNICATION_SCHEMA_STATEMENTS = [
     ON ringcentral_webhook_events(event_key)
   `,
   `
+    CREATE TABLE IF NOT EXISTS unmatched_communications (
+      id TEXT PRIMARY KEY,
+      dealership_id BIGINT NOT NULL DEFAULT 1,
+      type TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      from_number TEXT,
+      to_number TEXT,
+      normalized_from_number TEXT,
+      normalized_to_number TEXT,
+      body_text TEXT,
+      call_duration INTEGER,
+      received_at TEXT,
+      provider TEXT NOT NULL,
+      provider_message_id TEXT,
+      provider_call_id TEXT,
+      crm_user_id BIGINT,
+      provider_extension_id TEXT,
+      raw_json TEXT,
+      status TEXT NOT NULL,
+      resolved_lead_id BIGINT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `,
+  `
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_unmatched_communications_provider_message_id
+    ON unmatched_communications(provider, provider_message_id)
+  `,
+  `
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_unmatched_communications_provider_call_id
+    ON unmatched_communications(provider, provider_call_id)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS idx_unmatched_communications_dealership_id
+    ON unmatched_communications(dealership_id, received_at)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS idx_unmatched_communications_normalized_from_number
+    ON unmatched_communications(normalized_from_number, received_at)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS idx_unmatched_communications_status
+    ON unmatched_communications(status, received_at)
+  `,
+  `
     CREATE TABLE IF NOT EXISTS lead_messages (
       id TEXT PRIMARY KEY,
       dealership_id BIGINT NOT NULL DEFAULT 1,
@@ -292,6 +337,7 @@ async function ensureCommunicationsSchema(db) {
   await ensureColumn(db, "ringcentral_connections", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
   await ensureColumn(db, "ringcentral_subscriptions", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
   await ensureColumn(db, "ringcentral_webhook_events", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
+  await ensureColumn(db, "unmatched_communications", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
   await ensureColumn(db, "lead_messages", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
   await ensureColumn(db, "lead_calls", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
   await ensureColumn(db, "call_recordings", "dealership_id", "BIGINT NOT NULL DEFAULT 1");
@@ -310,6 +356,10 @@ async function ensureCommunicationsSchema(db) {
   );
   await db.execute(
     "UPDATE ringcentral_webhook_events SET dealership_id = ? WHERE dealership_id IS NULL",
+    [dealershipId]
+  );
+  await db.execute(
+    "UPDATE unmatched_communications SET dealership_id = ? WHERE dealership_id IS NULL",
     [dealershipId]
   );
   await db.execute("UPDATE lead_messages SET dealership_id = ? WHERE dealership_id IS NULL", [

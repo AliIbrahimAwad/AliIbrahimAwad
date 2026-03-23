@@ -1,33 +1,9 @@
 const fs = require("fs");
 
-const { canTransitionLeadStatus } = require("../src/models/leadStatus");
+const { canTransitionLeadStatus, CRM_LEAD_STATUSES, normalizeLeadStatus } = require("../src/models/leadStatus");
 const { logStructured } = require("./structuredLogger");
 
-const STATUS_CANONICAL_VALUES = [
-  "new_lead",
-  "contacted",
-  "no_answer",
-  "engaged",
-  "appointment_set",
-  "follow_up_needed",
-  "negotiating",
-  "sold",
-  "lost",
-  "do_not_contact",
-];
-
-const DEFAULT_STATUS_MAPPING = {
-  new_lead: "new",
-  contacted: "contacted",
-  no_answer: "contacted",
-  engaged: "contacted",
-  appointment_set: "appointment",
-  follow_up_needed: "contacted",
-  negotiating: "negotiation",
-  sold: "sold",
-  lost: "lost",
-  do_not_contact: "lost",
-};
+const STATUS_CANONICAL_VALUES = CRM_LEAD_STATUSES;
 
 function boolToFlag(value) {
   return value ? 1 : 0;
@@ -105,7 +81,7 @@ function heuristicAnalyzeText(sourceType, text) {
   let escalation = false;
 
   if (contains(/\b(stop|unsubscribe|do not contact|don't text|remove me)\b/)) {
-    suggested = "do_not_contact";
+    suggested = "lost";
     confidence = 0.96;
     summary = "Customer explicitly requested no further contact.";
     nextTask = "Mark the lead as do not contact and stop outreach.";
@@ -123,25 +99,25 @@ function heuristicAnalyzeText(sourceType, text) {
     nextTask = "Confirm the deal status and finalize delivery steps.";
     intent = "purchase_complete";
   } else if (contains(/\b(counter offer|numbers|monthly payment|deal|trade value)\b/)) {
-    suggested = "negotiating";
+    suggested = "negotiation";
     confidence = 0.84;
     summary = "Customer is discussing numbers or deal structure.";
     nextTask = "Prepare the next negotiation step and follow up quickly.";
     intent = "negotiation";
   } else if (appointment) {
-    suggested = "appointment_set";
+    suggested = "appointment";
     confidence = 0.9;
     summary = "Customer is ready to schedule or confirm a visit.";
     nextTask = "Confirm the appointment details with the customer.";
     intent = "appointment";
   } else if (contains(/\b(called back|interested|available|still available|send more info|carfax|details)\b/)) {
-    suggested = "engaged";
+    suggested = "contacted";
     confidence = 0.8;
     summary = "Customer is actively engaging and asking for more information.";
     nextTask = "Respond with the requested details and keep momentum.";
     intent = "engaged";
   } else if (contains(/\b(voicemail|left a message|no answer|not answering)\b/)) {
-    suggested = "no_answer";
+    suggested = "contacted";
     confidence = 0.79;
     summary = "The outreach did not connect with the customer yet.";
     nextTask = "Try another call or send a text follow-up.";
@@ -315,8 +291,9 @@ async function analyzeWithOpenAi(sourceType, content, config = getAiConfig()) {
   };
 }
 
-function mapCanonicalStatusToCrmStatus(canonicalStatus, mapping = DEFAULT_STATUS_MAPPING) {
-  return mapping[canonicalStatus] || "contacted";
+function mapCanonicalStatusToCrmStatus(canonicalStatus) {
+  const normalized = normalizeLeadStatus(canonicalStatus);
+  return CRM_LEAD_STATUSES.includes(normalized) ? normalized : "contacted";
 }
 
 function buildAuditDecision(currentStatus, recommendation, config = getAiConfig()) {
@@ -423,7 +400,6 @@ async function applyAiLeadStatusDecision({
 
 module.exports = {
   STATUS_CANONICAL_VALUES,
-  DEFAULT_STATUS_MAPPING,
   analyzeWithOpenAi,
   applyAiLeadStatusDecision,
   buildAuditDecision,

@@ -90,6 +90,25 @@ function normalizeInventoryFilters(query = {}) {
   };
 }
 
+function normalizeEmailIntakeFilters(query = {}) {
+  return {
+    limit: Math.max(1, Math.min(200, Number(query.limit) || 100)),
+    offset: Math.max(0, Number(query.offset) || 0),
+    classification: String(query.classification || "").trim().toLowerCase(),
+    status: String(query.status || "").trim().toLowerCase(),
+    search: String(query.search || "").trim(),
+    pending_only: String(query.pending_only || query.pendingOnly || "true").trim().toLowerCase() !== "false",
+  };
+}
+
+function normalizeEmailIntakeConversionPayload(body = {}) {
+  return {
+    customer_name: String(body.customer_name || body.customerName || "").trim() || null,
+    message: String(body.message || "").trim() || null,
+    assigned_to: body.assigned_to || body.assignedTo || null,
+  };
+}
+
 function registerApiRoutes(app) {
   app.get(
     "/api/leads",
@@ -219,6 +238,94 @@ function registerApiRoutes(app) {
       const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 50));
       res.json({
         items: await req.app.locals.db.listConversationFeedForApi(req.currentUser, limit),
+      });
+    })
+  );
+
+  app.get(
+    "/api/intake-items",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const payload = await req.app.locals.db.listEmailIntakeItems(normalizeEmailIntakeFilters(req.query), req.currentUser);
+      res.json(payload);
+    })
+  );
+
+  app.get(
+    "/api/intake-items/summary",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      res.json(await req.app.locals.db.getEmailIntakeSummary(req.currentUser));
+    })
+  );
+
+  app.post(
+    "/api/intake-items/:id/assign",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const assignedTo = Number(req.body.assigned_to || req.body.assignedTo || req.body.salesperson_id);
+      if (!Number.isInteger(assignedTo) || assignedTo <= 0) {
+        throw new ValidationError("A valid salesperson is required.");
+      }
+
+      const assignees = await req.app.locals.db.listSalesUsers(req.currentUser);
+      if (!assignees.some((user) => Number(user.id) === assignedTo)) {
+        throw new ValidationError("A valid salesperson is required.");
+      }
+
+      const item = await req.app.locals.db.assignEmailIntakeItem(Number(req.params.id), assignedTo, req.currentUser);
+      const lead = item.lead_id ? await req.app.locals.db.getApiLeadWithActivities(item.lead_id, req.currentUser) : null;
+      res.json({ item, ...(lead || {}) });
+    })
+  );
+
+  app.post(
+    "/api/intake-items/:id/resolve",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      res.json({
+        item: await req.app.locals.db.resolveEmailIntakeItem(Number(req.params.id), req.currentUser),
+      });
+    })
+  );
+
+  app.post(
+    "/api/intake-items/:id/convert",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const payload = await req.app.locals.db.convertEmailIntakeItemToLead(
+        Number(req.params.id),
+        normalizeEmailIntakeConversionPayload(req.body),
+        req.currentUser
+      );
+      res.status(201).json({
+        item: payload.item,
+        ...(payload.lead || {}),
       });
     })
   );

@@ -2,6 +2,7 @@ import { startTransition, useDeferredValue, useEffect, useState } from "react";
 import { Menu, Search, SlidersHorizontal } from "lucide-react";
 
 import { AttentionLeadCard } from "./components/AttentionLeadCard";
+import { EmailIntakePanel } from "./components/EmailIntakePanel";
 import { InventoryPanel } from "./components/InventoryPanel";
 import { LeadCard } from "./components/LeadCard";
 import { LeadDetailsPanel } from "./components/LeadDetailsPanel";
@@ -14,11 +15,15 @@ import { UnmatchedCommunicationPanel } from "./components/UnmatchedCommunication
 import {
   assignUnmatchedCommunication,
   assignLead,
+  assignEmailIntakeItem,
   completeTask,
+  convertEmailIntakeItem,
   createUser,
   createLeadFromUnmatched,
   dismissUnmatchedCommunication,
   deleteUser,
+  getEmailIntakeItems,
+  getEmailIntakeSummary,
   getAssignableUsers,
   getConversations,
   getDashboardWorklist,
@@ -36,6 +41,7 @@ import {
   logLeadCall,
   logout,
   markNotificationRead,
+  resolveEmailIntakeItem,
   sendLeadSms,
   updateLeadStatus,
 } from "./lib/api";
@@ -238,6 +244,30 @@ function formatInventoryRun(run) {
   };
 }
 
+function formatEmailIntakeItem(item) {
+  return {
+    id: item.id,
+    externalId: item.external_id,
+    source: capitalizeSource(item.source),
+    subject: item.subject || "",
+    sender: item.sender || "",
+    message: item.message || "",
+    receivedAt: item.received_at || null,
+    classification: item.classification || "other",
+    status: item.status || "open",
+    assignedTo: item.assigned_to ?? null,
+    assignedRep: item.assigned_user_name || "Unassigned",
+    leadId: item.lead_id ?? null,
+    customerName: item.customer_name || "",
+    phone: item.phone ? formatPhoneNumber(item.phone) : "Not available",
+    rawPhone: item.phone || "",
+    email: item.email || "No email captured",
+    stockNumber: item.stock_number || "",
+    inventoryId: item.inventory_id ?? null,
+    vehicleDisplay: item.vehicle_display || "Vehicle not matched",
+  };
+}
+
 function buildAnalyticsSnapshot({
   leadLibrary = [],
   attentionLeads = [],
@@ -296,6 +326,12 @@ export default function App() {
   });
   const [inventoryItems, setInventoryItems] = useState([]);
   const [inventoryImportRuns, setInventoryImportRuns] = useState([]);
+  const [emailIntakeItems, setEmailIntakeItems] = useState([]);
+  const [emailIntakeSummary, setEmailIntakeSummary] = useState({
+    direct_leads_pending: 0,
+    others_pending: 0,
+  });
+  const [emailIntakeTab, setEmailIntakeTab] = useState("direct_lead");
   const [unmatchedItems, setUnmatchedItems] = useState([]);
   const [conversationFeed, setConversationFeed] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -319,6 +355,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [inventoryLoading, setInventoryLoading] = useState(false);
+  const [emailIntakeLoading, setEmailIntakeLoading] = useState(false);
   const [unmatchedLoading, setUnmatchedLoading] = useState(false);
   const [conversationLoading, setConversationLoading] = useState(false);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -331,6 +368,9 @@ export default function App() {
   const [smsSending, setSmsSending] = useState(false);
   const [inventoryImporting, setInventoryImporting] = useState(false);
   const [inventoryLinking, setInventoryLinking] = useState(false);
+  const [emailIntakeAssigningId, setEmailIntakeAssigningId] = useState(null);
+  const [emailIntakeResolvingId, setEmailIntakeResolvingId] = useState(null);
+  const [emailIntakeConvertingId, setEmailIntakeConvertingId] = useState(null);
   const [unmatchedAssigning, setUnmatchedAssigning] = useState(false);
   const [unmatchedCreating, setUnmatchedCreating] = useState(false);
   const [unmatchedDismissing, setUnmatchedDismissing] = useState(false);
@@ -341,6 +381,7 @@ export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [leadLibraryLoaded, setLeadLibraryLoaded] = useState(false);
   const [inventoryLoaded, setInventoryLoaded] = useState(false);
+  const [emailIntakeLoaded, setEmailIntakeLoaded] = useState(false);
   const [unmatchedLoaded, setUnmatchedLoaded] = useState(false);
   const [conversationFeedLoaded, setConversationFeedLoaded] = useState(false);
   const [error, setError] = useState("");
@@ -419,6 +460,26 @@ export default function App() {
       setInventoryLoaded(true);
     } finally {
       setInventoryLoading(false);
+    }
+  }
+
+  async function loadEmailIntakeData() {
+    setEmailIntakeLoading(true);
+    try {
+      const [itemsPayload, summaryPayload] = await Promise.all([
+        getEmailIntakeItems({
+          classification: emailIntakeTab,
+          pending_only: true,
+          limit: 200,
+        }),
+        getEmailIntakeSummary(),
+      ]);
+
+      setEmailIntakeItems((itemsPayload.items || []).map(formatEmailIntakeItem));
+      setEmailIntakeSummary(summaryPayload || { direct_leads_pending: 0, others_pending: 0 });
+      setEmailIntakeLoaded(true);
+    } finally {
+      setEmailIntakeLoading(false);
     }
   }
 
@@ -560,6 +621,10 @@ export default function App() {
 
     async function loadSectionData() {
       try {
+        if (activeSection === "Intake" && !emailIntakeLoaded) {
+          await loadEmailIntakeData();
+        }
+
         if (["Leads", "Analytics", "Unmatched"].includes(activeSection) && !leadLibraryLoaded) {
           await loadLeadLibrary();
         }
@@ -583,7 +648,31 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeSection, authStatus, conversationFeedLoaded, leadLibraryLoaded, inventoryLoaded]);
+  }, [activeSection, authStatus, conversationFeedLoaded, emailIntakeLoaded, leadLibraryLoaded, inventoryLoaded]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || activeSection !== "Intake") {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function refreshIntake() {
+      try {
+        await loadEmailIntakeData();
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError.message || "Unable to load email intake.");
+        }
+      }
+    }
+
+    refreshIntake();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, authStatus, emailIntakeTab]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || activeSection !== "Inventory") {
@@ -830,6 +919,21 @@ export default function App() {
       .toLowerCase()
       .includes(search)
   );
+  const visibleEmailIntakeItems = emailIntakeItems.filter((item) =>
+    !search ||
+    [
+      item.customerName,
+      item.subject,
+      item.email,
+      item.phone,
+      item.stockNumber,
+      item.vehicleDisplay,
+      item.message,
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(search)
+  );
   const visibleInventoryItems = inventoryItems;
   const analytics = buildAnalyticsSnapshot({
     leadLibrary: visibleLeadLibrary,
@@ -943,6 +1047,12 @@ export default function App() {
       setLeadLibrary([]);
       setInventoryItems([]);
       setInventoryImportRuns([]);
+      setEmailIntakeItems([]);
+      setEmailIntakeSummary({
+        direct_leads_pending: 0,
+        others_pending: 0,
+      });
+      setEmailIntakeTab("direct_lead");
       setOrganizedLeadGroups({
         contacted: [],
         appointment: [],
@@ -958,6 +1068,7 @@ export default function App() {
       setNotifications([]);
       setLeadLibraryLoaded(false);
       setInventoryLoaded(false);
+      setEmailIntakeLoaded(false);
       setUnmatchedLoaded(false);
       setConversationFeedLoaded(false);
       setSelectedUnmatchedId(null);
@@ -1107,6 +1218,83 @@ export default function App() {
     }
   }
 
+  async function handleAssignEmailIntake(item, assignedTo) {
+    if (!item?.id || !assignedTo) {
+      return;
+    }
+
+    try {
+      setEmailIntakeAssigningId(item.id);
+      const payload = await assignEmailIntakeItem(item.id, assignedTo);
+      if (payload.lead) {
+        setSelectedLeadId(payload.lead.id);
+        setSelectedLeadDetails({
+          ...formatLead(payload.lead),
+          activities: (payload.activities || []).map(formatActivity),
+          timeline: (payload.timeline || []).map(formatTimelineItem),
+          tasks: payload.tasks || [],
+        });
+      }
+      await loadEmailIntakeData();
+      await refreshWorklist();
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary();
+      }
+      setError("");
+    } catch (assignError) {
+      setError(assignError.message || "Unable to assign the intake lead.");
+    } finally {
+      setEmailIntakeAssigningId(null);
+    }
+  }
+
+  async function handleResolveEmailIntake(item) {
+    if (!item?.id) {
+      return;
+    }
+
+    try {
+      setEmailIntakeResolvingId(item.id);
+      await resolveEmailIntakeItem(item.id);
+      await loadEmailIntakeData();
+      setError("");
+    } catch (resolveError) {
+      setError(resolveError.message || "Unable to resolve this intake item.");
+    } finally {
+      setEmailIntakeResolvingId(null);
+    }
+  }
+
+  async function handleConvertEmailIntake(item, payload) {
+    if (!item?.id) {
+      return;
+    }
+
+    try {
+      setEmailIntakeConvertingId(item.id);
+      const response = await convertEmailIntakeItem(item.id, payload);
+      if (response.lead) {
+        setSelectedLeadId(response.lead.id);
+        setSelectedLeadDetails({
+          ...formatLead(response.lead),
+          activities: (response.activities || []).map(formatActivity),
+          timeline: (response.timeline || []).map(formatTimelineItem),
+          tasks: response.tasks || [],
+        });
+      }
+      await loadEmailIntakeData();
+      await refreshWorklist();
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary();
+      }
+      setError("");
+    } catch (convertError) {
+      setError(convertError.message || "Unable to convert this intake item into a lead.");
+    } finally {
+      setEmailIntakeConvertingId(null);
+    }
+  }
+
   async function handleAssignUnmatched(leadId) {
     if (!selectedUnmatchedId) {
       return;
@@ -1248,6 +1436,7 @@ export default function App() {
 
   const showTeam = activeSection === "Team" && currentUser?.role === "admin";
   const showDashboard = activeSection === "Dashboard";
+  const showIntake = activeSection === "Intake" && (currentUser?.role === "admin" || currentUser?.role === "manager");
   const showLeads = activeSection === "Leads";
   const showUnmatched = activeSection === "Unmatched";
   const showConversations = activeSection === "Conversations";
@@ -1255,6 +1444,7 @@ export default function App() {
   const showAnalytics = activeSection === "Analytics";
   const sectionTitle = {
     Dashboard: "Sales execution",
+    Intake: "Email intake",
     Leads: "Lead pipeline",
     Unmatched: "Unmatched communications",
     Conversations: "Conversations",
@@ -1264,6 +1454,7 @@ export default function App() {
   }[activeSection];
   const sectionDescription = {
     Dashboard: "Show only the leads that need a rep or manager to act right now.",
+    Intake: "Automatically ingested email traffic lands here first so managers can triage before reps work the lead.",
     Leads: "Review the organized pipeline after urgent work is handled.",
     Unmatched: "Capture inbound calls and SMS that did not match a lead, then resolve them into the CRM.",
     Conversations: "See the latest inbound and outbound communication in one place and jump straight into the lead record.",
@@ -1471,6 +1662,24 @@ export default function App() {
                       ) : null}
                     </div>
                   </>
+                ) : null}
+
+                {showIntake ? (
+                  <EmailIntakePanel
+                    items={visibleEmailIntakeItems}
+                    loading={emailIntakeLoading}
+                    activeTab={emailIntakeTab}
+                    summary={emailIntakeSummary}
+                    assignees={assignees}
+                    assigneesLoading={assigneesLoading}
+                    assigningId={emailIntakeAssigningId}
+                    resolvingId={emailIntakeResolvingId}
+                    convertingId={emailIntakeConvertingId}
+                    onSelectTab={setEmailIntakeTab}
+                    onAssign={handleAssignEmailIntake}
+                    onResolve={handleResolveEmailIntake}
+                    onConvert={handleConvertEmailIntake}
+                  />
                 ) : null}
 
                 {showLeads ? (
@@ -1709,7 +1918,7 @@ export default function App() {
                 ) : null}
               </div>
 
-              {!showAnalytics && !showUnmatched ? (
+              {!showAnalytics && !showUnmatched && !showIntake ? (
                 <div className="2xl:sticky 2xl:top-6 2xl:self-start">
                   <LeadDetailsPanel
                     lead={selectedLead}

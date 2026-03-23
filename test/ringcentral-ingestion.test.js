@@ -249,6 +249,154 @@ test("RingCentral webhook resolves the correct CRM user by extension id", async 
   });
 });
 
+test("RingCentral SMS webhook ingestion stores unmatched inbound messages in the unmatched queue", async () => {
+  await withDb(async ({ db, temp }) => {
+    const fetchImpl = async (url) => {
+      if (String(url).includes("/message-store/msg-unmatched")) {
+        return new Response(
+          JSON.stringify({
+            id: "msg-unmatched",
+            direction: "Inbound",
+            from: { phoneNumber: "+1 (647) 555-0999" },
+            to: [{ phoneNumber: "+1 (647) 555-1212" }],
+            subject: "Do you still have this available?",
+            messageStatus: "Received",
+            creationTime: "2026-03-19T15:00:00.000Z",
+            lastModifiedTime: "2026-03-19T15:00:10.000Z",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    };
+
+    const service = await createRingCentralService(
+      {
+        recordingsDir: path.join(temp.dir, "recordings"),
+      },
+      { db, fetchImpl }
+    );
+
+    await service.store.upsertConnection({
+      user_id: 1,
+      ringcentral_account_id: "acct-1",
+      ringcentral_extension_id: "ext-1",
+      server_url: "https://platform.ringcentral.com",
+      access_token: "token",
+      refresh_token: "refresh",
+      token_type: "Bearer",
+      scope: "ReadMessages",
+      status: "active",
+    });
+
+    const result = await service.processWebhookEnvelope(
+      service.getEventEnvelope({
+        event: "/restapi/v1.0/account/~/extension/~/message-store/instant?type=SMS",
+        ownerId: "ext-1",
+        body: {
+          id: "msg-unmatched",
+          ownerId: "ext-1",
+        },
+      })
+    );
+    assert.equal(result.accepted, true);
+
+    const unmatched = await db.get(
+      "SELECT * FROM unmatched_communications WHERE provider_message_id = ?",
+      ["msg-unmatched"]
+    );
+    assert.ok(unmatched);
+    assert.equal(unmatched.type, "sms");
+    assert.equal(unmatched.status, "new");
+    assert.equal(Number(unmatched.dealership_id), 1);
+
+    const linkedMessage = await db.get(
+      "SELECT * FROM lead_messages WHERE provider_message_id = ?",
+      ["msg-unmatched"]
+    );
+    assert.equal(linkedMessage, null);
+  });
+});
+
+test("RingCentral call reconciliation stores unmatched inbound calls in the unmatched queue", async () => {
+  await withDb(async ({ db, temp }) => {
+    const fetchImpl = async (url) => {
+      if (String(url).includes("/call-log")) {
+        return new Response(
+          JSON.stringify({
+            records: [
+              {
+                id: "call-unmatched-1",
+                sessionId: "session-unmatched-1",
+                telephonySessionId: "telephony-unmatched-1",
+                direction: "Inbound",
+                from: { phoneNumber: "+1 (647) 555-0888" },
+                to: [{ phoneNumber: "+1 (647) 555-1212", extensionId: "ext-1" }],
+                duration: 19,
+                result: "Accepted",
+                action: "Phone Call",
+                startTime: "2026-03-19T16:00:00.000Z",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    };
+
+    const service = await createRingCentralService(
+      {
+        recordingsDir: path.join(temp.dir, "recordings"),
+      },
+      { db, fetchImpl }
+    );
+
+    const connection = await service.store.upsertConnection({
+      user_id: 1,
+      ringcentral_account_id: "acct-1",
+      ringcentral_extension_id: "ext-1",
+      server_url: "https://platform.ringcentral.com",
+      access_token: "token",
+      refresh_token: "refresh",
+      token_type: "Bearer",
+      scope: "ReadCallLog",
+      status: "active",
+    });
+
+    const synced = await service.reconcileCallSession(connection, {
+      sessionId: "session-unmatched-1",
+      telephonySessionId: "telephony-unmatched-1",
+      eventTime: "2026-03-19T16:00:00.000Z",
+    });
+
+    assert.equal(synced.length, 0);
+
+    const unmatched = await db.get(
+      "SELECT * FROM unmatched_communications WHERE provider_call_id = ?",
+      ["call-unmatched-1"]
+    );
+    assert.ok(unmatched);
+    assert.equal(unmatched.type, "call");
+    assert.equal(unmatched.status, "new");
+    assert.equal(Number(unmatched.call_duration), 19);
+
+    const linkedCall = await db.get(
+      "SELECT * FROM lead_calls WHERE provider_call_id = ?",
+      ["call-unmatched-1"]
+    );
+    assert.equal(linkedCall, null);
+  });
+});
+
 test("RingCentral outbound call initiation uses the rep's own RingOut device and leaves completed-call storage to reconciliation", async () => {
   await withDb(async ({ db, temp }) => {
     const lead = await db.createApiLead({

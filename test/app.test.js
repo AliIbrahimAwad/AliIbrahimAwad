@@ -8,6 +8,7 @@ const path = require("path");
 
 const { createApp } = require("../app");
 const { importInventoryCsv } = require("../services/inventoryImport");
+const { createLeadInboxService } = require("../services/leadInbox");
 const { toDateOnlyString } = require("../src/utils/dates");
 
 function createTempDbPath() {
@@ -722,6 +723,46 @@ test("manager can assign an unassigned API lead", async () => {
     assert.ok(
       assignedBody.activities.some((activity) => /Lead assigned to CRM Sales\./.test(activity.content))
     );
+  });
+});
+
+test("manager can convert an 'Other' intake item into a lead through the API", async () => {
+  await withServer(async ({ app, server }) => {
+    const client = createClient(server);
+    await login(client, "manager@crm.local", "manager123");
+
+    const item = app.locals.db.createEmailIntakeItem({
+      external_id: "<other-1@example.com>",
+      source: "website",
+      subject: "Contact us about a used Camry",
+      sender: "customer@example.com",
+      message: "Can someone help me with the 2020 Toyota Camry on the lot?",
+      received_at: "2026-03-22T15:00:00.000Z",
+      classification: "other",
+      status: "open",
+      customer_name: "Jamie Driver",
+      phone: "+16475550199",
+      email: "customer@example.com",
+      stock_number: "D9489",
+      vehicle_display: "2020 Toyota Camry SE",
+    });
+
+    const salesUser = app.locals.db.getUserByEmail("sales@crm.local");
+    const response = await client.request({
+      method: "POST",
+      path: `/api/intake-items/${item.id}/convert`,
+      json: {
+        assigned_to: salesUser.id,
+      },
+    });
+
+    assert.equal(response.statusCode, 201);
+    const payload = JSON.parse(response.body);
+    assert.equal(payload.item.status, "converted_to_lead");
+    assert.equal(Number(payload.item.assigned_to), Number(salesUser.id));
+    assert.equal(payload.lead.customer_name, "Jamie Driver");
+    assert.equal(payload.lead.stock_number, "D9489");
+    assert.equal(Number(payload.lead.assigned_to), Number(salesUser.id));
   });
 });
 
