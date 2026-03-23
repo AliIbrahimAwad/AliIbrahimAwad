@@ -110,7 +110,13 @@ function detectLeadSource(message, text) {
     return "cargurus";
   }
 
-  if (haystack.includes("dealerleads.trader.ca") || haystack.includes("auto trader")) {
+  if (
+    haystack.includes("dealerleads.trader.ca") ||
+    haystack.includes("no-reply@trader.ca") ||
+    haystack.includes("autotrader.ca") ||
+    haystack.includes("autotrader") ||
+    haystack.includes("auto trader")
+  ) {
     return "autotrader";
   }
 

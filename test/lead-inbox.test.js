@@ -207,6 +207,25 @@ test("detects lead source from message metadata and content", () => {
   assert.equal(parsed.source, "cargurus");
 });
 
+test("detects AutoTrader from no-reply trader subjects without relying on dealerleads sender", () => {
+  const parsed = parseLeadEmail({
+    subject: "Important Sales Lead from AutoTrader.ca",
+    body: {
+      contentType: "text",
+      content: "Name: Vivian Thomas\nEmail: vjohn9286@gmail.com\nStock Number: D9505\nMessage: Interested in the Polestar.",
+    },
+    from: {
+      emailAddress: {
+        address: "no-reply@trader.ca",
+      },
+    },
+  });
+
+  assert.equal(parsed.source, "autotrader");
+  assert.equal(parsed.email, "vjohn9286@gmail.com");
+  assert.equal(parsed.stock_number, "D9505");
+});
+
 test("generic email parsing still captures an intake candidate when the format is unknown", () => {
   const message = {
     subject: "Contact us about your Camry",
