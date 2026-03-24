@@ -5,6 +5,7 @@ const {
   buildGenericEmailParse,
   classifyParsedEmail,
   createLeadInboxService,
+  parseAdfLeadXml,
   parseAutoTraderEmail,
   parseCarGurusEmail,
   parseLeadEmail,
@@ -153,6 +154,59 @@ View Listing on CarGurus: https://example.com/listing
   assert.equal(lead.phone, "(519) 504-9958");
   assert.equal(lead.vehicle_id, "5YJ3E1EB6NF126791");
   assert.equal(lead.stock_number, "D9783");
+});
+
+test("parses CarGurus ADF XML emails", () => {
+  const xml = `<?xml version="1.0" encoding="utf-16"?>
+<adf>
+  <prospect>
+    <id source="leadtype">Email</id>
+    <requestdate>2026-03-16T20:37:03+00:00</requestdate>
+    <vehicle interest="buy" status="Used">
+      <year>2016</year>
+      <make>RAM</make>
+      <model>2500</model>
+      <trim>Laramie Mega Cab 4WD 6.7 Cummins | No Accident | Safety Included</trim>
+      <vin>3C6UR5ML5GG359865</vin>
+      <stock>D9760</stock>
+      <price>34995</price>
+      <condition>Used</condition>
+    </vehicle>
+    <customer>
+      <contact>
+        <name part="full">jayupater22@gmail.com</name>
+        <phone type="voice" preferredcontact="0">5197174814</phone>
+        <email preferredcontact="0">8424174960</email>
+      </contact>
+      <comments>I'm interested in this 2016 RAM 2500 and I'd like to know if it's still available.</comments>
+    </customer>
+    <provider>
+      <id source="partner">CarGurus</id>
+      <name part="full">CarGurus</name>
+      <service>CarGurus</service>
+      <url>https://cargurus.i/Mk9ez</url>
+    </provider>
+  </prospect>
+</adf>`;
+
+  const lead = parseAdfLeadXml(xml, {
+    subject: "Lead Submission from CarGurus",
+    from: {
+      emailAddress: {
+        address: "dealers_ca@cargurus.com",
+      },
+    },
+  });
+
+  assert.equal(lead.source, "cargurus");
+  assert.equal(lead.customer_name, "jayupater22@gmail.com");
+  assert.equal(lead.phone, "5197174814");
+  assert.equal(lead.email, "8424174960");
+  assert.equal(lead.stock_number, "D9760");
+  assert.equal(lead.vehicle_id, "3C6UR5ML5GG359865");
+  assert.match(lead.vehicle_interest, /2016 RAM 2500/i);
+  assert.match(lead.message, /still available/i);
+  assert.equal(lead.lead_type, "Email");
 });
 
 test("parses website lead emails", () => {

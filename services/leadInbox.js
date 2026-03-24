@@ -101,10 +101,83 @@ function combineVehicle(parts = []) {
   return cleanValue(parts.filter(Boolean).join(" "));
 }
 
+function extractXmlTagValue(xml, tagName) {
+  const escapedTag = String(tagName || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = String(xml || "").match(new RegExp(`<${escapedTag}(?:\\s+[^>]*)?>([\\s\\S]*?)<\\/${escapedTag}>`, "i"));
+  return cleanValue(match ? match[1] : "");
+}
+
+function extractXmlSection(xml, tagName) {
+  const escapedTag = String(tagName || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = String(xml || "").match(new RegExp(`<${escapedTag}(?:\\s+[^>]*)?>([\\s\\S]*?)<\\/${escapedTag}>`, "i"));
+  return match ? match[1] : "";
+}
+
+function extractXmlSourceId(xml, sourceName) {
+  const escapedSource = String(sourceName || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = String(xml || "").match(
+    new RegExp(`<id[^>]*source=["']${escapedSource}["'][^>]*>([\\s\\S]*?)<\\/id>`, "i")
+  );
+  return cleanValue(match ? match[1] : "");
+}
+
+function isAdfXml(text) {
+  const normalized = String(text || "").toLowerCase();
+  return normalized.includes("<adf") && normalized.includes("<prospect");
+}
+
+function parseAdfLeadXml(text, message = {}) {
+  const vehicleXml = extractXmlSection(text, "vehicle");
+  const customerXml = extractXmlSection(text, "customer");
+  const contactXml = extractXmlSection(customerXml, "contact");
+  const providerXml = extractXmlSection(text, "provider");
+  const sourcePartner = extractXmlSourceId(providerXml, "partner") || extractXmlTagValue(providerXml, "id");
+  const providerName = extractXmlTagValue(providerXml, "name");
+  const source = /cargurus/i.test(`${sourcePartner} ${providerName}`)
+    ? "cargurus"
+    : /autotrader|auto trader/i.test(`${sourcePartner} ${providerName}`)
+      ? "autotrader"
+      : detectLeadSource(message, text);
+  const year = extractXmlTagValue(vehicleXml, "year");
+  const make = extractXmlTagValue(vehicleXml, "make");
+  const model = extractXmlTagValue(vehicleXml, "model");
+  const trim = extractXmlTagValue(vehicleXml, "trim");
+
+  return {
+    source,
+    customer_name: extractXmlTagValue(contactXml, "name"),
+    phone: cleanPhone(extractXmlTagValue(contactXml, "phone")),
+    email: extractXmlTagValue(contactXml, "email"),
+    vehicle_interest: combineVehicle([year, make, model, trim]),
+    vehicle_id: extractXmlTagValue(vehicleXml, "vin"),
+    stock_number: extractXmlTagValue(vehicleXml, "stock"),
+    vehicle_year: year || null,
+    vehicle_make: make || null,
+    vehicle_model: model || null,
+    vehicle_trim: trim || null,
+    vehicle_condition: extractXmlTagValue(vehicleXml, "condition"),
+    vehicle_price: extractXmlTagValue(vehicleXml, "price"),
+    listing_url: extractXmlTagValue(providerXml, "url"),
+    message: extractXmlTagValue(customerXml, "comments"),
+    lead_type: extractXmlSourceId(text, "leadtype") || "general_inquiry",
+    sender: getSenderEmail(message),
+  };
+}
+
 function detectLeadSource(message, text) {
   const sender = getSenderEmail(message);
   const subject = String(message.subject || "").toLowerCase();
   const haystack = `${sender}\n${subject}\n${String(text || "").toLowerCase()}`;
+
+  if (isAdfXml(text)) {
+    if (haystack.includes("cargurus")) {
+      return "cargurus";
+    }
+
+    if (haystack.includes("autotrader") || haystack.includes("trader.ca")) {
+      return "autotrader";
+    }
+  }
 
   if (haystack.includes("messages.cargurus.com") || haystack.includes("lead submission from cargurus")) {
     return "cargurus";
@@ -296,6 +369,10 @@ function parseWebsiteLeadEmail(text, message = {}) {
 
 function parseLeadEmail(message) {
   const text = normalizeContent(message);
+  if (isAdfXml(text)) {
+    return parseAdfLeadXml(text, message);
+  }
+
   const source = detectLeadSource(message, text);
 
   if (source === "autotrader") {
@@ -579,6 +656,7 @@ module.exports = {
   detectLeadSource,
   mergeLeadData,
   normalizeContent,
+  parseAdfLeadXml,
   parseAutoTraderEmail,
   parseCarGurusEmail,
   parseLeadEmail,
