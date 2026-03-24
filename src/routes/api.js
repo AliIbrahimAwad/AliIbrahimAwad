@@ -47,6 +47,116 @@ function normalizeLeadPayload(body = {}) {
   };
 }
 
+function getFirstNonEmpty(...values) {
+  for (const value of values) {
+    const normalized = String(value ?? "").trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+function normalizeWebhookSecret(value) {
+  return String(value || "").trim();
+}
+
+function requireFluentFormsWebhookKey(req) {
+  const configured = normalizeWebhookSecret(process.env.FLUENT_FORMS_WEBHOOK_KEY);
+  if (!configured) {
+    throw new ValidationError("Fluent Forms webhook key is not configured.");
+  }
+
+  const provided = normalizeWebhookSecret(
+    req.get("X-CRM-Webhook-Key") || req.get("X-Webhook-Key") || req.query.key || req.body?.key
+  );
+  if (!provided || provided !== configured) {
+    const error = new ValidationError("Invalid Fluent Forms webhook key.");
+    error.statusCode = 401;
+    throw error;
+  }
+}
+
+function extractStockNumberFromListingUrl(value = "") {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const match = normalized.match(/-([a-z]\d{3,8})(?:\/)?(?:\?.*)?$/i);
+  return match ? match[1].toUpperCase() : null;
+}
+
+function humanizeListingSlug(slug = "") {
+  return String(slug || "")
+    .split("-")
+    .filter(Boolean)
+    .map((part) => (/^\d{4}$/.test(part) ? part : `${part.charAt(0).toUpperCase()}${part.slice(1)}`))
+    .join(" ")
+    .trim();
+}
+
+function deriveVehicleFromListingUrl(value = "") {
+  try {
+    const pathname = new URL(String(value || "")).pathname;
+    const slug = pathname.split("/").filter(Boolean).pop() || "";
+    const withoutStock = slug.replace(/-([a-z]\d{3,8})$/i, "");
+    return humanizeListingSlug(withoutStock) || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function deriveIntakeStatusFromLead(lead) {
+  if (!lead) {
+    return "unassigned";
+  }
+
+  if (lead.status === "contacted") {
+    return "contacted";
+  }
+
+  return lead.assigned_to ? "assigned" : "unassigned";
+}
+
+function normalizeFluentFormsWebhookPayload(body = {}) {
+  const submission = body.__submission || {};
+  const userInputs = submission.user_inputs || {};
+  const customerName = getFirstNonEmpty(body.customer_name, body.customerName, body.name, body.input_text, userInputs.input_text);
+  const email = getFirstNonEmpty(body.email, userInputs.email);
+  const phone = getFirstNonEmpty(body.phone, userInputs.phone);
+  const message = getFirstNonEmpty(body.message, body.description, userInputs.description);
+  const preferredContact = getFirstNonEmpty(body.preferred_contact, body.dropdown, userInputs.dropdown);
+  const listingUrl = getFirstNonEmpty(body.listing_url, body.listingUrl, submission.source_url);
+  const stockNumber = getFirstNonEmpty(body.stock_number, body.stockNumber, extractStockNumberFromListingUrl(listingUrl));
+  const vehicleInterest = getFirstNonEmpty(body.vehicle_interest, body.vehicleInterest, deriveVehicleFromListingUrl(listingUrl));
+  const submissionId = getFirstNonEmpty(submission.id);
+  const formId = getFirstNonEmpty(submission.form_id);
+  const externalId = submissionId ? `fluent_forms:${formId || "unknown"}:${submissionId}` : "";
+
+  if (!externalId) {
+    throw new ValidationError("Fluent Forms submission id is required.");
+  }
+
+  return {
+    external_id: externalId,
+    source: "website",
+    customer_name: customerName || null,
+    email: email || null,
+    phone: phone || null,
+    vehicle_interest: vehicleInterest || null,
+    stock_number: stockNumber || null,
+    listing_url: listingUrl || null,
+    message: preferredContact ? `${message || "Website form submission"}\nPreferred contact: ${preferredContact}` : message || null,
+    lead_type: "website_form",
+    received_at: getFirstNonEmpty(submission.created_at) || null,
+    subject: `Website form submission${vehicleInterest ? ` - ${vehicleInterest}` : ""}`,
+    sender: email || "website-form@loolooauto.ca",
+    raw_payload_json: JSON.stringify(body),
+  };
+}
+
 function normalizeUnmatchedLeadPayload(body = {}) {
   return {
     customer_name: String(body.customer_name || body.name || "").trim() || null,
@@ -110,6 +220,74 @@ function normalizeEmailIntakeConversionPayload(body = {}) {
 }
 
 function registerApiRoutes(app) {
+  app.post(
+    "/api/intake/fluent-forms",
+    asyncHandler(async (req, res) => {
+      requireFluentFormsWebhookKey(req);
+
+      const payload = normalizeFluentFormsWebhookPayload(req.body);
+      const existingItem = await req.app.locals.db.getEmailIntakeItemByExternalId(payload.external_id);
+      if (existingItem) {
+        const leadPayload = existingItem.lead_id
+          ? await req.app.locals.db.getApiLeadWithActivities(existingItem.lead_id)
+          : { lead: null, activities: [], timeline: [], tasks: [] };
+        res.json({
+          accepted: true,
+          duplicate_submission: true,
+          item: existingItem,
+          ...leadPayload,
+        });
+        return;
+      }
+
+      const lead = await req.app.locals.db.createApiLead(
+        {
+          source: payload.source,
+          customer_name: payload.customer_name,
+          email: payload.email,
+          phone: payload.phone,
+          vehicle_interest: payload.vehicle_interest,
+          stock_number: payload.stock_number,
+          listing_url: payload.listing_url,
+          message: payload.message,
+          lead_type: payload.lead_type,
+          status: "new",
+        },
+        null,
+        { returnDedupeMeta: true }
+      );
+
+      const item = await req.app.locals.db.createEmailIntakeItem({
+        external_id: payload.external_id,
+        source: payload.source,
+        subject: payload.subject,
+        sender: payload.sender,
+        message: payload.message,
+        received_at: payload.received_at,
+        classification: "direct_lead",
+        status: deriveIntakeStatusFromLead(lead),
+        assigned_to: lead.assigned_to || null,
+        lead_id: lead.id,
+        customer_name: lead.customer_name || payload.customer_name,
+        phone: lead.phone || payload.phone,
+        email: lead.email || payload.email,
+        stock_number: lead.stock_number || payload.stock_number,
+        inventory_id: lead.inventory_id || null,
+        vehicle_display: lead.vehicle_interest || payload.vehicle_interest,
+        raw_payload_json: payload.raw_payload_json,
+      });
+
+      res.status(201).json({
+        accepted: true,
+        duplicate_submission: false,
+        merged_into_existing_lead: Boolean(lead._dedupe?.merged),
+        merge_reason: lead._dedupe?.reason || null,
+        item,
+        ...(await req.app.locals.db.getApiLeadWithActivities(lead.id)),
+      });
+    })
+  );
+
   app.get(
     "/api/leads",
     requireAuth,

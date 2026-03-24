@@ -682,6 +682,122 @@ test("website API creates an unassigned website lead", async () => {
   });
 });
 
+test("Fluent Forms webhook creates a website lead, extracts stock from listing URL, and creates one intake item", async () => {
+  const previousWebhookKey = process.env.FLUENT_FORMS_WEBHOOK_KEY;
+  process.env.FLUENT_FORMS_WEBHOOK_KEY = "test-fluent-webhook-key";
+
+  await withServer(async ({ app, server }) => {
+    await app.locals.db.upsertInventoryRecord({
+      dealership_id: 1,
+      stock_number: "D9643",
+      vin: "3MF13DM3XRF000001",
+      year: 2024,
+      make: "BMW",
+      model: "M2",
+      trim: "Coupe",
+      condition: "Used",
+      status: "active",
+    });
+
+    const client = createClient(server);
+    const response = await client.request({
+      method: "POST",
+      path: "/api/intake/fluent-forms",
+      headers: {
+        "X-CRM-Webhook-Key": "test-fluent-webhook-key",
+      },
+      json: {
+        input_text: "Ali Alridha Awad",
+        email: "awadalialridha@gmail.com",
+        phone: "+16478958877",
+        dropdown: "Call",
+        description: "I am interested in this vehicle",
+        __submission: {
+          id: "231",
+          form_id: "4",
+          source_url: "https://loolooauto.ca/listing/2024-bmw-m2-coupe-no-accident-clean-carfax-d9643/",
+          created_at: "2026-03-24 15:53:57",
+          user_inputs: {
+            input_text: "Ali Alridha Awad",
+            email: "awadalialridha@gmail.com",
+            phone: "+16478958877",
+            dropdown: "Call",
+            description: "I am interested in this vehicle",
+          },
+        },
+      },
+    });
+
+    assert.equal(response.statusCode, 201);
+    const body = JSON.parse(response.body);
+    assert.equal(body.item.external_id, "fluent_forms:4:231");
+    assert.equal(body.item.stock_number, "D9643");
+    assert.equal(body.item.classification, "direct_lead");
+    assert.equal(body.lead.stock_number, "D9643");
+    assert.equal(body.lead.customer_name, "Ali Alridha Awad");
+    assert.match(body.lead.message, /Preferred contact: Call/);
+
+    const leads = app.locals.db.listApiLeads({ user: { id: 1, role: "admin", dealership_id: 1 } });
+    assert.equal(leads.items.length, 1);
+
+    const intake = app.locals.db.listEmailIntakeItems({ classification: "direct_lead", pending_only: false });
+    assert.equal(intake.items.length, 1);
+  });
+
+  process.env.FLUENT_FORMS_WEBHOOK_KEY = previousWebhookKey;
+});
+
+test("Fluent Forms webhook is idempotent for the same submission id", async () => {
+  const previousWebhookKey = process.env.FLUENT_FORMS_WEBHOOK_KEY;
+  process.env.FLUENT_FORMS_WEBHOOK_KEY = "test-fluent-webhook-key";
+
+  await withServer(async ({ app, server }) => {
+    const client = createClient(server);
+    const payload = {
+      input_text: "Ali Alridha Awad",
+      email: "awadalialridha@gmail.com",
+      phone: "+16478958877",
+      description: "I am interested in this vehicle",
+      __submission: {
+        id: "231",
+        form_id: "4",
+        source_url: "https://loolooauto.ca/listing/2024-bmw-m2-coupe-no-accident-clean-carfax-d9643/",
+        created_at: "2026-03-24 15:53:57",
+      },
+    };
+
+    const first = await client.request({
+      method: "POST",
+      path: "/api/intake/fluent-forms",
+      headers: {
+        "X-CRM-Webhook-Key": "test-fluent-webhook-key",
+      },
+      json: payload,
+    });
+    const second = await client.request({
+      method: "POST",
+      path: "/api/intake/fluent-forms",
+      headers: {
+        "X-CRM-Webhook-Key": "test-fluent-webhook-key",
+      },
+      json: payload,
+    });
+
+    assert.equal(first.statusCode, 201);
+    assert.equal(second.statusCode, 200);
+    const secondBody = JSON.parse(second.body);
+    assert.equal(secondBody.duplicate_submission, true);
+
+    const leads = app.locals.db.listApiLeads({ user: { id: 1, role: "admin", dealership_id: 1 } });
+    assert.equal(leads.items.length, 1);
+
+    const intake = app.locals.db.listEmailIntakeItems({ classification: "direct_lead", pending_only: false });
+    assert.equal(intake.items.length, 1);
+  });
+
+  process.env.FLUENT_FORMS_WEBHOOK_KEY = previousWebhookKey;
+});
+
 test("manager can assign an unassigned API lead", async () => {
   await withServer(async ({ server }) => {
     const client = createClient(server);
