@@ -28,21 +28,23 @@ import {
   getConversations,
   getDashboardWorklist,
   getInventory,
+  getInventoryImportErrors,
   getInventoryImportRuns,
+  getInventorySyncStatus,
   getLead,
   getLeads,
   getUnmatchedCommunications,
   holdLeadVehicle,
-  importInventory,
-  getSession,
-  getUsers,
-  linkLeadInventory,
-  login,
+    importInventory,
+    getSession,
+    getUsers,
+    login,
   logLeadCall,
   logout,
   markNotificationRead,
   resolveEmailIntakeItem,
   sendLeadSms,
+  syncInventoryNow,
   updateLeadStatus,
 } from "./lib/api";
 import { formatPhoneNumber, pipelineLabel } from "./lib/format";
@@ -217,12 +219,19 @@ function formatInventoryItem(item) {
     mileage: item.mileage ?? null,
     condition: item.condition || "",
     bodyStyle: item.body_style || "",
+    drivetrain: item.drivetrain || "",
+    transmission: item.transmission || "",
+    engine: item.engine || "",
+    fuelType: item.fuel_type || "",
     exteriorColor: item.exterior_color || "",
     interiorColor: item.interior_color || "",
+    dateInStock: item.date_in_stock || null,
+    isActive: Boolean(item.is_active),
     status: item.status || "",
     source: item.source || "",
     sourceFile: item.source_file || "",
     lastSeenAt: item.last_seen_at || null,
+    firstSeenAt: item.first_seen_at || null,
     updatedAt: item.updated_at || null,
   };
 }
@@ -230,17 +239,35 @@ function formatInventoryItem(item) {
 function formatInventoryRun(run) {
   return {
     id: run.id,
+    sourceType: run.source_type || "",
     sourceName: run.source_name || "",
     fileName: run.file_name || "",
     status: run.status || "",
     rowsTotal: Number(run.rows_total || 0),
+    rowsProcessed: Number(run.rows_processed || 0),
     rowsInserted: Number(run.rows_inserted || 0),
     rowsUpdated: Number(run.rows_updated || 0),
     rowsSkipped: Number(run.rows_skipped || 0),
     rowsDeactivated: Number(run.rows_deactivated || 0),
+    failedCount: Number(run.failed_count || 0),
     errorCount: Number(run.error_count || 0),
     startedAt: run.started_at || null,
     completedAt: run.completed_at || null,
+    metadata: run.metadata_json || null,
+  };
+}
+
+function formatInventoryImportError(item) {
+  return {
+    id: item.id,
+    importRunId: item.import_run_id,
+    rowNumber: item.row_number ?? null,
+    stockNumber: item.stock_number || "",
+    vin: item.vin || "",
+    rawIdentifier: item.raw_identifier || "",
+    errorMessage: item.error_message || "",
+    sourceType: item.source_type || "",
+    fileName: item.file_name || "",
   };
 }
 
@@ -326,6 +353,8 @@ export default function App() {
   });
   const [inventoryItems, setInventoryItems] = useState([]);
   const [inventoryImportRuns, setInventoryImportRuns] = useState([]);
+  const [inventorySyncStatus, setInventorySyncStatus] = useState(null);
+  const [inventoryImportErrors, setInventoryImportErrors] = useState([]);
   const [emailIntakeItems, setEmailIntakeItems] = useState([]);
   const [emailIntakeSummary, setEmailIntakeSummary] = useState({
     direct_leads_pending: 0,
@@ -364,11 +393,11 @@ export default function App() {
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [assignmentUpdating, setAssignmentUpdating] = useState(false);
   const [callLogging, setCallLogging] = useState(false);
-  const [holdSubmitting, setHoldSubmitting] = useState(false);
-  const [smsSending, setSmsSending] = useState(false);
-  const [inventoryImporting, setInventoryImporting] = useState(false);
-  const [inventoryLinking, setInventoryLinking] = useState(false);
-  const [emailIntakeAssigningId, setEmailIntakeAssigningId] = useState(null);
+    const [holdSubmitting, setHoldSubmitting] = useState(false);
+    const [smsSending, setSmsSending] = useState(false);
+    const [inventoryImporting, setInventoryImporting] = useState(false);
+    const [inventorySyncing, setInventorySyncing] = useState(false);
+    const [emailIntakeAssigningId, setEmailIntakeAssigningId] = useState(null);
   const [emailIntakeResolvingId, setEmailIntakeResolvingId] = useState(null);
   const [emailIntakeConvertingId, setEmailIntakeConvertingId] = useState(null);
   const [unmatchedAssigning, setUnmatchedAssigning] = useState(false);
@@ -437,7 +466,8 @@ export default function App() {
   async function loadInventoryData() {
     setInventoryLoading(true);
     try {
-      const [inventoryResult, runsResult] = await Promise.allSettled([
+      const managerCanSync = currentUser?.role === "admin" || currentUser?.role === "manager";
+      const [inventoryResult, runsResult, syncStatusResult, errorsResult] = await Promise.allSettled([
         getInventory({
           limit: 250,
           status: inventoryFilters.status,
@@ -447,6 +477,8 @@ export default function App() {
           vin: inventoryFilters.vin,
         }),
         getInventoryImportRuns(10),
+        managerCanSync ? getInventorySyncStatus() : Promise.resolve(null),
+        managerCanSync ? getInventoryImportErrors({ source_type: "ftp_sync", limit: 10 }) : Promise.resolve({ items: [] }),
       ]);
 
       if (inventoryResult.status !== "fulfilled") {
@@ -457,9 +489,23 @@ export default function App() {
       setInventoryImportRuns(
         runsResult.status === "fulfilled" ? (runsResult.value.items || []).map(formatInventoryRun) : []
       );
+      setInventorySyncStatus(syncStatusResult.status === "fulfilled" ? syncStatusResult.value : null);
+      setInventoryImportErrors(
+        errorsResult.status === "fulfilled" ? (errorsResult.value.items || []).map(formatInventoryImportError) : []
+      );
       setInventoryLoaded(true);
     } finally {
       setInventoryLoading(false);
+    }
+  }
+
+  async function handleSyncInventoryNow() {
+    setInventorySyncing(true);
+    try {
+      await syncInventoryNow();
+      await loadInventoryData();
+    } finally {
+      setInventorySyncing(false);
     }
   }
 
@@ -1191,33 +1237,6 @@ export default function App() {
     }
   }
 
-  async function handleLinkInventory(inventoryId) {
-    if (!selectedLeadId) {
-      return;
-    }
-
-    try {
-      setInventoryLinking(true);
-      const payload = await linkLeadInventory(selectedLeadId, inventoryId);
-      setSelectedLeadDetails({
-        ...formatLead(payload.lead),
-        activities: (payload.activities || []).map(formatActivity),
-        timeline: (payload.timeline || []).map(formatTimelineItem),
-        tasks: payload.tasks || [],
-      });
-      if (leadLibraryLoaded) {
-        await loadLeadLibrary();
-      }
-      await refreshWorklist();
-      setError("");
-    } catch (linkError) {
-      setError(linkError.message || "Unable to link inventory.");
-      throw linkError;
-    } finally {
-      setInventoryLinking(false);
-    }
-  }
-
   async function handleAssignEmailIntake(item, assignedTo) {
     if (!item?.id || !assignedTo) {
       return;
@@ -1901,6 +1920,9 @@ export default function App() {
                     importMarkMissingInactive={inventoryImportForm.markMissingInactive}
                     importSubmitting={inventoryImporting}
                     importRuns={inventoryImportRuns}
+                    syncStatus={inventorySyncStatus}
+                    syncSubmitting={inventorySyncing}
+                    importErrors={inventoryImportErrors}
                     onImportSourceNameChange={(value) =>
                       setInventoryImportForm((current) => ({
                         ...current,
@@ -1914,6 +1936,7 @@ export default function App() {
                       }))
                     }
                     onImportFileSelected={handleImportInventoryFile}
+                    onSyncNow={handleSyncInventoryNow}
                   />
                 ) : null}
               </div>
@@ -1935,16 +1958,13 @@ export default function App() {
                     taskCompletingId={taskCompletingId}
                     onSendSms={handleSendSms}
                     smsSending={smsSending}
-                    onLogCall={handleLogCall}
-                    callLogging={callLogging}
-                    onHoldVehicle={handleHoldVehicle}
-                    holdSubmitting={holdSubmitting}
-                    inventoryOptions={inventoryItems}
-                    inventoryLinking={inventoryLinking}
-                    onLinkInventory={handleLinkInventory}
-                  />
-                </div>
-              ) : null}
+                      onLogCall={handleLogCall}
+                      callLogging={callLogging}
+                      onHoldVehicle={handleHoldVehicle}
+                      holdSubmitting={holdSubmitting}
+                    />
+                  </div>
+                ) : null}
               {showUnmatched ? (
                 <div className="2xl:sticky 2xl:top-6 2xl:self-start">
                   <UnmatchedCommunicationPanel

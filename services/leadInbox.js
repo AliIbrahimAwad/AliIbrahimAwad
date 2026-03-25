@@ -101,6 +101,35 @@ function combineVehicle(parts = []) {
   return cleanValue(parts.filter(Boolean).join(" "));
 }
 
+function combinePersonName(parts = []) {
+  return cleanValue(
+    parts
+      .map((part) => cleanValue(part))
+      .filter(Boolean)
+      .join(" ")
+  );
+}
+
+function getFirstResolvedField(text, labels = [], nextLabels = []) {
+  for (const label of labels) {
+    const value = getField(text, label, nextLabels);
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function extractTextPersonName(text, options = {}) {
+  const fullName = getFirstResolvedField(text, options.fullLabels || [], options.nextLabels || []);
+  const firstName = getFirstResolvedField(text, options.firstLabels || [], options.nextLabels || []);
+  const lastName = getFirstResolvedField(text, options.lastLabels || [], options.nextLabels || []);
+  const combinedName = combinePersonName([firstName, lastName]);
+
+  return combinedName || fullName || firstName || lastName || null;
+}
+
 function extractXmlTagValue(xml, tagName) {
   const escapedTag = String(tagName || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = String(xml || "").match(new RegExp(`<${escapedTag}(?:\\s+[^>]*)?>([\\s\\S]*?)<\\/${escapedTag}>`, "i"));
@@ -119,6 +148,30 @@ function extractXmlSourceId(xml, sourceName) {
     new RegExp(`<id[^>]*source=["']${escapedSource}["'][^>]*>([\\s\\S]*?)<\\/id>`, "i")
   );
   return cleanValue(match ? match[1] : "");
+}
+
+function extractXmlPersonName(xml) {
+  const fullNameMatch = String(xml || "").match(/<name[^>]*part=["']full["'][^>]*>([\s\S]*?)<\/name>/i);
+  const fullName = cleanValue(fullNameMatch ? fullNameMatch[1] : "");
+  if (fullName) {
+    return fullName;
+  }
+
+  const parts = {};
+  for (const match of String(xml || "").matchAll(/<name[^>]*part=["']([^"']+)["'][^>]*>([\s\S]*?)<\/name>/gi)) {
+    const part = String(match[1] || "").trim().toLowerCase();
+    const value = cleanValue(match[2] || "");
+    if (part && value) {
+      parts[part] = value;
+    }
+  }
+
+  const combined = combinePersonName([parts.first, parts.middle, parts.last]);
+  if (combined) {
+    return combined;
+  }
+
+  return extractXmlTagValue(xml, "name");
 }
 
 function isAdfXml(text) {
@@ -145,7 +198,7 @@ function parseAdfLeadXml(text, message = {}) {
 
   return {
     source,
-    customer_name: extractXmlTagValue(contactXml, "name"),
+    customer_name: extractXmlPersonName(contactXml),
     phone: cleanPhone(extractXmlTagValue(contactXml, "phone")),
     email: extractXmlTagValue(contactXml, "email"),
     vehicle_interest: combineVehicle([year, make, model, trim]),
@@ -194,9 +247,12 @@ function detectLeadSource(message, text) {
   }
 
   if (
-    haystack.includes("preferred contact method") &&
     haystack.includes("this form submitted at") &&
-    haystack.includes("phone number")
+    (
+      haystack.includes("phone number") ||
+      haystack.includes("preferred contact method") ||
+      (haystack.includes("first name") && haystack.includes("last name"))
+    )
   ) {
     return "website";
   }
@@ -272,10 +328,16 @@ function parseAutoTraderEmail(text, message = {}) {
       .replace(/^trade-in\??\s*:\s*[^ ]+(?:\s+description:)?/i, "")
       .trim()
   );
+  const customerName = extractTextPersonName(text, {
+    fullLabels: ["Name", "Customer Name", "Full Name"],
+    firstLabels: ["First Name"],
+    lastLabels: ["Last Name"],
+    nextLabels: ["Email", "Phone", "Subject", "Trade-In?", "Trade-In"],
+  });
 
   return {
     source: "autotrader",
-    customer_name: inlineName || getField(text, "Name"),
+    customer_name: customerName || inlineName || getField(text, "Name"),
     phone: cleanPhone(inlinePhone || getField(text, "Phone")),
     email: inlineEmail || getField(text, "Email"),
     vehicle_interest: combineVehicle([
@@ -300,12 +362,16 @@ function parseAutoTraderEmail(text, message = {}) {
 }
 
 function parseCarGurusEmail(text, message = {}) {
-  const firstName = getField(text, "First Name");
-  const lastName = getField(text, "Last Name");
+  const customerName = extractTextPersonName(text, {
+    fullLabels: ["Full Name", "Name", "Customer Name"],
+    firstLabels: ["First Name"],
+    lastLabels: ["Last Name"],
+    nextLabels: ["Email", "Telephone", "Postal code", "Comments"],
+  });
 
   return {
     source: "cargurus",
-    customer_name: cleanValue([firstName, lastName].filter(Boolean).join(" ")),
+    customer_name: customerName,
     phone: cleanPhone(getField(text, "Telephone", ["Postal code", "Comments", "Vehicle", "VIN"])),
     email: getField(text, "Email", ["Telephone", "Postal code", "Comments", "Vehicle"]),
     vehicle_interest: getField(text, "Vehicle", ["Stock Number", "Listed Price", "View Listing on CarGurus"]),
@@ -345,10 +411,16 @@ function parseWebsiteLeadEmail(text, message = {}) {
         .replace(/\b\w/g, (char) => char.toUpperCase())
         .replace(/\s+d\d+$/i, "")
     : null;
+  const customerName = extractTextPersonName(text, {
+    fullLabels: ["Full Name", "Name", "Customer Name"],
+    firstLabels: ["First Name"],
+    lastLabels: ["Last Name"],
+    nextLabels: ["Email", "Phone Number", "Preferred Contact Method", "Message"],
+  });
 
   return {
     source: "website",
-    customer_name: getField(text, "Full Name", ["Email", "Phone Number", "Preferred Contact Method", "Message"]),
+    customer_name: customerName,
     phone: cleanPhone(getField(text, "Phone Number", ["Preferred Contact Method", "Message", "This form submitted at"])),
     email: getField(text, "Email", ["Phone Number", "Preferred Contact Method", "Message"]),
     vehicle_interest: derivedVehicle,
@@ -424,9 +496,12 @@ function buildGenericEmailParse(message, text) {
   const senderName = getSenderName(message);
   const subject = cleanValue(message.subject || "");
   const customerName =
-    getField(text, "Full Name") ||
-    getField(text, "Name") ||
-    getField(text, "Customer Name") ||
+    extractTextPersonName(text, {
+      fullLabels: ["Full Name", "Name", "Customer Name"],
+      firstLabels: ["First Name"],
+      lastLabels: ["Last Name"],
+      nextLabels: ["Email", "Phone", "Phone Number", "Subject", "Message", "Comments"],
+    }) ||
     senderName ||
     null;
 

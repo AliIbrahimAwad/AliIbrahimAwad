@@ -139,6 +139,27 @@ export function getInventoryImportRuns(limit = 20) {
   return request(`/api/inventory/import-runs?limit=${limit}`);
 }
 
+export function getInventoryImportErrors(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, String(value));
+    }
+  });
+
+  return request(`/api/inventory/import-errors${query.toString() ? `?${query.toString()}` : ""}`);
+}
+
+export function getInventorySyncStatus() {
+  return request("/api/inventory/sync-status");
+}
+
+export function syncInventoryNow() {
+  return request("/api/inventory/sync-now", {
+    method: "POST",
+  });
+}
+
 export function linkLeadInventory(id, inventoryId) {
   return request(`/api/leads/${id}/link-inventory`, {
     method: "POST",

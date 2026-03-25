@@ -1,12 +1,11 @@
 {
   "name": "crm",
   "version": "1.0.0",
-  "description": "Local-first CRM MVP built with Express and SQLite",
+  "description": "Dealer CRM built with Express and PostgreSQL",
   "main": "server.js",
   "scripts": {
     "dev": "nodemon server.js",
     "import:leads": "node scripts/import-graph-leads.js",
-    "migrate:postgres": "node scripts/migrate-sqlite-to-postgres.js",
     "maintain:ringcentral": "node scripts/run-ringcentral-maintenance.js",
     "process:ringcentral": "node scripts/process-ringcentral-jobs.js",
     "reconcile:ringcentral": "node scripts/reconcile-ringcentral.js",
@@ -17,11 +16,11 @@
     "nodemon": "^3.1.10"
   },
   "dependencies": {
+    "basic-ftp": "^5.2.0",
     "bcrypt": "^6.0.0",
     "dotenv": "^17.2.3",
     "express": "^4.18.2",
     "express-session": "^1.19.0",
-    "pg": "^8.16.3",
-    "sql.js": "^1.13.0"
+    "pg": "^8.16.3"
   }
 }

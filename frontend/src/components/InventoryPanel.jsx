@@ -24,10 +24,16 @@ export function InventoryPanel({
   importMarkMissingInactive = false,
   importSubmitting = false,
   importRuns = [],
+  syncStatus = null,
+  syncSubmitting = false,
+  importErrors = [],
   onImportSourceNameChange,
   onImportMarkMissingInactiveChange,
   onImportFileSelected,
+  onSyncNow,
 }) {
+  const lastRun = syncStatus?.latest_run || null;
+
   return (
     <>
       <div className="flex flex-col gap-4 border-b border-white/10 pb-4">
@@ -35,9 +41,36 @@ export function InventoryPanel({
           <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Structured inventory</p>
           <h2 className="mt-2 font-display text-2xl font-semibold text-white">Inventory foundation</h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
-            Manual uploads create or update real inventory units so leads can link to a structured vehicle instead of raw text.
+            The FTP feed is the source of truth, with manual upload kept only as a fallback when the feed needs help.
           </p>
         </div>
+
+        {syncStatus ? (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Last success</p>
+              <p className="mt-2 text-sm font-medium text-white">
+                {syncStatus.last_success_at ? new Date(syncStatus.last_success_at).toLocaleString() : "No success yet"}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Latest status</p>
+              <p className="mt-2 text-sm font-medium text-white">{syncStatus.latest_status || "Idle"}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Source file</p>
+              <p className="mt-2 text-sm font-medium text-white">{lastRun?.file_name || "Not available"}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Next scheduled sync</p>
+              <p className="mt-2 text-sm font-medium text-white">
+                {syncStatus.next_scheduled_sync_at
+                  ? new Date(syncStatus.next_scheduled_sync_at).toLocaleString()
+                  : "Scheduler disabled"}
+              </p>
+            </div>
+          </div>
+        ) : null}
 
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <input
@@ -78,6 +111,16 @@ export function InventoryPanel({
         <div className="mt-4 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
             <div className="grid gap-3">
+              {syncStatus ? (
+                <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200">
+                  <p className="font-medium text-white">FTP sync health</p>
+                  <p className="mt-1 text-slate-300">
+                    {syncStatus.configured
+                      ? `${syncStatus.remote_directory || "/"}${syncStatus.file_pattern ? ` | ${syncStatus.file_pattern}` : ""}`
+                      : "FTP credentials are not configured yet."}
+                  </p>
+                </div>
+              ) : null}
               <input
                 value={importSourceName}
                 onChange={(event) => onImportSourceNameChange?.(event.target.value)}
@@ -93,22 +136,32 @@ export function InventoryPanel({
                 Mark unseen active units from this source as inactive after import
               </label>
             </div>
-            <label className="inline-flex cursor-pointer items-center justify-center rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-slate-100">
-              {importSubmitting ? "Importing..." : "Upload CSV"}
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) {
-                    onImportFileSelected?.(file);
-                  }
-                  event.target.value = "";
-                }}
-                disabled={importSubmitting}
-              />
-            </label>
+            <div className="flex flex-col gap-3">
+              <button
+                type="button"
+                onClick={() => onSyncNow?.()}
+                disabled={syncSubmitting || syncStatus?.is_running}
+                className="inline-flex items-center justify-center rounded-2xl bg-amber-300 px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {syncSubmitting || syncStatus?.is_running ? "Syncing..." : "Sync now"}
+              </button>
+              <label className="inline-flex cursor-pointer items-center justify-center rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-slate-100">
+                {importSubmitting ? "Importing..." : "Upload CSV"}
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      onImportFileSelected?.(file);
+                    }
+                    event.target.value = "";
+                  }}
+                  disabled={importSubmitting}
+                />
+              </label>
+            </div>
           </div>
         </div>
       ) : null}
@@ -170,7 +223,9 @@ export function InventoryPanel({
                   </span>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2 text-xs uppercase tracking-[0.18em] text-slate-500">
+                  <span>{run.sourceType || "manual_upload"}</span>
                   <span>{run.rowsSkipped} skipped</span>
+                  <span>{run.failedCount ?? run.rowsSkipped} failed</span>
                   <span>{run.rowsDeactivated} inactive</span>
                   <span>{run.errorCount} errors</span>
                 </div>
@@ -179,6 +234,31 @@ export function InventoryPanel({
           ) : (
             <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-6 text-sm text-slate-400">
               No inventory imports have been run yet.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+        <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Recent row issues</p>
+        <div className="mt-4 space-y-3">
+          {importErrors.length ? (
+            importErrors.map((issue) => (
+              <div key={issue.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-semibold text-white">{issue.raw_identifier || issue.stock_number || issue.vin || `Row ${issue.row_number || issue.id}`}</p>
+                    <p className="mt-1 text-sm text-slate-300">{issue.error_message}</p>
+                  </div>
+                  <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
+                    {issue.file_name || issue.source_type || "inventory"}
+                  </span>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-6 text-sm text-slate-400">
+              No recent inventory sync issues.
             </div>
           )}
         </div>

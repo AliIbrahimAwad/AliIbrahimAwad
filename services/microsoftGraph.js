@@ -40,6 +40,7 @@ function buildGraphService(config = {}) {
   const folderName = config.folderName || process.env.LEAD_IMPORT_FOLDER || "Inbox";
   const processedFolderName = config.processedFolderName || process.env.LEAD_IMPORT_PROCESSED_FOLDER || "";
   const cutoff = config.cutoff || process.env.LEAD_IMPORT_CUTOFF || getTodayCutoffIso();
+  const fetchImpl = config.fetchImpl || global.fetch;
 
   let cachedToken = null;
   let cachedTokenExpiresAt = 0;
@@ -60,7 +61,7 @@ function buildGraphService(config = {}) {
       scope: "https://graph.microsoft.com/.default",
     });
 
-    const response = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+    const response = await fetchImpl(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -80,7 +81,7 @@ function buildGraphService(config = {}) {
 
   async function graphRequest(path, options = {}) {
     const token = await getAccessToken();
-    const response = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
+    const response = await fetchImpl(`https://graph.microsoft.com/v1.0${path}`, {
       ...options,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -100,23 +101,49 @@ function buildGraphService(config = {}) {
     return response.json();
   }
 
+  async function listFolders(parentId = null) {
+    const basePath = parentId
+      ? `/users/${encodeURIComponent(userId)}/mailFolders/${encodeURIComponent(parentId)}/childFolders`
+      : `/users/${encodeURIComponent(userId)}/mailFolders`;
+    const result = await graphRequest(`${basePath}?$top=200&$select=id,displayName`);
+    return result.value || [];
+  }
+
   async function getFolderIdByName(displayName) {
-    if (!displayName || displayName.toLowerCase() === "inbox") {
+    const rawPath = String(displayName || "").trim();
+    if (!rawPath || rawPath.toLowerCase() === "inbox") {
       return "inbox";
     }
 
-    const result = await graphRequest(
-      `/users/${encodeURIComponent(userId)}/mailFolders?$top=200&$select=id,displayName`
-    );
-    const folder = (result.value || []).find(
-      (item) => String(item.displayName || "").trim().toLowerCase() === String(displayName).trim().toLowerCase()
-    );
+    const segments = rawPath
+      .split("/")
+      .map((segment) => String(segment || "").trim())
+      .filter(Boolean);
 
-    if (!folder) {
-      throw new Error(`Mail folder not found: ${displayName}`);
+    let currentFolderId = null;
+    if (segments[0]?.toLowerCase() === "inbox") {
+      currentFolderId = "inbox";
+      segments.shift();
     }
 
-    return folder.id;
+    if (!segments.length) {
+      return currentFolderId || "inbox";
+    }
+
+    for (const segment of segments) {
+      const folders = await listFolders(currentFolderId);
+      const folder = folders.find(
+        (item) => String(item.displayName || "").trim().toLowerCase() === segment.toLowerCase()
+      );
+
+      if (!folder) {
+        throw new Error(`Mail folder not found: ${displayName}`);
+      }
+
+      currentFolderId = folder.id;
+    }
+
+    return currentFolderId;
   }
 
   async function listMessages({ limit = 25 } = {}) {

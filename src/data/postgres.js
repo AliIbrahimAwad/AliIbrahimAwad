@@ -463,12 +463,20 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         mileage BIGINT,
         condition TEXT,
         body_style TEXT,
+        drivetrain TEXT,
+        transmission TEXT,
+        engine TEXT,
+        fuel_type TEXT,
         exterior_color TEXT,
         interior_color TEXT,
+        date_in_stock TEXT,
+        photos_json TEXT,
         status TEXT NOT NULL DEFAULT 'active',
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
         source TEXT,
         source_file TEXT,
         last_seen_at TEXT,
+        first_seen_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -481,11 +489,14 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         file_name TEXT,
         status TEXT NOT NULL,
         rows_total INTEGER NOT NULL DEFAULT 0,
+        rows_processed INTEGER NOT NULL DEFAULT 0,
         rows_inserted INTEGER NOT NULL DEFAULT 0,
         rows_updated INTEGER NOT NULL DEFAULT 0,
         rows_skipped INTEGER NOT NULL DEFAULT 0,
         rows_deactivated INTEGER NOT NULL DEFAULT 0,
+        failed_count INTEGER NOT NULL DEFAULT 0,
         error_message TEXT,
+        metadata_json TEXT,
         started_at TEXT,
         completed_at TEXT,
         created_at TEXT NOT NULL,
@@ -498,6 +509,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         row_number INTEGER,
         stock_number TEXT,
         vin TEXT,
+        raw_identifier TEXT,
         error_message TEXT NOT NULL,
         raw_row_json TEXT,
         created_at TEXT NOT NULL
@@ -567,8 +579,20 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_type TEXT;
         ALTER TABLE leads ADD COLUMN IF NOT EXISTS listing_url TEXT;
         ALTER TABLE leads ADD COLUMN IF NOT EXISTS message TEXT;
-        ALTER TABLE leads ADD COLUMN IF NOT EXISTS inventory_id BIGINT REFERENCES inventory(id) ON DELETE SET NULL;
-        ALTER TABLE contacts ADD COLUMN IF NOT EXISTS normalized_phone TEXT;
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS inventory_id BIGINT REFERENCES inventory(id) ON DELETE SET NULL;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS normalized_phone TEXT;
+      ALTER TABLE inventory ADD COLUMN IF NOT EXISTS drivetrain TEXT;
+      ALTER TABLE inventory ADD COLUMN IF NOT EXISTS transmission TEXT;
+      ALTER TABLE inventory ADD COLUMN IF NOT EXISTS engine TEXT;
+      ALTER TABLE inventory ADD COLUMN IF NOT EXISTS fuel_type TEXT;
+      ALTER TABLE inventory ADD COLUMN IF NOT EXISTS date_in_stock TEXT;
+      ALTER TABLE inventory ADD COLUMN IF NOT EXISTS photos_json TEXT;
+      ALTER TABLE inventory ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE inventory ADD COLUMN IF NOT EXISTS first_seen_at TEXT;
+      ALTER TABLE inventory_import_runs ADD COLUMN IF NOT EXISTS rows_processed INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE inventory_import_runs ADD COLUMN IF NOT EXISTS failed_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE inventory_import_runs ADD COLUMN IF NOT EXISTS metadata_json TEXT;
+      ALTER TABLE inventory_import_errors ADD COLUMN IF NOT EXISTS raw_identifier TEXT;
 
       CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_leads_normalized_phone ON leads(normalized_phone);
@@ -581,6 +605,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       CREATE INDEX IF NOT EXISTS idx_inventory_stock_number ON inventory(stock_number);
       CREATE INDEX IF NOT EXISTS idx_inventory_vin ON inventory(vin);
       CREATE INDEX IF NOT EXISTS idx_inventory_status ON inventory(status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_inventory_is_active ON inventory(dealership_id, is_active, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_inventory_make_model ON inventory(make, model);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_dealership_stock_number
         ON inventory(dealership_id, stock_number)
@@ -616,6 +641,11 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     await this.execute("UPDATE lead_activities SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
     await this.execute("UPDATE activities SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
     await this.execute("UPDATE imported_messages SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
+    await this.execute(
+      "UPDATE inventory SET is_active = CASE WHEN status = 'active' THEN TRUE ELSE FALSE END WHERE is_active IS NULL",
+      []
+    );
+    await this.execute("UPDATE inventory SET first_seen_at = created_at WHERE first_seen_at IS NULL", []);
     await this.execute(
       `
         INSERT INTO lead_activities (dealership_id, lead_id, user_id, type, content, created_at)
@@ -972,14 +1002,22 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       trim: row.trim || null,
       price: row.price == null ? null : Number(row.price),
       mileage: row.mileage == null ? null : Number(row.mileage),
-        condition: row.condition || null,
-        body_style: row.body_style || null,
-        exterior_color: row.exterior_color || null,
-        interior_color: row.interior_color || null,
-        status: row.status || "active",
-        source: row.source || null,
+      condition: row.condition || null,
+      body_style: row.body_style || null,
+      drivetrain: row.drivetrain || null,
+      transmission: row.transmission || null,
+      engine: row.engine || null,
+      fuel_type: row.fuel_type || null,
+      exterior_color: row.exterior_color || null,
+      interior_color: row.interior_color || null,
+      date_in_stock: row.date_in_stock || null,
+      photos_json: row.photos_json || null,
+      status: row.status || "active",
+      is_active: row.is_active !== false && row.is_active !== "f" && row.is_active !== 0,
+      source: row.source || null,
       source_file: row.source_file || null,
       last_seen_at: row.last_seen_at || null,
+      first_seen_at: row.first_seen_at || null,
       created_at: row.created_at,
       updated_at: row.updated_at,
     };
@@ -2545,35 +2583,41 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
           file_name,
           status,
           rows_total,
+          rows_processed,
           rows_inserted,
           rows_updated,
           rows_skipped,
           rows_deactivated,
+          failed_count,
           error_message,
+          metadata_json,
           started_at,
           completed_at,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING *
         `,
         [
           dealershipId,
-        input.source_type || "manual_upload",
-        input.source_name || null,
-        input.file_name || null,
-        input.status || "running",
-        Number(input.rows_total || 0),
-        Number(input.rows_inserted || 0),
-        Number(input.rows_updated || 0),
-        Number(input.rows_skipped || 0),
-        Number(input.rows_deactivated || 0),
-        input.error_message || null,
-        input.started_at || now,
-        input.completed_at || null,
-        now,
-        now,
-      ]
+          input.source_type || "manual_upload",
+          input.source_name || null,
+          input.file_name || null,
+          input.status || "running",
+          Number(input.rows_total || 0),
+          Number(input.rows_processed || 0),
+          Number(input.rows_inserted || 0),
+          Number(input.rows_updated || 0),
+          Number(input.rows_skipped || 0),
+          Number(input.rows_deactivated || 0),
+          Number(input.failed_count || 0),
+          input.error_message || null,
+          input.metadata_json == null ? null : JSON.stringify(input.metadata_json),
+          input.started_at || now,
+          input.completed_at || null,
+          now,
+          now,
+        ]
     );
 
     return {
@@ -2607,11 +2651,14 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         SET
           status = COALESCE(?, status),
           rows_total = COALESCE(?, rows_total),
+          rows_processed = COALESCE(?, rows_processed),
           rows_inserted = COALESCE(?, rows_inserted),
           rows_updated = COALESCE(?, rows_updated),
           rows_skipped = COALESCE(?, rows_skipped),
           rows_deactivated = COALESCE(?, rows_deactivated),
+          failed_count = COALESCE(?, failed_count),
           error_message = COALESCE(?, error_message),
+          metadata_json = COALESCE(?, metadata_json),
           completed_at = COALESCE(?, completed_at),
           updated_at = ?
         WHERE id = ? AND dealership_id = ?
@@ -2620,11 +2667,14 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       [
         input.status || null,
         input.rows_total == null ? null : Number(input.rows_total),
+        input.rows_processed == null ? null : Number(input.rows_processed),
         input.rows_inserted == null ? null : Number(input.rows_inserted),
         input.rows_updated == null ? null : Number(input.rows_updated),
         input.rows_skipped == null ? null : Number(input.rows_skipped),
         input.rows_deactivated == null ? null : Number(input.rows_deactivated),
+        input.failed_count == null ? null : Number(input.failed_count),
         input.error_message || null,
+        input.metadata_json == null ? null : JSON.stringify(input.metadata_json),
         input.completed_at || null,
         new Date().toISOString(),
           runId,
@@ -2665,21 +2715,23 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
           row_number,
           stock_number,
           vin,
+          raw_identifier,
           error_message,
           raw_row_json,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING *
       `,
         [
           importRunId,
           input.row_number == null ? null : parsePositiveInteger(input.row_number),
           input.stock_number || null,
-        input.vin || null,
-        input.error_message,
-        input.raw_row_json || null,
-        new Date().toISOString(),
-      ]
+          input.vin || null,
+          input.raw_identifier || null,
+          input.error_message,
+          input.raw_row_json || null,
+          new Date().toISOString(),
+        ]
     );
 
     return {
@@ -2711,12 +2763,69 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       id: Number(row.id),
       dealership_id: Number(row.dealership_id),
       rows_total: Number(row.rows_total || 0),
+      rows_processed: Number(row.rows_processed || 0),
       rows_inserted: Number(row.rows_inserted || 0),
       rows_updated: Number(row.rows_updated || 0),
       rows_skipped: Number(row.rows_skipped || 0),
       rows_deactivated: Number(row.rows_deactivated || 0),
+      failed_count: Number(row.failed_count || 0),
       error_count: Number(row.error_count || 0),
+      metadata_json: parseJson(row.metadata_json, null),
     }));
+  }
+
+  async listInventoryImportErrors(filters = {}, user = null) {
+    const { run_id = null, source_type = "", limit = 50 } = filters;
+    const clauses = ["inventory_import_runs.dealership_id = ?"];
+    const params = [this.currentDealershipId(user)];
+
+    if (parsePositiveInteger(run_id)) {
+      clauses.push("inventory_import_errors.import_run_id = ?");
+      params.push(parsePositiveInteger(run_id));
+    }
+
+    if (stringOrNull(source_type)) {
+      clauses.push("inventory_import_runs.source_type = ?");
+      params.push(String(source_type).trim());
+    }
+
+    const rows = await this.all(
+      `
+        SELECT inventory_import_errors.*, inventory_import_runs.source_type, inventory_import_runs.file_name
+        FROM inventory_import_errors
+        JOIN inventory_import_runs ON inventory_import_runs.id = inventory_import_errors.import_run_id
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY inventory_import_errors.created_at DESC, inventory_import_errors.id DESC
+        LIMIT ?
+      `,
+      [...params, Math.max(1, Math.min(200, Number(limit) || 50))]
+    );
+
+    return rows.map((row) => ({
+      ...row,
+      id: Number(row.id),
+      import_run_id: Number(row.import_run_id),
+      row_number: row.row_number == null ? null : Number(row.row_number),
+    }));
+  }
+
+  async failStaleInventoryImportRuns({ source_type = "ftp_sync", older_than_iso } = {}) {
+    const rows = await this.all(
+      `
+        UPDATE inventory_import_runs
+        SET status = 'failed',
+            error_message = COALESCE(error_message, 'Inventory sync was interrupted before completion.'),
+            completed_at = COALESCE(completed_at, ?),
+            updated_at = ?
+        WHERE status = 'running'
+          AND source_type = ?
+          AND started_at < ?
+        RETURNING id
+      `,
+      [new Date().toISOString(), new Date().toISOString(), source_type, older_than_iso || new Date().toISOString()]
+    );
+
+    return rows.length;
   }
 
   async findInventoryByIdentity({ dealership_id, stock_number = null, vin = null }) {
@@ -2836,13 +2945,21 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       parseIntegerField(input.price),
       parseIntegerField(input.mileage),
       stringOrNull(input.condition),
-        stringOrNull(input.body_style),
-        stringOrNull(input.exterior_color),
-        stringOrNull(input.interior_color),
-        normalizeInventoryStatus(input.status),
-        stringOrNull(input.source),
-        stringOrNull(input.source_file),
-        input.last_seen_at || now,
+      stringOrNull(input.body_style),
+      stringOrNull(input.drivetrain),
+      stringOrNull(input.transmission),
+      stringOrNull(input.engine),
+      stringOrNull(input.fuel_type),
+      stringOrNull(input.exterior_color),
+      stringOrNull(input.interior_color),
+      normalizeInventoryStatus(input.status),
+      normalizeInventoryStatus(input.status) === "active",
+      stringOrNull(input.source),
+      stringOrNull(input.source_file),
+      stringOrNull(input.date_in_stock),
+      stringOrNull(input.photos_json),
+      input.last_seen_at || now,
+      input.first_seen_at || now,
     ];
 
     if (existing) {
@@ -2860,12 +2977,20 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
             mileage = ?,
             condition = ?,
             body_style = ?,
+            drivetrain = ?,
+            transmission = ?,
+            engine = ?,
+            fuel_type = ?,
             exterior_color = ?,
             interior_color = ?,
             status = ?,
+            is_active = ?,
             source = ?,
             source_file = ?,
+            date_in_stock = ?,
+            photos_json = ?,
             last_seen_at = ?,
+            first_seen_at = COALESCE(first_seen_at, ?),
             updated_at = ?
           WHERE id = ? AND dealership_id = ?
           RETURNING *
@@ -2892,16 +3017,24 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
           price,
           mileage,
           condition,
-            body_style,
-            exterior_color,
-            interior_color,
-            status,
-            source,
-            source_file,
-            last_seen_at,
-            created_at,
-            updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          body_style,
+          drivetrain,
+          transmission,
+          engine,
+          fuel_type,
+          exterior_color,
+          interior_color,
+          status,
+          is_active,
+          source,
+          source_file,
+          date_in_stock,
+          photos_json,
+          last_seen_at,
+          first_seen_at,
+          created_at,
+          updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           RETURNING *
         `,
         [dealershipId, ...payload, now, now]
@@ -2930,6 +3063,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         UPDATE inventory
         SET
           status = ?,
+          is_active = FALSE,
           updated_at = ?
         WHERE dealership_id = ?
           AND source = ?
@@ -2968,6 +3102,42 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     });
 
     return this.getApiLeadWithActivities(leadId, user);
+  }
+
+  async linkLeadsToInventoryByIdentity({ dealership_id, inventory_id, stock_number = null, vin = null } = {}) {
+    const dealershipId = parsePositiveInteger(dealership_id);
+    const inventoryId = parsePositiveInteger(inventory_id);
+    const stockNumber = normalizeInventoryIdentity(stock_number);
+    const normalizedVin = normalizeInventoryIdentity(vin);
+
+    if (!dealershipId || !inventoryId || (!stockNumber && !normalizedVin)) {
+      return 0;
+    }
+
+    const clauses = [];
+    const params = [];
+    if (stockNumber) {
+      clauses.push("UPPER(BTRIM(COALESCE(stock_number, ''))) = ?");
+      params.push(stockNumber);
+    }
+    if (normalizedVin) {
+      clauses.push("UPPER(BTRIM(COALESCE(vehicle_id, ''))) = ?");
+      params.push(normalizedVin);
+    }
+
+    const rows = await this.all(
+      `
+        UPDATE leads
+        SET inventory_id = ?, updated_at = ?
+        WHERE dealership_id = ?
+          AND (${clauses.join(" OR ")})
+          AND COALESCE(inventory_id, 0) <> ?
+        RETURNING id
+      `,
+      [inventoryId, new Date().toISOString(), dealershipId, ...params, inventoryId]
+    );
+
+    return rows.length;
   }
 
   async getDashboardApiMetrics(user = null) {

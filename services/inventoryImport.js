@@ -1,4 +1,5 @@
 const { ValidationError } = require("../src/data/core");
+const { parseInventoryFeed, normalizeHeader } = require("./inventoryFeedParser");
 
 const INVENTORY_HEADER_ALIASES = {
   stock_number: [
@@ -22,85 +23,16 @@ const INVENTORY_HEADER_ALIASES = {
   mileage: ["mileage", "miles", "odometer", "odometer_reading", "kilometers", "kilometres"],
   condition: ["condition", "vehicle_condition", "inventorytype", "new_used", "used_new"],
   body_style: ["body_style", "bodystyle", "body_style_", "body style", "body"],
+  drivetrain: ["drivetrain", "drive_train", "drive type", "drive_type"],
+  transmission: ["transmission", "trans", "gearbox"],
+  engine: ["engine", "engine_description", "engine_desc", "motor"],
+  fuel_type: ["fuel_type", "fuel", "fueltype"],
   exterior_color: ["exterior_color", "extcolour", "ext_color", "exterior colour", "exterior color", "colour", "color"],
   interior_color: ["interior_color", "intcolour", "int_color", "interior colour", "interior color"],
-  status: ["status", "inventory_status"],
+  status: ["status", "inventory_status", "availability"],
+  date_in_stock: ["date_in_stock", "instockdate", "date_added", "date_in", "dateinstock"],
+  photos_json: ["photos", "photo_urls", "photo_urls_json", "image_urls", "images", "image_list"],
 };
-
-function normalizeHeader(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
-function parseCsvLine(line) {
-  const cells = [];
-  let current = "";
-  let quoted = false;
-
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-
-    if (quoted) {
-      if (char === '"' && line[index + 1] === '"') {
-        current += '"';
-        index += 1;
-        continue;
-      }
-
-      if (char === '"') {
-        quoted = false;
-        continue;
-      }
-
-      current += char;
-      continue;
-    }
-
-    if (char === '"') {
-      quoted = true;
-      continue;
-    }
-
-    if (char === ",") {
-      cells.push(current.trim());
-      current = "";
-      continue;
-    }
-
-    current += char;
-  }
-
-  cells.push(current.trim());
-  return cells;
-}
-
-function parseCsvText(csvText) {
-  const lines = String(csvText || "")
-    .replace(/^\uFEFF/, "")
-    .split(/\r?\n/)
-    .filter((line) => line.trim() !== "");
-
-  if (lines.length < 2) {
-    throw new ValidationError("Inventory CSV must include a header row and at least one data row.");
-  }
-
-  const headers = parseCsvLine(lines[0]).map(normalizeHeader);
-  return lines.slice(1).map((line, index) => {
-    const values = parseCsvLine(line);
-    const row = {};
-    headers.forEach((header, headerIndex) => {
-      row[header] = values[headerIndex] ?? "";
-    });
-
-    return {
-      rowNumber: index + 2,
-      raw: row,
-    };
-  });
-}
 
 function firstValue(row, aliases) {
   for (const alias of aliases) {
@@ -111,6 +43,11 @@ function firstValue(row, aliases) {
   }
 
   return null;
+}
+
+function normalizePositiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function mapInventoryRow(row, context = {}) {
@@ -129,32 +66,34 @@ function mapInventoryRow(row, context = {}) {
     mileage: mapped.mileage,
     condition: mapped.condition,
     body_style: mapped.body_style,
+    drivetrain: mapped.drivetrain,
+    transmission: mapped.transmission,
+    engine: mapped.engine,
+    fuel_type: mapped.fuel_type,
     exterior_color: mapped.exterior_color,
     interior_color: mapped.interior_color,
     status: mapped.status || "active",
+    date_in_stock: mapped.date_in_stock,
+    photos_json: mapped.photos_json,
     source: context.sourceName || "manual_upload",
     source_file: context.fileName || null,
   };
 }
 
-function normalizePositiveInteger(value) {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-async function importInventoryCsv({
+async function importInventoryRows({
   db,
   user,
-  csvText,
+  rows,
   fileName = null,
   sourceName = null,
+  sourceType = "manual_upload",
   markMissingInactive = false,
+  metadata = null,
 }) {
-  if (!String(csvText || "").trim()) {
-    throw new ValidationError("A CSV file is required.");
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new ValidationError("Inventory feed did not contain any rows.");
   }
 
-  const parsedRows = parseCsvText(csvText);
   const normalizedSourceName = String(sourceName || "").trim() || "manual_upload";
   const dealershipId = normalizePositiveInteger(
     typeof db.currentDealershipId === "function" ? db.currentDealershipId(user) : user?.dealership_id || 1
@@ -162,31 +101,37 @@ async function importInventoryCsv({
   if (!dealershipId) {
     throw new ValidationError("Unable to determine dealership for inventory import.");
   }
+
   const run = await db.createInventoryImportRun(
     {
       dealership_id: dealershipId,
-      source_type: "manual_upload",
+      source_type: sourceType,
       source_name: normalizedSourceName,
       file_name: fileName || null,
       status: "running",
-      rows_total: parsedRows.length,
+      rows_total: rows.length,
+      rows_processed: 0,
+      failed_count: 0,
+      metadata_json: metadata || null,
     },
     user
   );
 
   const summary = {
-    rows_total: parsedRows.length,
+    rows_total: rows.length,
+    rows_processed: 0,
     rows_inserted: 0,
     rows_updated: 0,
     rows_skipped: 0,
     rows_deactivated: 0,
+    failed_count: 0,
   };
   const seenInventoryIds = new Set();
 
   try {
-    for (const entry of parsedRows) {
+    for (const entry of rows) {
       try {
-        const mapped = mapInventoryRow(entry.raw, {
+        const mapped = mapInventoryRow(entry.raw || {}, {
           sourceName: normalizedSourceName,
           fileName,
         });
@@ -206,6 +151,16 @@ async function importInventoryCsv({
           throw new ValidationError("Imported inventory row did not return a valid inventory ID.");
         }
 
+        if (typeof db.linkLeadsToInventoryByIdentity === "function") {
+          await db.linkLeadsToInventoryByIdentity({
+            dealership_id: dealershipId,
+            inventory_id: inventoryId,
+            stock_number: mapped.stock_number,
+            vin: mapped.vin,
+          });
+        }
+
+        summary.rows_processed += 1;
         seenInventoryIds.add(inventoryId);
         if (result.action === "inserted") {
           summary.rows_inserted += 1;
@@ -214,27 +169,27 @@ async function importInventoryCsv({
         }
       } catch (error) {
         summary.rows_skipped += 1;
-        const importRunId = normalizePositiveInteger(run?.id);
-        if (!importRunId) {
-          throw error;
-        }
-
+        summary.failed_count += 1;
         await db.createInventoryImportError(
           {
-            import_run_id: importRunId,
+            import_run_id: run.id,
             dealership_id: dealershipId,
             row_number: normalizePositiveInteger(entry.rowNumber),
-            stock_number: firstValue(entry.raw, INVENTORY_HEADER_ALIASES.stock_number),
-            vin: firstValue(entry.raw, INVENTORY_HEADER_ALIASES.vin),
+            stock_number: firstValue(entry.raw || {}, INVENTORY_HEADER_ALIASES.stock_number),
+            vin: firstValue(entry.raw || {}, INVENTORY_HEADER_ALIASES.vin),
+            raw_identifier:
+              firstValue(entry.raw || {}, INVENTORY_HEADER_ALIASES.stock_number) ||
+              firstValue(entry.raw || {}, INVENTORY_HEADER_ALIASES.vin) ||
+              null,
             error_message: error.message || "Unable to import inventory row.",
-            raw_row_json: JSON.stringify(entry.raw),
+            raw_row_json: JSON.stringify(entry.raw || {}),
           },
           user
         );
       }
     }
 
-    if (markMissingInactive && sourceName && seenInventoryIds.size > 0) {
+    if (markMissingInactive && summary.failed_count === 0 && seenInventoryIds.size > 0) {
       summary.rows_deactivated = await db.markInventoryMissingFromImport({
         dealership_id: dealershipId,
         source: normalizedSourceName,
@@ -243,9 +198,9 @@ async function importInventoryCsv({
       });
     }
 
-    const finalStatus = summary.rows_skipped > 0 ? "completed_with_errors" : "completed";
+    const finalStatus = summary.failed_count > 0 ? "partial" : "success";
     const completedRun = await db.updateInventoryImportRun(
-      normalizePositiveInteger(run?.id),
+      run.id,
       {
         dealership_id: dealershipId,
         status: finalStatus,
@@ -256,27 +211,16 @@ async function importInventoryCsv({
     );
 
     return {
-      run: {
-        ...completedRun,
-        rows_total: Number(completedRun.rows_total || 0),
-        rows_inserted: Number(completedRun.rows_inserted || 0),
-        rows_updated: Number(completedRun.rows_updated || 0),
-        rows_skipped: Number(completedRun.rows_skipped || 0),
-        rows_deactivated: Number(completedRun.rows_deactivated || 0),
-      },
+      run: completedRun,
     };
   } catch (error) {
     await db.updateInventoryImportRun(
-      normalizePositiveInteger(run?.id),
+      run.id,
       {
         dealership_id: dealershipId,
         status: "failed",
         error_message: error.message || "Inventory import failed.",
-        rows_total: summary.rows_total,
-        rows_inserted: summary.rows_inserted,
-        rows_updated: summary.rows_updated,
-        rows_skipped: summary.rows_skipped,
-        rows_deactivated: summary.rows_deactivated,
+        ...summary,
         completed_at: new Date().toISOString(),
       },
       user
@@ -285,6 +229,41 @@ async function importInventoryCsv({
   }
 }
 
+async function importInventoryCsv({
+  db,
+  user,
+  csvText,
+  fileName = null,
+  sourceName = null,
+  markMissingInactive = false,
+  sourceType = "manual_upload",
+  metadata = null,
+}) {
+  if (!String(csvText || "").trim()) {
+    throw new ValidationError("A CSV file is required.");
+  }
+
+  const parsed = parseInventoryFeed({
+    fileName: fileName || "inventory.csv",
+    text: csvText,
+    format: "csv",
+  });
+
+  return importInventoryRows({
+    db,
+    user,
+    rows: parsed.rows,
+    fileName,
+    sourceName,
+    sourceType,
+    markMissingInactive,
+    metadata,
+  });
+}
+
 module.exports = {
   importInventoryCsv,
+  importInventoryRows,
+  mapInventoryRow,
+  parseInventoryFeed,
 };

@@ -174,9 +174,10 @@ test("parses CarGurus ADF XML emails", () => {
     </vehicle>
     <customer>
       <contact>
-        <name part="full">jayupater22@gmail.com</name>
+        <name part="first">Jay</name>
+        <name part="last">Peart</name>
         <phone type="voice" preferredcontact="0">5197174814</phone>
-        <email preferredcontact="0">8424174960</email>
+        <email preferredcontact="0">jaypeart22@gmail.com</email>
       </contact>
       <comments>I'm interested in this 2016 RAM 2500 and I'd like to know if it's still available.</comments>
     </customer>
@@ -199,14 +200,46 @@ test("parses CarGurus ADF XML emails", () => {
   });
 
   assert.equal(lead.source, "cargurus");
-  assert.equal(lead.customer_name, "jayupater22@gmail.com");
+  assert.equal(lead.customer_name, "Jay Peart");
   assert.equal(lead.phone, "5197174814");
-  assert.equal(lead.email, "8424174960");
+  assert.equal(lead.email, "jaypeart22@gmail.com");
   assert.equal(lead.stock_number, "D9760");
   assert.equal(lead.vehicle_id, "3C6UR5ML5GG359865");
   assert.match(lead.vehicle_interest, /2016 RAM 2500/i);
   assert.match(lead.message, /still available/i);
   assert.equal(lead.lead_type, "Email");
+});
+
+test("parses website lead emails with split first and last names", () => {
+  const html = `
+    <div>First Name</div>
+    <div>Leslie</div>
+    <div>Last Name</div>
+    <div>Stoll</div>
+    <div>Email</div>
+    <div>lesliestoll@ymail.com</div>
+    <div>Phone Number</div>
+    <div>+15197032668</div>
+    <div>This form submitted at: https://loolooauto.ca/start-pre-approval/</div>
+  `;
+
+  const lead = parseLeadEmail({
+    subject: "New website lead",
+    body: {
+      contentType: "html",
+      content: html,
+    },
+    from: {
+      emailAddress: {
+        address: "sales@loolooauto.ca",
+      },
+    },
+  });
+
+  assert.equal(lead.source, "website");
+  assert.equal(lead.customer_name, "Leslie Stoll");
+  assert.equal(lead.email, "lesliestoll@ymail.com");
+  assert.equal(lead.phone, "+15197032668");
 });
 
 test("parses website lead emails", () => {

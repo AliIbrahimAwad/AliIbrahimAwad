@@ -58,6 +58,22 @@ function getFirstNonEmpty(...values) {
   return "";
 }
 
+function getObjectValue(object, path) {
+  return path.split(".").reduce((current, segment) => (current == null ? undefined : current[segment]), object);
+}
+
+function getFirstNamedValue(object, paths = []) {
+  for (const path of paths) {
+    const value = getObjectValue(object, path);
+    const normalized = String(value ?? "").trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
 function normalizeWebhookSecret(value) {
   return String(value || "").trim();
 }
@@ -123,7 +139,39 @@ function deriveIntakeStatusFromLead(lead) {
 function normalizeFluentFormsWebhookPayload(body = {}) {
   const submission = body.__submission || {};
   const userInputs = submission.user_inputs || {};
-  const customerName = getFirstNonEmpty(body.customer_name, body.customerName, body.name, body.input_text, userInputs.input_text);
+  const firstName = getFirstNonEmpty(
+    getFirstNamedValue(body, ["first_name", "firstName", "names.first_name", "name.first_name", "name.firstName"]),
+    getFirstNamedValue(userInputs, [
+      "first_name",
+      "firstName",
+      "names.first_name",
+      "name.first_name",
+      "name.firstName",
+      "names[first_name]",
+      "name[first_name]",
+    ])
+  );
+  const lastName = getFirstNonEmpty(
+    getFirstNamedValue(body, ["last_name", "lastName", "names.last_name", "name.last_name", "name.lastName"]),
+    getFirstNamedValue(userInputs, [
+      "last_name",
+      "lastName",
+      "names.last_name",
+      "name.last_name",
+      "name.lastName",
+      "names[last_name]",
+      "name[last_name]",
+    ])
+  );
+  const combinedName = getFirstNonEmpty([firstName, lastName].filter(Boolean).join(" "));
+  const customerName = getFirstNonEmpty(
+    combinedName,
+    body.customer_name,
+    body.customerName,
+    body.name,
+    body.input_text,
+    userInputs.input_text
+  );
   const email = getFirstNonEmpty(body.email, userInputs.email);
   const phone = getFirstNonEmpty(body.phone, userInputs.phone);
   const message = getFirstNonEmpty(body.message, body.description, userInputs.description);
@@ -197,6 +245,14 @@ function normalizeInventoryFilters(query = {}) {
     model: String(query.model || "").trim(),
     stock_number: String(query.stock_number || query.stockNumber || "").trim(),
     vin: String(query.vin || "").trim(),
+  };
+}
+
+function normalizeInventoryRunErrorFilters(query = {}) {
+  return {
+    run_id: query.run_id || query.runId || null,
+    source_type: String(query.source_type || query.sourceType || "").trim(),
+    limit: Math.max(1, Math.min(200, Number(query.limit) || 50)),
   };
 }
 
@@ -561,6 +617,69 @@ function registerApiRoutes(app) {
       res.json({
         items: await req.app.locals.db.listInventoryImportRuns(req.currentUser, Number(req.query.limit) || 20),
       });
+    })
+  );
+
+  app.get(
+    "/api/inventory/import-errors",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      res.json({
+        items: await req.app.locals.db.listInventoryImportErrors(
+          normalizeInventoryRunErrorFilters(req.query),
+          req.currentUser
+        ),
+      });
+    })
+  );
+
+  app.get(
+    "/api/inventory/sync-status",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const schedulerSnapshot = req.app.locals.inventorySyncScheduler?.getSnapshot?.() || null;
+      const status = req.app.locals.inventorySync
+        ? await req.app.locals.inventorySync.getStatus(req.currentUser, schedulerSnapshot)
+        : {
+            enabled: false,
+            configured: false,
+            recent_runs: [],
+            recent_errors: [],
+          };
+
+      res.json(status);
+    })
+  );
+
+  app.post(
+    "/api/inventory/sync-now",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      if (!req.app.locals.inventorySync) {
+        throw new ValidationError("Inventory sync is not available.");
+      }
+
+      const result = await req.app.locals.inventorySync.runManualSync(req.currentUser);
+      if (req.app.locals.inventorySyncScheduler?.scheduleNext) {
+        await req.app.locals.inventorySyncScheduler.scheduleNext();
+      }
+
+      res.status(201).json(result);
     })
   );
 

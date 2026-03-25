@@ -7,7 +7,10 @@ require("dotenv").config({ path: path.join(__dirname, ".env"), quiet: true });
 
 const { createLeadInboxService } = require("./services/leadInbox");
 const { buildGraphService } = require("./services/microsoftGraph");
+const { InventorySyncService } = require("./services/inventorySync");
+const { InventorySyncScheduler } = require("./services/inventorySyncScheduler");
 const { createRingCentralService } = require("./services/ringcentral");
+const { buildInventorySyncConfig } = require("./src/config/inventorySync");
 const { initializeDatabase } = require("./src/data");
 const { attachCurrentUser } = require("./src/middleware/auth");
 const { registerApiRoutes } = require("./src/routes/api");
@@ -86,11 +89,41 @@ async function configureLeadInbox(app, db, options = {}) {
   app.locals.stopLeadInboxPolling = () => clearInterval(interval);
 }
 
+async function configureInventorySync(app, db, options = {}) {
+  if (options.inventorySyncService) {
+    app.locals.inventorySync = options.inventorySyncService;
+    app.locals.inventorySyncScheduler = null;
+    app.locals.stopInventorySyncScheduler = null;
+    return;
+  }
+
+  const config = buildInventorySyncConfig(options.inventorySync || {});
+  const inventorySyncService = new InventorySyncService({
+    db,
+    config,
+  });
+
+  app.locals.inventorySync = inventorySyncService;
+  app.locals.inventorySyncScheduler = null;
+  app.locals.stopInventorySyncScheduler = null;
+
+  if (options.disableInventorySyncScheduler || !config.schedulerEnabled) {
+    return;
+  }
+
+  const scheduler = new InventorySyncScheduler({
+    syncService: inventorySyncService,
+    config,
+  });
+  await scheduler.start();
+  app.locals.inventorySyncScheduler = scheduler;
+  app.locals.stopInventorySyncScheduler = () => scheduler.stop();
+}
+
 async function createApp(options = {}) {
   const app = express();
   const db = await initializeDatabase({
     dbClient: options.dbClient,
-    dbPath: options.dbPath,
     databaseSsl: options.databaseSsl,
     databaseUrl: options.databaseUrl,
   });
@@ -108,6 +141,7 @@ async function createApp(options = {}) {
   app.locals.leadStatuses = CRM_LEAD_STATUSES;
   app.locals.ringcentral = ringcentral;
   app.locals.stopLeadInboxPolling = null;
+  app.locals.stopInventorySyncScheduler = null;
 
   app.use(express.urlencoded({ extended: false }));
   app.use(express.json({ limit: "10mb" }));
@@ -134,6 +168,7 @@ async function createApp(options = {}) {
   registerRingCentralRoutes(app);
   registerUserRoutes(app);
   await configureLeadInbox(app, db, options);
+  await configureInventorySync(app, db, options);
 
   if (serveReactApp) {
     app.use(express.static(frontendDistPath, { index: false }));
