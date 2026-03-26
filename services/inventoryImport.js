@@ -30,6 +30,7 @@ const INVENTORY_HEADER_ALIASES = {
   exterior_color: ["exterior_color", "extcolour", "ext_color", "exterior colour", "exterior color", "colour", "color"],
   interior_color: ["interior_color", "intcolour", "int_color", "interior colour", "interior color"],
   status: ["status", "inventory_status", "availability"],
+  verified: ["verified", "is_verified", "verified_", "online", "is_online", "advertised", "is_advertised"],
   date_in_stock: ["date_in_stock", "instockdate", "date_added", "date_in", "dateinstock"],
   photos_json: ["photos", "photo_urls", "photo_urls_json", "image_urls", "images", "image_list"],
 };
@@ -48,6 +49,11 @@ function firstValue(row, aliases) {
 function normalizePositiveInteger(value) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function isVerifiedInventoryRow(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["yes", "y", "true", "1"].includes(normalized);
 }
 
 function mapInventoryRow(row, context = {}) {
@@ -73,6 +79,7 @@ function mapInventoryRow(row, context = {}) {
     exterior_color: mapped.exterior_color,
     interior_color: mapped.interior_color,
     status: mapped.status || "active",
+    verified: mapped.verified,
     date_in_stock: mapped.date_in_stock,
     photos_json: mapped.photos_json,
     source: context.sourceName || "manual_upload",
@@ -135,6 +142,11 @@ async function importInventoryRows({
           sourceName: normalizedSourceName,
           fileName,
         });
+
+        if (!isVerifiedInventoryRow(mapped.verified)) {
+          summary.rows_skipped += 1;
+          continue;
+        }
 
         if (!mapped.stock_number && !mapped.vin) {
           throw new ValidationError("Each inventory row needs a stock number or VIN.");
@@ -264,6 +276,7 @@ async function importInventoryCsv({
 module.exports = {
   importInventoryCsv,
   importInventoryRows,
+  isVerifiedInventoryRow,
   mapInventoryRow,
   parseInventoryFeed,
 };
