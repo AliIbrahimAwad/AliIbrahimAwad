@@ -386,3 +386,57 @@ test("lead inbox importer creates an 'Other' intake item instead of ignoring unk
   assert.equal(intakeItems[0].status, "open");
   assert.equal(importedMessages[0].matched_reason, "other");
 });
+
+test("lead inbox importer normalizes missing customer names to NN Lead", async () => {
+  const intakeItems = [];
+  const createdLeads = [];
+  const importer = await createLeadInboxService({
+    db: {
+      async getImportedMessageByExternalId() {
+        return null;
+      },
+      async createApiLead(payload) {
+        createdLeads.push(payload);
+        return { id: 44, customer_name: payload.customer_name, assigned_to: null, inventory_id: null };
+      },
+      async createEmailIntakeItem(payload) {
+        intakeItems.push(payload);
+        return payload;
+      },
+      async recordImportedMessage(payload) {
+        return payload;
+      },
+    },
+    graph: {
+      async markProcessed() {},
+    },
+  });
+
+  await importer.importMessage({
+    id: "message-3",
+    internetMessageId: "<message-3@example.com>",
+    subject: "Lead Submission from CarGurus",
+    receivedDateTime: "2026-03-26T18:57:02.000Z",
+    from: {
+      emailAddress: {
+        address: "dealer-leads@messages.cargurus.com",
+      },
+    },
+    body: {
+      contentType: "text",
+      content: `Lead Submission from CarGurus
+
+Contact:
+First Name: Name
+Last Name: Unknown
+Telephone: (902) 322-1405
+
+Listing:
+Vehicle: 2018 Tesla Model 3
+Stock Number: D9756`,
+    },
+  });
+
+  assert.equal(createdLeads[0].customer_name, "NN Lead");
+  assert.equal(intakeItems[0].customer_name, "NN Lead");
+});

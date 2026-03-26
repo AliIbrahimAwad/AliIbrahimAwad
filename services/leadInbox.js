@@ -1,3 +1,5 @@
+const { normalizeLeadCustomerName } = require("../src/utils/leadNames");
+
 function decodeHtmlEntities(text) {
   return String(text || "")
     .replace(/&nbsp;/gi, " ")
@@ -632,9 +634,9 @@ function buildIntakePayload(message, parsed, classification, lead = null) {
     status: classification === "direct_lead" ? deriveIntakeStatusFromLead(lead) : "open",
     assigned_to: lead?.assigned_to || null,
     lead_id: lead?.id || null,
-    customer_name: parsed.customer_name || null,
-    phone: parsed.phone || null,
-    email: parsed.email || null,
+    customer_name: lead?.customer_name || parsed.customer_name || null,
+    phone: lead?.phone || parsed.phone || null,
+    email: lead?.email || parsed.email || null,
     stock_number: lead?.stock_number || parsed.stock_number || null,
     inventory_id: lead?.inventory_id || null,
     vehicle_display: vehicleDisplay || null,
@@ -662,7 +664,11 @@ async function createLeadInboxService({ db, graph }) {
     }
 
     const text = normalizeContent(message);
-    const parsedLead = parseLeadEmail(message) || buildGenericEmailParse(message, text);
+    const parsedCandidate = parseLeadEmail(message) || buildGenericEmailParse(message, text);
+    const parsedLead = {
+      ...parsedCandidate,
+      customer_name: normalizeLeadCustomerName(parsedCandidate.customer_name || ""),
+    };
     const classification = classifyParsedEmail(parsedLead, message, text);
     let lead = null;
     let duplicate = null;

@@ -62,6 +62,13 @@ export function assignLead(id, assignedTo) {
   });
 }
 
+export function updateLead(id, payload) {
+  return request(`/api/leads/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getDashboardMetrics() {
   return request("/api/dashboard/metrics");
 }

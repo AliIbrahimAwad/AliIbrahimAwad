@@ -45,9 +45,11 @@ import {
   resolveEmailIntakeItem,
   sendLeadSms,
   syncInventoryNow,
+  updateLead,
   updateLeadStatus,
 } from "./lib/api";
 import { formatPhoneNumber, pipelineLabel } from "./lib/format";
+import { splitCustomerNameParts } from "./lib/leadNames";
 
 const organizedGroups = ["contacted", "appointment", "negotiation", "sold", "lost"];
 
@@ -81,9 +83,12 @@ function formatRelative(dateString) {
 }
 
 function formatLead(lead) {
+  const splitName = splitCustomerNameParts(lead.customer_name || "");
   return {
     id: lead.id,
     customerName: lead.customer_name,
+    firstName: splitName.firstName,
+    lastName: splitName.lastName,
     assignedTo: lead.assigned_to ?? null,
     inventoryId: lead.inventory_id ?? null,
     rawPhone: lead.phone || "",
@@ -392,6 +397,7 @@ export default function App() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [assignmentUpdating, setAssignmentUpdating] = useState(false);
+  const [leadUpdating, setLeadUpdating] = useState(false);
   const [callLogging, setCallLogging] = useState(false);
     const [holdSubmitting, setHoldSubmitting] = useState(false);
     const [smsSending, setSmsSending] = useState(false);
@@ -1061,6 +1067,58 @@ export default function App() {
       setError(assignError.message || "Unable to assign lead.");
     } finally {
       setAssignmentUpdating(false);
+    }
+  }
+
+  async function handleLeadUpdate(input) {
+    if (!selectedLeadId || !selectedLead) {
+      return;
+    }
+
+    try {
+      setLeadUpdating(true);
+      const payload = await updateLead(selectedLeadId, {
+        customer_name: input.customer_name,
+        first_name: input.first_name,
+        last_name: input.last_name,
+        phone: input.phone ?? selectedLead.rawPhone,
+        email: input.email ?? (selectedLead.email === "No email on file" ? "" : selectedLead.email),
+        stock_number: input.stock_number ?? selectedLead.stockNumber,
+        message: input.message ?? (selectedLead.message === "No message captured yet." ? "" : selectedLead.message),
+        source: selectedLead.source.toLowerCase(),
+        status: selectedLead.status,
+        vehicle_interest: selectedLead.vehicleInterest === "Vehicle inquiry" ? "" : selectedLead.vehicleInterest,
+        vehicle_id: selectedLead.inventory?.vin || "",
+        vehicle_year: selectedLead.vehicleYear,
+        vehicle_make: selectedLead.vehicleMake,
+        vehicle_model: selectedLead.vehicleModel,
+        vehicle_trim: selectedLead.vehicleTrim,
+        vehicle_condition: selectedLead.vehicleCondition,
+        vehicle_price: selectedLead.vehiclePrice,
+        lead_type: selectedLead.leadType,
+        listing_url: selectedLead.listingUrl,
+      });
+      const nextLead = {
+        ...formatLead(payload),
+        activities: selectedLeadDetails?.activities || [],
+        timeline: selectedLeadDetails?.timeline || [],
+        tasks: selectedLeadDetails?.tasks || [],
+      };
+      setSelectedLeadDetails(nextLead);
+      await refreshWorklist();
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary();
+      }
+      if (conversationFeedLoaded) {
+        await loadConversationFeed();
+      }
+      setError("");
+      return nextLead;
+    } catch (updateError) {
+      setError(updateError.message || "Unable to update lead details.");
+      throw updateError;
+    } finally {
+      setLeadUpdating(false);
     }
   }
 
@@ -1953,7 +2011,9 @@ export default function App() {
                     assignees={assignees}
                     assigneesLoading={assigneesLoading}
                     assignmentUpdating={assignmentUpdating}
+                    leadUpdating={leadUpdating}
                     onAssignLead={handleAssignLead}
+                    onUpdateLead={handleLeadUpdate}
                     onCompleteTask={handleCompleteTask}
                     taskCompletingId={taskCompletingId}
                     onSendSms={handleSendSms}

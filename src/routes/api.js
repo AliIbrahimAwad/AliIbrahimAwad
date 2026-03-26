@@ -3,6 +3,7 @@ const { requireAuth } = require("../middleware/auth");
 const { ValidationError } = require("../data/core");
 const { normalizePhone } = require("../utils/phones");
 const { toDateOnlyString } = require("../utils/dates");
+const { buildCustomerNameFromParts, normalizeLeadCustomerName, splitCustomerNameParts } = require("../utils/leadNames");
 const { asyncHandler } = require("./helpers");
 const { importInventoryCsv } = require("../../services/inventoryImport");
 
@@ -16,13 +17,21 @@ function toPagination(query = {}) {
 }
 
 function normalizeLeadPayload(body = {}) {
-  const customerName = String(body.customer_name || body.customerName || body.name || "").trim();
+  const splitName = splitCustomerNameParts(
+    String(body.customer_name || body.customerName || body.name || "").trim()
+  );
+  const customerName = buildCustomerNameFromParts(
+    body.first_name || body.firstName || splitName.firstName || "",
+    body.last_name || body.lastName || splitName.lastName || "",
+    "NN Lead"
+  );
   const email = String(body.email || "").trim();
   const phone = String(body.phone || "").trim();
   const vehicleInterest = String(body.vehicle_interest || body.vehicleInterest || body.vehicle || "").trim();
   const source = String(body.source || "website").trim().toLowerCase();
+  const hasUsableName = Boolean(customerName && customerName !== "NN Lead");
 
-  if (!customerName && !email && !phone) {
+  if (!hasUsableName && !email && !phone) {
     throw new ValidationError("At least one contact field is required.");
   }
 
@@ -164,13 +173,15 @@ function normalizeFluentFormsWebhookPayload(body = {}) {
     ])
   );
   const combinedName = getFirstNonEmpty([firstName, lastName].filter(Boolean).join(" "));
-  const customerName = getFirstNonEmpty(
-    combinedName,
+  const customerName = normalizeLeadCustomerName(
+    getFirstNonEmpty(
+      combinedName,
     body.customer_name,
     body.customerName,
     body.name,
     body.input_text,
     userInputs.input_text
+    )
   );
   const email = getFirstNonEmpty(body.email, userInputs.email);
   const phone = getFirstNonEmpty(body.phone, userInputs.phone);
@@ -206,8 +217,16 @@ function normalizeFluentFormsWebhookPayload(body = {}) {
 }
 
 function normalizeUnmatchedLeadPayload(body = {}) {
+  const splitName = splitCustomerNameParts(
+    String(body.customer_name || body.customerName || body.name || "").trim()
+  );
+
   return {
-    customer_name: String(body.customer_name || body.name || "").trim() || null,
+    customer_name: buildCustomerNameFromParts(
+      body.first_name || body.firstName || splitName.firstName || "",
+      body.last_name || body.lastName || splitName.lastName || "",
+      "NN Lead"
+    ),
   };
 }
 
@@ -268,8 +287,16 @@ function normalizeEmailIntakeFilters(query = {}) {
 }
 
 function normalizeEmailIntakeConversionPayload(body = {}) {
+  const splitName = splitCustomerNameParts(
+    String(body.customer_name || body.customerName || body.name || "").trim()
+  );
+
   return {
-    customer_name: String(body.customer_name || body.customerName || "").trim() || null,
+    customer_name: buildCustomerNameFromParts(
+      body.first_name || body.firstName || splitName.firstName || "",
+      body.last_name || body.lastName || splitName.lastName || "",
+      "NN Lead"
+    ),
     message: String(body.message || "").trim() || null,
     assigned_to: body.assigned_to || body.assignedTo || null,
   };

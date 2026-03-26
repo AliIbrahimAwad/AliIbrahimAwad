@@ -19,6 +19,7 @@ const { canViewAllLeads } = require("../models/user");
 const { LEAD_ACTIVITY_TYPES } = require("../types/models");
 const { normalizePhone } = require("../utils/phones");
 const { toDateOnlyString } = require("../utils/dates");
+const { normalizeLeadCustomerName } = require("../utils/leadNames");
 
 function normalizeLeadPhoneForStorage(value) {
   return normalizePhone(value) || null;
@@ -61,7 +62,12 @@ function normalizeComparableText(value) {
 
 function isWeakLeadName(value) {
   const normalized = normalizeComparableText(value);
-  return !normalized || normalized.startsWith("lead #") || normalized.includes("@");
+  return (
+    !normalized ||
+    normalized.startsWith("lead #") ||
+    normalized.includes("@") ||
+    normalizeLeadCustomerName(value || "", "NN Lead").toLowerCase() === "nn lead"
+  );
 }
 
 function isWeakLeadEmail(value) {
@@ -2302,7 +2308,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
             inventory_id,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           RETURNING id
         `,
         [
@@ -2890,7 +2896,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
   normalizeLeadPayloadForStorage(input = {}, inventory = null) {
     if (!inventory) {
       return {
-        customer_name: input.customer_name || null,
+        customer_name: normalizeLeadCustomerName(input.customer_name || "", "NN Lead"),
         phone: input.phone || null,
         email: input.email || null,
         vehicle_interest: input.vehicle_interest || null,
@@ -2906,7 +2912,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     }
 
     return {
-      customer_name: input.customer_name || null,
+      customer_name: normalizeLeadCustomerName(input.customer_name || "", "NN Lead"),
       phone: input.phone || null,
       email: input.email || null,
       vehicle_interest: buildVehicleDisplay(inventory) || input.vehicle_interest || null,

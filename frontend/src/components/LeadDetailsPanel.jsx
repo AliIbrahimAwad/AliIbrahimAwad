@@ -50,7 +50,9 @@ export function LeadDetailsPanel({
   assignees = [],
   assigneesLoading = false,
   assignmentUpdating = false,
+  leadUpdating = false,
   onAssignLead,
+  onUpdateLead,
   onCompleteTask,
   taskCompletingId = null,
   onSendSms,
@@ -64,6 +66,15 @@ export function LeadDetailsPanel({
   const [smsDraft, setSmsDraft] = useState("");
   const [smsComposerOpen, setSmsComposerOpen] = useState(false);
   const [actionNotice, setActionNotice] = useState("");
+  const [editingLead, setEditingLead] = useState(false);
+  const [leadForm, setLeadForm] = useState({
+    firstName: "",
+    lastName: "",
+    phone: "",
+    email: "",
+    stockNumber: "",
+    message: "",
+  });
   const smsComposerRef = useRef(null);
 
   useEffect(() => {
@@ -74,6 +85,15 @@ export function LeadDetailsPanel({
     setSmsDraft("");
     setSmsComposerOpen(false);
     setActionNotice("");
+    setEditingLead(false);
+    setLeadForm({
+      firstName: lead?.firstName || "",
+      lastName: lead?.lastName || "",
+      phone: lead?.rawPhone || "",
+      email: lead?.email && lead.email !== "No email on file" ? lead.email : "",
+      stockNumber: lead?.stockNumber || "",
+      message: lead?.message && lead.message !== "No message captured yet." ? lead.message : "",
+    });
   }, [lead?.id]);
 
   useEffect(() => {
@@ -202,6 +222,97 @@ export function LeadDetailsPanel({
           </div>
         </div>
       ) : null}
+
+      <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-5">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-white">Lead details</p>
+            <p className="mt-1 text-xs text-slate-400">
+              Fix missing info when the provider sends partial data. If both name fields are empty, the CRM stores
+              <span className="font-semibold text-slate-200"> NN Lead</span>.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setEditingLead((value) => !value)}
+            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+          >
+            {editingLead ? "Close" : "Edit details"}
+          </button>
+        </div>
+
+        {editingLead ? (
+          <div className="mt-4 grid gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <input
+                value={leadForm.firstName}
+                onChange={(event) => setLeadForm((current) => ({ ...current, firstName: event.target.value }))}
+                placeholder="First name"
+                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+              />
+              <input
+                value={leadForm.lastName}
+                onChange={(event) => setLeadForm((current) => ({ ...current, lastName: event.target.value }))}
+                placeholder="Last name"
+                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <input
+                value={leadForm.phone}
+                onChange={(event) => setLeadForm((current) => ({ ...current, phone: event.target.value }))}
+                placeholder="Phone number"
+                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+              />
+              <input
+                value={leadForm.email}
+                onChange={(event) => setLeadForm((current) => ({ ...current, email: event.target.value }))}
+                placeholder="Email"
+                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+              />
+            </div>
+            <input
+              value={leadForm.stockNumber}
+              onChange={(event) => setLeadForm((current) => ({ ...current, stockNumber: event.target.value }))}
+              placeholder="Stock number"
+              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+            />
+            <textarea
+              value={leadForm.message}
+              onChange={(event) => setLeadForm((current) => ({ ...current, message: event.target.value }))}
+              placeholder="Customer message"
+              rows={4}
+              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+            />
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await onUpdateLead?.({
+                      first_name: leadForm.firstName,
+                      last_name: leadForm.lastName,
+                      customer_name: [leadForm.firstName, leadForm.lastName].filter(Boolean).join(" "),
+                      phone: leadForm.phone,
+                      email: leadForm.email,
+                      stock_number: leadForm.stockNumber,
+                      message: leadForm.message,
+                    });
+                    setEditingLead(false);
+                    setActionNotice("Lead details updated.");
+                  } catch (_error) {
+                    // The parent surfaces API errors, so we keep the form open here.
+                  }
+                }}
+                disabled={leadUpdating}
+                className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-slate-100 disabled:cursor-wait disabled:opacity-60"
+              >
+                {leadUpdating ? "Saving..." : "Save details"}
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
 
       <div className={`mt-6 grid gap-3 ${isSalesUser ? "sm:grid-cols-2" : "sm:grid-cols-2"}`}>
         <InfoBlock label="Phone" value={lead.phone} />
