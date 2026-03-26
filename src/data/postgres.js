@@ -3114,8 +3114,21 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       return 0;
     }
 
+    const inventory = await this.get(
+      `
+        SELECT *
+        FROM inventory
+        WHERE id = ? AND dealership_id = ?
+      `,
+      [inventoryId, dealershipId]
+    );
+    if (!inventory) {
+      return 0;
+    }
+
     const clauses = [];
     const params = [];
+    const now = new Date().toISOString();
     if (stockNumber) {
       clauses.push("UPPER(BTRIM(COALESCE(stock_number, ''))) = ?");
       params.push(stockNumber);
@@ -3128,13 +3141,41 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     const rows = await this.all(
       `
         UPDATE leads
-        SET inventory_id = ?, updated_at = ?
+        SET
+          inventory_id = ?,
+          stock_number = COALESCE(?, stock_number),
+          vehicle_id = COALESCE(?, vehicle_id),
+          vehicle_year = COALESCE(?, vehicle_year),
+          vehicle_make = COALESCE(?, vehicle_make),
+          vehicle_model = COALESCE(?, vehicle_model),
+          vehicle_trim = COALESCE(?, vehicle_trim),
+          vehicle_condition = COALESCE(?, vehicle_condition),
+          vehicle_price = COALESCE(?, vehicle_price),
+          vehicle_interest = COALESCE(?, vehicle_interest),
+          updated_at = ?
         WHERE dealership_id = ?
-          AND (${clauses.join(" OR ")})
-          AND COALESCE(inventory_id, 0) <> ?
+          AND (
+            COALESCE(inventory_id, 0) = ?
+            OR ${clauses.join(" OR ")}
+          )
         RETURNING id
       `,
-      [inventoryId, new Date().toISOString(), dealershipId, ...params, inventoryId]
+      [
+        inventoryId,
+        inventory.stock_number || null,
+        inventory.vin || null,
+        inventory.year == null ? null : String(inventory.year),
+        inventory.make || null,
+        inventory.model || null,
+        inventory.trim || null,
+        inventory.condition || null,
+        inventory.price == null ? null : String(inventory.price),
+        buildVehicleDisplay(inventory) || null,
+        now,
+        dealershipId,
+        inventoryId,
+        ...params,
+      ]
     );
 
     return rows.length;
