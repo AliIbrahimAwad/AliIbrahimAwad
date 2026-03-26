@@ -147,22 +147,18 @@ export function LeadDetailsPanel({
     <aside className="rounded-[2rem] border border-white/10 bg-ink-900/85 p-6 shadow-card backdrop-blur">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          {!isSalesUser ? (
-            <p className="text-xs uppercase tracking-[0.28em] text-slate-500">{lead.sourceDetail || lead.source}</p>
-          ) : null}
+          <p className="text-xs uppercase tracking-[0.28em] text-slate-500">{lead.sourceDetail || lead.source}</p>
           <h2 className="mt-2 font-display text-2xl font-semibold text-white">{lead.customerName}</h2>
           <p className="mt-1 text-sm text-slate-300">{vehicleLabel}</p>
         </div>
-        {!isSalesUser ? (
-          <div className="flex items-center gap-2">
-            <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${statusTone(lead.status)}`}>
-              {lead.statusLabel}
-            </span>
-            <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${sourceTone(lead.source)}`}>
-              {lead.source}
-            </span>
-          </div>
-        ) : null}
+        <div className="flex items-center gap-2">
+          <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${statusTone(lead.status)}`}>
+            {lead.statusLabel}
+          </span>
+          <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${sourceTone(lead.source)}`}>
+            {lead.source}
+          </span>
+        </div>
       </div>
 
       {canEditStatus ? (
@@ -319,33 +315,30 @@ export function LeadDetailsPanel({
         <InfoBlock label="Email" value={lead.email} />
         <InfoBlock label="Stock Number" value={lead.stockNumber} />
         <InfoBlock label="Vehicle" value={vehicleLabel} />
-        {!isSalesUser ? <InfoBlock label="Year" value={lead.vehicleYear} /> : null}
-        {!isSalesUser ? <InfoBlock label="Make" value={lead.vehicleMake} /> : null}
-        {!isSalesUser ? <InfoBlock label="Model" value={lead.vehicleModel} /> : null}
-        {!isSalesUser ? <InfoBlock label="Trim" value={lead.vehicleTrim} /> : null}
-        {!isSalesUser ? <InfoBlock label="Condition" value={lead.vehicleCondition} /> : null}
-        {!isSalesUser ? <InfoBlock label="Price" value={lead.vehiclePrice} /> : null}
+        <InfoBlock label="Year" value={lead.vehicleYear} />
+        <InfoBlock label="Make" value={lead.vehicleMake} />
+        <InfoBlock label="Model" value={lead.vehicleModel} />
+        <InfoBlock label="Trim" value={lead.vehicleTrim} />
+        <InfoBlock label="Price" value={lead.vehiclePrice} />
         {!isSalesUser ? <InfoBlock label="Assigned Rep" value={lead.assignedRep} /> : null}
-        {!isSalesUser ? <InfoBlock label="Source" value={lead.sourceDetail || lead.source} /> : null}
+        <InfoBlock label="Source" value={lead.sourceDetail || lead.source} />
       </div>
 
-      {!isSalesUser ? (
-        <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <CarFront className="h-4 w-4 text-ice-300" />
-            Linked inventory
-          </div>
-          <p className="mt-3 text-sm leading-6 text-slate-300">
-            {lead.inventory
-              ? `${[lead.inventory.year, lead.inventory.make, lead.inventory.model, lead.inventory.trim]
-                  .filter(Boolean)
-                  .join(" ")}${lead.inventory.stockNumber ? ` | Stock ${lead.inventory.stockNumber}` : ""}${
-                  lead.inventory.vin ? ` | VIN ${lead.inventory.vin}` : ""
-                }`
-              : "No structured inventory unit linked yet. Inventory links automatically when the lead stock number or VIN matches a unit."}
-          </p>
+      <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+        <div className="flex items-center gap-2 text-sm font-semibold text-white">
+          <CarFront className="h-4 w-4 text-ice-300" />
+          Linked inventory
         </div>
-      ) : null}
+        <p className="mt-3 text-sm leading-6 text-slate-300">
+          {lead.inventory
+            ? `${[lead.inventory.year, lead.inventory.make, lead.inventory.model, lead.inventory.trim]
+                .filter(Boolean)
+                .join(" ")}${lead.inventory.stockNumber ? ` | Stock ${lead.inventory.stockNumber}` : ""}${
+                lead.inventory.vin ? ` | VIN ${lead.inventory.vin}` : ""
+              }`
+            : "No structured inventory unit linked yet. Inventory links automatically when the lead stock number or VIN matches a unit."}
+        </p>
+      </div>
 
       <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-gradient-to-br from-white/8 to-white/[0.03] p-5">
         <div className="flex items-center gap-2 text-sm font-semibold text-white">

@@ -1,5 +1,5 @@
 import { startTransition, useDeferredValue, useEffect, useState } from "react";
-import { Menu, Search, SlidersHorizontal } from "lucide-react";
+import { Menu, Search, SlidersHorizontal, X } from "lucide-react";
 
 import { AttentionLeadCard } from "./components/AttentionLeadCard";
 import { EmailIntakePanel } from "./components/EmailIntakePanel";
@@ -371,6 +371,7 @@ export default function App() {
   const [notifications, setNotifications] = useState([]);
   const [metrics, setMetrics] = useState(emptyMetrics);
   const [selectedLeadId, setSelectedLeadId] = useState(null);
+  const [leadModalOpen, setLeadModalOpen] = useState(false);
   const [selectedLeadDetails, setSelectedLeadDetails] = useState(null);
   const [selectedUnmatchedId, setSelectedUnmatchedId] = useState(null);
   const [activeSection, setActiveSection] = useState("Dashboard");
@@ -431,6 +432,27 @@ export default function App() {
     role: "sales",
   });
   const deferredQuery = useDeferredValue(query);
+  const showLeadModal = leadModalOpen && !["Analytics", "Unmatched", "Intake"].includes(activeSection) && Boolean(selectedLeadId);
+
+  useEffect(() => {
+    if (!showLeadModal) {
+      return undefined;
+    }
+
+    const handleEscape = (event) => {
+      if (event.key === "Escape") {
+        setLeadModalOpen(false);
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [showLeadModal]);
 
   async function refreshWorklist({ preserveSelection = true } = {}) {
     const payload = await getDashboardWorklist();
@@ -1699,7 +1721,7 @@ export default function App() {
               </div>
             </section>
           ) : (
-            <section className="mt-6 grid gap-6 2xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]">
+            <section className={`mt-6 grid gap-6 ${showUnmatched ? "2xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]" : ""}`}>
               <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 sm:p-5">
                 {showDashboard ? (
                   <>
@@ -1727,6 +1749,7 @@ export default function App() {
                             onSelect={() => {
                               startTransition(() => {
                                 setSelectedLeadId(lead.id);
+                                setLeadModalOpen(true);
                               });
                             }}
                           />
@@ -1814,6 +1837,7 @@ export default function App() {
                                     onSelect={() => {
                                       startTransition(() => {
                                         setSelectedLeadId(lead.id);
+                                        setLeadModalOpen(true);
                                       });
                                     }}
                                   />
@@ -1925,7 +1949,10 @@ export default function App() {
                           <button
                             key={item.id}
                             type="button"
-                            onClick={() => setSelectedLeadId(item.leadId)}
+                            onClick={() => {
+                              setSelectedLeadId(item.leadId);
+                              setLeadModalOpen(true);
+                            }}
                             className={`w-full rounded-[1.75rem] border p-5 text-left transition ${
                               Number(item.leadId) === Number(selectedLead?.id)
                                 ? "border-ice-400/40 bg-white/10 shadow-glow"
@@ -1999,32 +2026,6 @@ export default function App() {
                 ) : null}
               </div>
 
-              {!showAnalytics && !showUnmatched && !showIntake ? (
-                <div className="2xl:sticky 2xl:top-6 2xl:self-start">
-                  <LeadDetailsPanel
-                    lead={selectedLead}
-                    currentUserRole={currentUser?.role}
-                    loading={detailLoading}
-                    onStatusChange={handleStatusChange}
-                    statusUpdating={statusUpdating}
-                    canAssign={currentUser?.role === "admin" || currentUser?.role === "manager"}
-                    assignees={assignees}
-                    assigneesLoading={assigneesLoading}
-                    assignmentUpdating={assignmentUpdating}
-                    leadUpdating={leadUpdating}
-                    onAssignLead={handleAssignLead}
-                    onUpdateLead={handleLeadUpdate}
-                    onCompleteTask={handleCompleteTask}
-                    taskCompletingId={taskCompletingId}
-                    onSendSms={handleSendSms}
-                    smsSending={smsSending}
-                      onLogCall={handleLogCall}
-                      callLogging={callLogging}
-                      onHoldVehicle={handleHoldVehicle}
-                      holdSubmitting={holdSubmitting}
-                    />
-                  </div>
-                ) : null}
               {showUnmatched ? (
                 <div className="2xl:sticky 2xl:top-6 2xl:self-start">
                   <UnmatchedCommunicationPanel
@@ -2044,6 +2045,51 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {showLeadModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/82 px-4 py-6 backdrop-blur-sm">
+          <button
+            type="button"
+            aria-label="Close lead details"
+            className="absolute inset-0"
+            onClick={() => setLeadModalOpen(false)}
+          />
+          <div className="relative z-10 max-h-[92vh] w-full max-w-5xl overflow-y-auto">
+            <div className="mb-3 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setLeadModalOpen(false)}
+                className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-ink-900/90 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+              >
+                <X className="h-4 w-4" />
+                Close
+              </button>
+            </div>
+            <LeadDetailsPanel
+              lead={selectedLead}
+              currentUserRole={currentUser?.role}
+              loading={detailLoading}
+              onStatusChange={handleStatusChange}
+              statusUpdating={statusUpdating}
+              canAssign={currentUser?.role === "admin" || currentUser?.role === "manager"}
+              assignees={assignees}
+              assigneesLoading={assigneesLoading}
+              assignmentUpdating={assignmentUpdating}
+              leadUpdating={leadUpdating}
+              onAssignLead={handleAssignLead}
+              onUpdateLead={handleLeadUpdate}
+              onCompleteTask={handleCompleteTask}
+              taskCompletingId={taskCompletingId}
+              onSendSms={handleSendSms}
+              smsSending={smsSending}
+              onLogCall={handleLogCall}
+              callLogging={callLogging}
+              onHoldVehicle={handleHoldVehicle}
+              holdSubmitting={holdSubmitting}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
