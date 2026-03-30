@@ -12,7 +12,6 @@ import {
 
 const sections = [
   { label: "Dashboard", icon: LayoutDashboard },
-  { label: "Intake", icon: BellRing },
   { label: "Leads", icon: ClipboardList },
   { label: "Unmatched", icon: AlertCircle },
   { label: "Inventory", icon: CarFront },
@@ -24,10 +23,6 @@ const sections = [
 export function Sidebar({ activeSection = "Dashboard", onSelectSection, currentUser }) {
   const visibleSections = sections.filter((section) => {
     if (section.label === "Team") {
-      return currentUser?.role === "admin" || currentUser?.role === "manager";
-    }
-
-    if (section.label === "Intake") {
       return currentUser?.role === "admin" || currentUser?.role === "manager";
     }
 

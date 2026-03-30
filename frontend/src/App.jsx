@@ -2,7 +2,6 @@ import { startTransition, useDeferredValue, useEffect, useState } from "react";
 import { Menu, Search, SlidersHorizontal, X } from "lucide-react";
 
 import { AttentionLeadCard } from "./components/AttentionLeadCard";
-import { EmailIntakePanel } from "./components/EmailIntakePanel";
 import { InventoryPanel } from "./components/InventoryPanel";
 import { LeadCard } from "./components/LeadCard";
 import { LeadDetailsPanel } from "./components/LeadDetailsPanel";
@@ -15,15 +14,11 @@ import { UnmatchedCommunicationPanel } from "./components/UnmatchedCommunication
 import {
   assignUnmatchedCommunication,
   assignLead,
-  assignEmailIntakeItem,
   completeTask,
-  convertEmailIntakeItem,
   createUser,
   createLeadFromUnmatched,
   dismissUnmatchedCommunication,
   deleteUser,
-  getEmailIntakeItems,
-  getEmailIntakeSummary,
   getAssignableUsers,
   getConversations,
   getDashboardWorklist,
@@ -38,11 +33,10 @@ import {
     importInventory,
     getSession,
     getUsers,
-    login,
+  login,
   logLeadCall,
   logout,
   markNotificationRead,
-  resolveEmailIntakeItem,
   sendLeadSms,
   syncInventoryNow,
   updateUserAvailability,
@@ -277,30 +271,6 @@ function formatInventoryImportError(item) {
   };
 }
 
-function formatEmailIntakeItem(item) {
-  return {
-    id: item.id,
-    externalId: item.external_id,
-    source: capitalizeSource(item.source),
-    subject: item.subject || "",
-    sender: item.sender || "",
-    message: item.message || "",
-    receivedAt: item.received_at || null,
-    classification: item.classification || "other",
-    status: item.status || "open",
-    assignedTo: item.assigned_to ?? null,
-    assignedRep: item.assigned_user_name || "Unassigned",
-    leadId: item.lead_id ?? null,
-    customerName: item.customer_name || "",
-    phone: item.phone ? formatPhoneNumber(item.phone) : "Not available",
-    rawPhone: item.phone || "",
-    email: item.email || "No email captured",
-    stockNumber: item.stock_number || "",
-    inventoryId: item.inventory_id ?? null,
-    vehicleDisplay: item.vehicle_display || "Vehicle not matched",
-  };
-}
-
 function buildAnalyticsSnapshot({
   leadLibrary = [],
   attentionLeads = [],
@@ -361,12 +331,6 @@ export default function App() {
   const [inventoryImportRuns, setInventoryImportRuns] = useState([]);
   const [inventorySyncStatus, setInventorySyncStatus] = useState(null);
   const [inventoryImportErrors, setInventoryImportErrors] = useState([]);
-  const [emailIntakeItems, setEmailIntakeItems] = useState([]);
-  const [emailIntakeSummary, setEmailIntakeSummary] = useState({
-    direct_leads_pending: 0,
-    others_pending: 0,
-  });
-  const [emailIntakeTab, setEmailIntakeTab] = useState("direct_lead");
   const [unmatchedItems, setUnmatchedItems] = useState([]);
   const [conversationFeed, setConversationFeed] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -391,7 +355,6 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [inventoryLoading, setInventoryLoading] = useState(false);
-  const [emailIntakeLoading, setEmailIntakeLoading] = useState(false);
   const [unmatchedLoading, setUnmatchedLoading] = useState(false);
   const [conversationLoading, setConversationLoading] = useState(false);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -405,9 +368,6 @@ export default function App() {
     const [smsSending, setSmsSending] = useState(false);
     const [inventoryImporting, setInventoryImporting] = useState(false);
     const [inventorySyncing, setInventorySyncing] = useState(false);
-    const [emailIntakeAssigningId, setEmailIntakeAssigningId] = useState(null);
-  const [emailIntakeResolvingId, setEmailIntakeResolvingId] = useState(null);
-  const [emailIntakeConvertingId, setEmailIntakeConvertingId] = useState(null);
   const [unmatchedAssigning, setUnmatchedAssigning] = useState(false);
   const [unmatchedCreating, setUnmatchedCreating] = useState(false);
   const [unmatchedDismissing, setUnmatchedDismissing] = useState(false);
@@ -419,7 +379,6 @@ export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [leadLibraryLoaded, setLeadLibraryLoaded] = useState(false);
   const [inventoryLoaded, setInventoryLoaded] = useState(false);
-  const [emailIntakeLoaded, setEmailIntakeLoaded] = useState(false);
   const [unmatchedLoaded, setUnmatchedLoaded] = useState(false);
   const [conversationFeedLoaded, setConversationFeedLoaded] = useState(false);
   const [error, setError] = useState("");
@@ -434,7 +393,17 @@ export default function App() {
     role: "sales",
   });
   const deferredQuery = useDeferredValue(query);
-  const showLeadModal = leadModalOpen && !["Analytics", "Unmatched", "Intake"].includes(activeSection) && Boolean(selectedLeadId);
+  const showLeadModal = leadModalOpen && !["Analytics", "Unmatched"].includes(activeSection) && Boolean(selectedLeadId);
+
+  useEffect(() => {
+    if (activeSection !== "Intake") {
+      return;
+    }
+
+    startTransition(() => {
+      setActiveSection("Leads");
+    });
+  }, [activeSection]);
 
   useEffect(() => {
     if (!showLeadModal) {
@@ -536,26 +505,6 @@ export default function App() {
       await loadInventoryData();
     } finally {
       setInventorySyncing(false);
-    }
-  }
-
-  async function loadEmailIntakeData() {
-    setEmailIntakeLoading(true);
-    try {
-      const [itemsPayload, summaryPayload] = await Promise.all([
-        getEmailIntakeItems({
-          classification: emailIntakeTab,
-          pending_only: true,
-          limit: 200,
-        }),
-        getEmailIntakeSummary(),
-      ]);
-
-      setEmailIntakeItems((itemsPayload.items || []).map(formatEmailIntakeItem));
-      setEmailIntakeSummary(summaryPayload || { direct_leads_pending: 0, others_pending: 0 });
-      setEmailIntakeLoaded(true);
-    } finally {
-      setEmailIntakeLoading(false);
     }
   }
 
@@ -697,10 +646,6 @@ export default function App() {
 
     async function loadSectionData() {
       try {
-        if (activeSection === "Intake" && !emailIntakeLoaded) {
-          await loadEmailIntakeData();
-        }
-
         if (["Leads", "Analytics", "Unmatched"].includes(activeSection) && !leadLibraryLoaded) {
           await loadLeadLibrary();
         }
@@ -724,31 +669,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeSection, authStatus, conversationFeedLoaded, emailIntakeLoaded, leadLibraryLoaded, inventoryLoaded]);
-
-  useEffect(() => {
-    if (authStatus !== "authenticated" || activeSection !== "Intake") {
-      return;
-    }
-
-    let cancelled = false;
-
-    async function refreshIntake() {
-      try {
-        await loadEmailIntakeData();
-      } catch (loadError) {
-        if (!cancelled) {
-          setError(loadError.message || "Unable to load email intake.");
-        }
-      }
-    }
-
-    refreshIntake();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSection, authStatus, emailIntakeTab]);
+  }, [activeSection, authStatus, conversationFeedLoaded, leadLibraryLoaded, inventoryLoaded]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || activeSection !== "Inventory") {
@@ -995,21 +916,6 @@ export default function App() {
       .toLowerCase()
       .includes(search)
   );
-  const visibleEmailIntakeItems = emailIntakeItems.filter((item) =>
-    !search ||
-    [
-      item.customerName,
-      item.subject,
-      item.email,
-      item.phone,
-      item.stockNumber,
-      item.vehicleDisplay,
-      item.message,
-    ]
-      .join(" ")
-      .toLowerCase()
-      .includes(search)
-  );
   const visibleInventoryItems = inventoryItems;
   const analytics = buildAnalyticsSnapshot({
     leadLibrary: visibleLeadLibrary,
@@ -1175,12 +1081,6 @@ export default function App() {
       setLeadLibrary([]);
       setInventoryItems([]);
       setInventoryImportRuns([]);
-      setEmailIntakeItems([]);
-      setEmailIntakeSummary({
-        direct_leads_pending: 0,
-        others_pending: 0,
-      });
-      setEmailIntakeTab("direct_lead");
       setOrganizedLeadGroups({
         contacted: [],
         appointment: [],
@@ -1196,7 +1096,6 @@ export default function App() {
       setNotifications([]);
       setLeadLibraryLoaded(false);
       setInventoryLoaded(false);
-      setEmailIntakeLoaded(false);
       setUnmatchedLoaded(false);
       setConversationFeedLoaded(false);
       setSelectedUnmatchedId(null);
@@ -1316,83 +1215,6 @@ export default function App() {
       setError(importError.message || "Unable to import inventory.");
     } finally {
       setInventoryImporting(false);
-    }
-  }
-
-  async function handleAssignEmailIntake(item, assignedTo) {
-    if (!item?.id || !assignedTo) {
-      return;
-    }
-
-    try {
-      setEmailIntakeAssigningId(item.id);
-      const payload = await assignEmailIntakeItem(item.id, assignedTo);
-      if (payload.lead) {
-        setSelectedLeadId(payload.lead.id);
-        setSelectedLeadDetails({
-          ...formatLead(payload.lead),
-          activities: (payload.activities || []).map(formatActivity),
-          timeline: (payload.timeline || []).map(formatTimelineItem),
-          tasks: payload.tasks || [],
-        });
-      }
-      await loadEmailIntakeData();
-      await refreshWorklist();
-      if (leadLibraryLoaded) {
-        await loadLeadLibrary();
-      }
-      setError("");
-    } catch (assignError) {
-      setError(assignError.message || "Unable to assign the intake lead.");
-    } finally {
-      setEmailIntakeAssigningId(null);
-    }
-  }
-
-  async function handleResolveEmailIntake(item) {
-    if (!item?.id) {
-      return;
-    }
-
-    try {
-      setEmailIntakeResolvingId(item.id);
-      await resolveEmailIntakeItem(item.id);
-      await loadEmailIntakeData();
-      setError("");
-    } catch (resolveError) {
-      setError(resolveError.message || "Unable to resolve this intake item.");
-    } finally {
-      setEmailIntakeResolvingId(null);
-    }
-  }
-
-  async function handleConvertEmailIntake(item, payload) {
-    if (!item?.id) {
-      return;
-    }
-
-    try {
-      setEmailIntakeConvertingId(item.id);
-      const response = await convertEmailIntakeItem(item.id, payload);
-      if (response.lead) {
-        setSelectedLeadId(response.lead.id);
-        setSelectedLeadDetails({
-          ...formatLead(response.lead),
-          activities: (response.activities || []).map(formatActivity),
-          timeline: (response.timeline || []).map(formatTimelineItem),
-          tasks: response.tasks || [],
-        });
-      }
-      await loadEmailIntakeData();
-      await refreshWorklist();
-      if (leadLibraryLoaded) {
-        await loadLeadLibrary();
-      }
-      setError("");
-    } catch (convertError) {
-      setError(convertError.message || "Unable to convert this intake item into a lead.");
-    } finally {
-      setEmailIntakeConvertingId(null);
     }
   }
 
@@ -1559,15 +1381,13 @@ export default function App() {
 
   const showTeam = activeSection === "Team" && (currentUser?.role === "admin" || currentUser?.role === "manager");
   const showDashboard = activeSection === "Dashboard";
-  const showIntake = activeSection === "Intake" && (currentUser?.role === "admin" || currentUser?.role === "manager");
   const showLeads = activeSection === "Leads";
   const showUnmatched = activeSection === "Unmatched";
   const showConversations = activeSection === "Conversations";
   const showInventory = activeSection === "Inventory";
   const showAnalytics = activeSection === "Analytics";
   const sectionTitle = {
-    Dashboard: "Sales execution",
-    Intake: "Email intake",
+    Dashboard: "Overview",
     Leads: "Lead pipeline",
     Unmatched: "Unmatched communications",
     Conversations: "Conversations",
@@ -1576,9 +1396,8 @@ export default function App() {
     Team: "Team management",
   }[activeSection];
   const sectionDescription = {
-    Dashboard: "Show only the leads that need a rep or manager to act right now.",
-    Intake: "Automatically ingested email traffic lands here first so managers can triage before reps work the lead.",
-    Leads: "Review the organized pipeline after urgent work is handled.",
+    Dashboard: "Track the desk at a glance without mixing the overview with the actual lead work queue.",
+    Leads: "Work every lead from one place, including urgent follow-ups and the organized pipeline.",
     Unmatched: "Capture inbound calls and SMS that did not match a lead, then resolve them into the CRM.",
     Conversations: "See the latest inbound and outbound communication in one place and jump straight into the lead record.",
     Inventory: "Manage real dealership inventory units, import CSV snapshots, and link leads to structured stock records.",
@@ -1761,72 +1580,72 @@ export default function App() {
             <section className={`mt-6 grid gap-6 ${showUnmatched ? "2xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]" : ""}`}>
               <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 sm:p-5">
                 {showDashboard ? (
-                  <>
-                    <div className="border-b border-white/10 pb-4">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Sales execution queue</p>
-                        <h2 className="mt-2 font-display text-2xl font-semibold text-white">Needs attention</h2>
-                        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
-                          Only leads that need follow-up, callback, task completion, or manager action belong here.
-                        </p>
+                  <div className="grid gap-4 xl:grid-cols-3">
+                    <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-5 xl:col-span-2">
+                      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Desk summary</p>
+                      <h2 className="mt-2 font-display text-2xl font-semibold text-white">Overview without the lead queue</h2>
+                      <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Needs attention</p>
+                          <p className="mt-2 text-3xl font-semibold text-white">{String(metrics.needs_attention_count).padStart(2, "0")}</p>
+                          <p className="mt-2 text-sm leading-6 text-slate-300">
+                            Work these from Leads so the overview page stays clean.
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Overdue tasks</p>
+                          <p className="mt-2 text-3xl font-semibold text-white">{String(metrics.overdue_task_count).padStart(2, "0")}</p>
+                          <p className="mt-2 text-sm leading-6 text-slate-300">
+                            Follow-ups that need a response from the desk today.
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Unread alerts</p>
+                          <p className="mt-2 text-3xl font-semibold text-white">{String(metrics.unread_notification_count).padStart(2, "0")}</p>
+                          <p className="mt-2 text-sm leading-6 text-slate-300">
+                            Notifications, escalations, and assignment changes.
+                          </p>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="mt-4 grid gap-4">
-                      {loading ? (
-                        Array.from({ length: 4 }).map((_, index) => (
-                          <div key={index} className="h-48 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
-                        ))
-                      ) : (
-                        visibleAttentionLeads.map((lead) => (
-                          <AttentionLeadCard
-                            key={lead.id}
-                            lead={lead}
-                            selected={lead.id === selectedLead?.id}
-                            onSelect={() => {
-                              startTransition(() => {
-                                setSelectedLeadId(lead.id);
-                                setLeadModalOpen(true);
-                              });
-                            }}
-                          />
-                        ))
-                      )}
-                      {!loading && visibleAttentionLeads.length === 0 ? (
-                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                          No leads require attention right now.
-                        </div>
-                      ) : null}
+                    <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-5">
+                      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Quick navigation</p>
+                      <div className="mt-4 space-y-3">
+                        <button
+                          type="button"
+                          onClick={() => setActiveSection("Leads")}
+                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
+                        >
+                          Open Leads
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveSection("Unmatched")}
+                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
+                        >
+                          Review Unmatched Communications
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveSection("Inventory")}
+                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
+                        >
+                          Open Inventory
+                        </button>
+                      </div>
                     </div>
-                  </>
-                ) : null}
-
-                {showIntake ? (
-                  <EmailIntakePanel
-                    items={visibleEmailIntakeItems}
-                    loading={emailIntakeLoading}
-                    activeTab={emailIntakeTab}
-                    summary={emailIntakeSummary}
-                    assignees={assignees}
-                    assigneesLoading={assigneesLoading}
-                    assigningId={emailIntakeAssigningId}
-                    resolvingId={emailIntakeResolvingId}
-                    convertingId={emailIntakeConvertingId}
-                    onSelectTab={setEmailIntakeTab}
-                    onAssign={handleAssignEmailIntake}
-                    onResolve={handleResolveEmailIntake}
-                    onConvert={handleConvertEmailIntake}
-                  />
+                  </div>
                 ) : null}
 
                 {showLeads ? (
                   <>
                     <div className="flex flex-col gap-4 border-b border-white/10 pb-4 lg:flex-row lg:items-end lg:justify-between">
                       <div>
-                        <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Organized pipeline</p>
+                        <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Unified lead workspace</p>
                         <h2 className="mt-2 font-display text-2xl font-semibold text-white">Lead library</h2>
                         <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
-                          Everything not demanding immediate action lives here, grouped by stage so the desk can work cleanly.
+                          Urgent follow-ups and the organized pipeline now live together here so managers work one lead queue instead of two.
                         </p>
                       </div>
                       <label className="grid gap-2 lg:min-w-[220px]">
@@ -1852,22 +1671,22 @@ export default function App() {
                         Array.from({ length: 4 }).map((_, index) => (
                           <div key={index} className="h-44 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
                         ))
-                      ) : flattenedOrganizedLeads.length ? (
-                        organizedGroups.map((group) =>
-                          filteredOrganizedGroups[group]?.length ? (
-                            <div key={group} className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
-                              <div className="mb-4 flex items-center justify-between gap-3">
-                                <div>
-                                  <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Stage</p>
-                                  <h3 className="mt-1 font-display text-xl font-semibold text-white">{pipelineLabel(group)}</h3>
-                                </div>
-                                <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
-                                  {filteredOrganizedGroups[group].length}
-                                </span>
+                      ) : (
+                        <>
+                          <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
+                            <div className="mb-4 flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Priority queue</p>
+                                <h3 className="mt-1 font-display text-xl font-semibold text-white">Needs attention</h3>
                               </div>
-                              <div className="grid gap-4">
-                                {filteredOrganizedGroups[group].map((lead) => (
-                                  <LeadCard
+                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
+                                {visibleAttentionLeads.length}
+                              </span>
+                            </div>
+                            <div className="grid gap-4">
+                              {visibleAttentionLeads.length ? (
+                                visibleAttentionLeads.map((lead) => (
+                                  <AttentionLeadCard
                                     key={lead.id}
                                     lead={lead}
                                     selected={lead.id === selectedLead?.id}
@@ -1878,15 +1697,52 @@ export default function App() {
                                       });
                                     }}
                                   />
-                                ))}
-                              </div>
+                                ))
+                              ) : (
+                                <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
+                                  No leads require attention right now.
+                                </div>
+                              )}
                             </div>
-                          ) : null
-                        )
-                      ) : (
-                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                          No organized leads match this search.
-                        </div>
+                          </div>
+
+                          {flattenedOrganizedLeads.length ? (
+                            organizedGroups.map((group) =>
+                              filteredOrganizedGroups[group]?.length ? (
+                                <div key={group} className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
+                                  <div className="mb-4 flex items-center justify-between gap-3">
+                                    <div>
+                                      <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Stage</p>
+                                      <h3 className="mt-1 font-display text-xl font-semibold text-white">{pipelineLabel(group)}</h3>
+                                    </div>
+                                    <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
+                                      {filteredOrganizedGroups[group].length}
+                                    </span>
+                                  </div>
+                                  <div className="grid gap-4">
+                                    {filteredOrganizedGroups[group].map((lead) => (
+                                      <LeadCard
+                                        key={lead.id}
+                                        lead={lead}
+                                        selected={lead.id === selectedLead?.id}
+                                        onSelect={() => {
+                                          startTransition(() => {
+                                            setSelectedLeadId(lead.id);
+                                            setLeadModalOpen(true);
+                                          });
+                                        }}
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null
+                            )
+                          ) : (
+                            <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
+                              No organized leads match this search.
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   </>
