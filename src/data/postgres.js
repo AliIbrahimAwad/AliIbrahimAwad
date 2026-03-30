@@ -1022,6 +1022,8 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     const phone = row.phone || row.contact_phone || null;
     const email = row.email || row.contact_email || null;
     const message = row.message || row.latest_activity_content || "";
+    const assignedRepId = row.assigned_to == null ? (row.contact_assigned_rep_id == null ? null : Number(row.contact_assigned_rep_id)) : Number(row.assigned_to);
+    const assignedRepName = row.assigned_user_name || row.contact_assigned_rep_name || "Unassigned";
 
     return {
       id: Number(row.id),
@@ -1029,7 +1031,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       source: row.source || "manual",
       customer_name: customerName,
       contact_id: row.contact_id == null ? null : Number(row.contact_id),
-      assigned_to: row.assigned_to == null ? null : Number(row.assigned_to),
+      assigned_to: assignedRepId,
       inventory_id: row.inventory_id == null ? null : Number(row.inventory_id),
       phone,
       normalized_phone: row.normalized_phone || row.contact_normalized_phone || null,
@@ -1050,7 +1052,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       message_preview: message ? String(message).slice(0, 140) : "",
       status,
       status_label: titleCaseStatus(status === "new" ? "new lead" : status),
-      assigned_user_name: row.assigned_user_name || "Unassigned",
+      assigned_user_name: assignedRepName,
       created_at: row.created_at,
       updated_at: row.updated_at,
       latest_activity_at: row.latest_activity_at || row.updated_at,
@@ -3836,7 +3838,78 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       ]
     );
 
+    if (assignedRepId != null) {
+      await this.execute(
+        `
+          UPDATE leads
+          SET
+            assigned_to = ?,
+            updated_at = ?
+          WHERE contact_id = ?
+            AND dealership_id = ?
+            AND assigned_to IS NULL
+        `,
+        [assignedRepId, new Date().toISOString(), id, contact.dealership_id]
+      );
+    }
+
     return this.getContact(id, actor);
+  }
+
+  async backfillUnassignedContactOwners(user = null, options = {}) {
+    const dealershipId = parsePositiveInteger(options.dealership_id) || this.currentDealershipId(user);
+    const contacts = await this.all(
+      `
+        ${this.contactSelectSql()}
+        WHERE contacts.dealership_id = ?
+          AND contacts.assigned_rep_id IS NULL
+        ORDER BY contacts.created_at ASC, contacts.id ASC
+      `,
+      [dealershipId]
+    );
+
+    let contactsAssigned = 0;
+    let leadsUpdated = 0;
+    for (const row of contacts) {
+      const contact = this.formatContactRow(row);
+      const assignment = await this.assignRepToNewContact({ dealership_id: dealershipId, user, now: options.now });
+      if (!assignment.assigned_rep_id) {
+        await this.execute(
+          `
+            UPDATE contacts
+            SET
+              assignment_method = ?,
+              needs_manual_review = TRUE,
+              updated_at = ?
+            WHERE id = ? AND dealership_id = ?
+          `,
+          ["unassigned_no_available_rep", new Date().toISOString(), contact.id, dealershipId]
+        );
+        continue;
+      }
+
+      await this.assignContact(contact.id, assignment.assigned_rep_id, user, {
+        assignment_method: assignment.assignment_method,
+        needs_manual_review: assignment.needs_manual_review,
+      });
+      const leadCountRow = await this.get(
+        `
+          SELECT COUNT(*) AS count
+          FROM leads
+          WHERE contact_id = ?
+            AND dealership_id = ?
+            AND assigned_to = ?
+        `,
+        [contact.id, dealershipId, assignment.assigned_rep_id]
+      );
+      contactsAssigned += 1;
+      leadsUpdated += Number(leadCountRow?.count || 0);
+    }
+
+    return {
+      contacts_assigned: contactsAssigned,
+      leads_updated: leadsUpdated,
+    };
   }
 
   async findOrCreateContactFromLead(input = {}, user = null, options = {}) {

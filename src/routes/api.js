@@ -497,6 +497,20 @@ function registerApiRoutes(app) {
     })
   );
 
+  app.post(
+    "/api/contacts/backfill-assignments",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const result = await req.app.locals.db.backfillUnassignedContactOwners(req.currentUser);
+      res.json(result);
+    })
+  );
+
   app.get(
     "/api/dashboard/metrics",
     requireAuth,

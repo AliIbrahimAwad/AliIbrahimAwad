@@ -366,7 +366,7 @@ test("new contacts can be manually overridden at creation time and future owners
 });
 
 test("manager reassignment updates contact ownership metadata", async () => {
-  let executeParams = null;
+  const executeCalls = [];
   const result = await PostgresCrmDatabase.prototype.assignContact.call(
     {
       async getContact() {
@@ -376,7 +376,7 @@ test("manager reassignment updates contact ownership metadata", async () => {
         return { id, dealership_id: 1, role: "sales", name: "Reassigned Rep" };
       },
       async execute(_sql, params) {
-        executeParams = params;
+        executeCalls.push(params);
       },
     },
     44,
@@ -385,8 +385,125 @@ test("manager reassignment updates contact ownership metadata", async () => {
     { assignment_method: "manual_override", needs_manual_review: false }
   );
 
-  assert.equal(executeParams[0], 9);
-  assert.equal(executeParams[1], "manual_override");
-  assert.equal(executeParams[2], false);
+  assert.equal(executeCalls[0][0], 9);
+  assert.equal(executeCalls[0][1], "manual_override");
+  assert.equal(executeCalls[0][2], false);
+  assert.equal(executeCalls[1][0], 9);
+  assert.equal(executeCalls[1][2], 44);
   assert.deepEqual(result, { id: 44, dealership_id: 1 });
+});
+
+test("api lead formatting falls back to contact owner when the lead snapshot is empty", () => {
+  const formatted = PostgresCrmDatabase.prototype.formatApiLead.call(
+    {},
+    {
+      id: 12,
+      dealership_id: 1,
+      source: "website",
+      status: "new",
+      created_at: "2026-03-30T10:00:00.000Z",
+      updated_at: "2026-03-30T10:00:00.000Z",
+      customer_name: "Fallback Owner",
+      phone: null,
+      normalized_phone: null,
+      email: null,
+      normalized_email: null,
+      vehicle_interest: null,
+      vehicle_id: null,
+      stock_number: null,
+      vehicle_year: null,
+      vehicle_make: null,
+      vehicle_model: null,
+      vehicle_trim: null,
+      vehicle_condition: null,
+      vehicle_price: null,
+      lead_type: null,
+      listing_url: null,
+      message: null,
+      next_action: null,
+      contact_id: 5,
+      assigned_to: null,
+      inventory_id: null,
+      contact_first_name: "Fallback",
+      contact_last_name: "Owner",
+      contact_full_name: "Fallback Owner",
+      contact_phone: null,
+      contact_normalized_phone: null,
+      contact_email: null,
+      contact_normalized_email: null,
+      contact_assigned_rep_id: 77,
+      contact_assigned_rep_name: "Rep Fallback",
+      contact_assignment_method: "auto_round_robin",
+      contact_assignment_locked: false,
+      contact_needs_manual_review: false,
+      assigned_user_name: null,
+      latest_activity_content: null,
+      latest_activity_at: null,
+    }
+  );
+
+  assert.equal(formatted.assigned_to, 77);
+  assert.equal(formatted.assigned_user_name, "Rep Fallback");
+});
+
+test("backfillUnassignedContactOwners assigns legacy unowned contacts and syncs lead snapshots", async () => {
+  const assignments = [];
+  const result = await PostgresCrmDatabase.prototype.backfillUnassignedContactOwners.call(
+    {
+      currentDealershipId() {
+        return 1;
+      },
+      contactSelectSql() {
+        return "SELECT * FROM contacts";
+      },
+      async all() {
+        return [
+          {
+            id: 101,
+            dealership_id: 1,
+            first_name: "Legacy",
+            last_name: "Shopper",
+            full_name: "Legacy Shopper",
+            assigned_rep_id: null,
+            assignment_method: "manual_unassigned",
+            assignment_locked: false,
+            needs_manual_review: false,
+          },
+        ];
+      },
+      formatContactRow(row) {
+        return row;
+      },
+      async assignRepToNewContact() {
+        return {
+          assigned_rep_id: 45,
+          assignment_method: "auto_round_robin",
+          needs_manual_review: false,
+        };
+      },
+      async assignContact(contactId, assignedRepId, _user, options) {
+        assignments.push({ contactId, assignedRepId, options });
+      },
+      async get() {
+        return { count: 3 };
+      },
+      async execute() {},
+    },
+    { dealership_id: 1 }
+  );
+
+  assert.deepEqual(assignments, [
+    {
+      contactId: 101,
+      assignedRepId: 45,
+      options: {
+        assignment_method: "auto_round_robin",
+        needs_manual_review: false,
+      },
+    },
+  ]);
+  assert.deepEqual(result, {
+    contacts_assigned: 1,
+    leads_updated: 3,
+  });
 });
