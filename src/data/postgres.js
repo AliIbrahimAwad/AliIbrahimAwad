@@ -3884,11 +3884,16 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       const mergedLastName = matchedContact.last_name || parsedName.lastName || "";
       const nextEmail = matchedContact.email || input.email || null;
       const nextPhone = matchedContact.phone || input.phone || null;
+      const needsBackfillAssignment = matchedContact.assigned_rep_id == null;
+      const backfillAssignment = needsBackfillAssignment
+        ? await this.assignRepToNewContact({ dealership_id: dealershipId, user, now })
+        : null;
       const requiresUpdate =
         mergedFirstName !== matchedContact.first_name ||
         mergedLastName !== matchedContact.last_name ||
         nextEmail !== matchedContact.email ||
-        nextPhone !== matchedContact.phone;
+        nextPhone !== matchedContact.phone ||
+        needsBackfillAssignment;
 
       const contact = requiresUpdate
         ? await this.updateContact(
@@ -3900,9 +3905,13 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
               phone: nextPhone,
               company: matchedContact.company,
               job_title: matchedContact.job_title,
-              assigned_rep_id: matchedContact.assigned_rep_id,
-              assignment_method: matchedContact.assignment_method,
-              needs_manual_review: matchedContact.needs_manual_review,
+              assigned_rep_id: needsBackfillAssignment ? backfillAssignment.assigned_rep_id : matchedContact.assigned_rep_id,
+              assignment_method: needsBackfillAssignment
+                ? backfillAssignment.assignment_method
+                : matchedContact.assignment_method,
+              needs_manual_review: needsBackfillAssignment
+                ? backfillAssignment.needs_manual_review
+                : matchedContact.needs_manual_review,
               assignment_locked: matchedContact.assignment_locked,
             },
             user

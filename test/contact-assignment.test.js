@@ -242,6 +242,63 @@ test("returning contact keeps the same assigned rep for new lead events", async 
   assert.equal(lead._dedupe.reason, "normalized_phone");
 });
 
+test("legacy matched contact without an owner gets auto-assigned on the next lead", async () => {
+  let updatedPayload = null;
+  const result = await PostgresCrmDatabase.prototype.findOrCreateContactFromLead.call(
+    {
+      currentDealershipId() {
+        return 1;
+      },
+      async findContactByNormalizedPhone() {
+        return {
+          id: 31,
+          first_name: "Taylor",
+          last_name: "",
+          email: null,
+          phone: "4165550101",
+          company: null,
+          job_title: null,
+          assigned_rep_id: null,
+          assignment_method: "manual_unassigned",
+          needs_manual_review: false,
+          assignment_locked: false,
+        };
+      },
+      async findContactByNormalizedEmail() {
+        return null;
+      },
+      async assignRepToNewContact() {
+        return {
+          assigned_rep_id: 17,
+          assignment_method: "auto_round_robin",
+          needs_manual_review: false,
+        };
+      },
+      async updateContact(id, payload) {
+        updatedPayload = { id, payload };
+        return {
+          id,
+          ...payload,
+          assigned_rep_name: "Rep 17",
+        };
+      },
+    },
+    {
+      customer_name: "Taylor",
+      phone: "4165550101",
+      email: "",
+    },
+    { dealership_id: 1 },
+    { dealership_id: 1, now: "2026-03-30T14:00:00.000Z" }
+  );
+
+  assert.equal(updatedPayload.id, 31);
+  assert.equal(updatedPayload.payload.assigned_rep_id, 17);
+  assert.equal(updatedPayload.payload.assignment_method, "auto_round_robin");
+  assert.equal(result.created, false);
+  assert.equal(result.contact.assigned_rep_id, 17);
+});
+
 test("new contacts can be manually overridden at creation time and future ownership lives on the contact", async () => {
   let insertParams = null;
   let assignContactArgs = null;
