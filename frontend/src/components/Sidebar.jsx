@@ -24,7 +24,7 @@ const sections = [
 export function Sidebar({ activeSection = "Dashboard", onSelectSection, currentUser }) {
   const visibleSections = sections.filter((section) => {
     if (section.label === "Team") {
-      return currentUser?.role === "admin";
+      return currentUser?.role === "admin" || currentUser?.role === "manager";
     }
 
     if (section.label === "Intake") {
@@ -85,6 +85,30 @@ export function Sidebar({ activeSection = "Dashboard", onSelectSection, currentU
           Two luxury leads and one truck trade-in need a manager touch in the next 15 minutes.
         </p>
       </div>
+
+      {currentUser?.role === "sales" ? (
+        <div className="relative mt-8 rounded-[1.75rem] border border-white/10 bg-white/5 p-4">
+          <p className="text-xs uppercase tracking-[0.28em] text-slate-400">New contact routing</p>
+          <p className="mt-2 text-sm font-semibold text-white">
+            {currentUser?.is_available ? "Available for new contacts" : "Paused for new contacts"}
+          </p>
+          <p className="mt-2 text-xs leading-5 text-slate-400">
+            Existing contacts still stay with you even while routing is paused.
+          </p>
+          <button
+            type="button"
+            onClick={() => currentUser?.onToggleAvailability?.(!currentUser?.is_available)}
+            disabled={currentUser?.availabilityUpdating}
+            className="mt-4 inline-flex w-full items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+          >
+            {currentUser?.availabilityUpdating
+              ? "Saving..."
+              : currentUser?.is_available
+                ? "Pause new assignments"
+                : "Resume new assignments"}
+          </button>
+        </div>
+      ) : null}
 
       <div className="relative mt-8 flex items-center gap-3 border-t border-white/10 pt-6">
         <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 font-semibold text-white">

@@ -263,6 +263,13 @@ export function deleteUser(id) {
   });
 }
 
+export function updateUserAvailability(id, payload) {
+  return request(`/api/users/${id}/availability`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getSession() {
   return request("/api/auth/session");
 }

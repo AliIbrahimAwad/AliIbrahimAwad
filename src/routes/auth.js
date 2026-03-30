@@ -2,6 +2,20 @@ const { renderLoginPage } = require("../views/auth");
 const { asyncHandler } = require("./helpers");
 
 function registerAuthRoutes(app) {
+  const serializeSessionUser = (user) => ({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    is_active: Boolean(user.is_active),
+    is_available: Boolean(user.is_available),
+    working_days: user.working_days || [],
+    working_hours_start: user.working_hours_start || null,
+    working_hours_end: user.working_hours_end || null,
+    timezone: user.timezone || null,
+    max_active_leads: user.max_active_leads == null ? null : Number(user.max_active_leads),
+  });
+
   app.get("/api/auth/session", (req, res) => {
     if (!req.currentUser) {
       res.status(401).json({ error: "Authentication required." });
@@ -9,12 +23,7 @@ function registerAuthRoutes(app) {
     }
 
     res.json({
-      user: {
-        id: req.currentUser.id,
-        name: req.currentUser.name,
-        email: req.currentUser.email,
-        role: req.currentUser.role,
-      },
+      user: serializeSessionUser(req.currentUser),
     });
   });
 
@@ -41,12 +50,7 @@ function registerAuthRoutes(app) {
       req.session.userId = user.id;
 
       res.json({
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-        },
+        user: serializeSessionUser(user),
       });
     })
   );

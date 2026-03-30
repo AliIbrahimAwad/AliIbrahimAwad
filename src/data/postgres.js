@@ -19,7 +19,15 @@ const { canViewAllLeads } = require("../models/user");
 const { LEAD_ACTIVITY_TYPES } = require("../types/models");
 const { normalizePhone } = require("../utils/phones");
 const { toDateOnlyString } = require("../utils/dates");
-const { normalizeLeadCustomerName } = require("../utils/leadNames");
+const { buildCustomerNameFromParts, normalizeLeadCustomerName, splitCustomerNameParts } = require("../utils/leadNames");
+const {
+  DEFAULT_REP_TIMEZONE,
+  DEFAULT_WORKING_DAYS,
+  DEFAULT_WORKING_HOURS_END,
+  DEFAULT_WORKING_HOURS_START,
+  evaluateRepAvailability,
+  normalizeRepAvailabilityInput,
+} = require("../utils/repAvailability");
 
 function normalizeLeadPhoneForStorage(value) {
   return normalizePhone(value) || null;
@@ -27,6 +35,14 @@ function normalizeLeadPhoneForStorage(value) {
 
 function normalizeLeadEmailForStorage(value) {
   return stringOrNull(value)?.toLowerCase() || null;
+}
+
+function normalizeAssignmentMethod(value, fallback = "auto_round_robin") {
+  return stringOrNull(value)?.toLowerCase() || fallback;
+}
+
+function buildContactFullName(firstName = "", lastName = "", fallback = "NN Lead") {
+  return buildCustomerNameFromParts(firstName, lastName, fallback);
 }
 
 function parseJson(value, fallback = null) {
@@ -342,6 +358,13 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         email TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        is_available BOOLEAN NOT NULL DEFAULT TRUE,
+        working_days_json TEXT NOT NULL DEFAULT '["mon","tue","wed","thu","fri"]',
+        working_hours_start TEXT NOT NULL DEFAULT '09:00',
+        working_hours_end TEXT NOT NULL DEFAULT '18:00',
+        timezone TEXT NOT NULL DEFAULT 'America/Toronto',
+        max_active_leads INTEGER,
         created_at TEXT NOT NULL
       );
 
@@ -350,9 +373,15 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         dealership_id BIGINT NOT NULL DEFAULT 1,
         first_name TEXT NOT NULL DEFAULT '',
         last_name TEXT NOT NULL DEFAULT '',
+        full_name TEXT NOT NULL DEFAULT 'NN Lead',
         email TEXT,
+        normalized_email TEXT,
         phone TEXT,
         normalized_phone TEXT,
+        assigned_rep_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+        assignment_method TEXT NOT NULL DEFAULT 'auto_round_robin',
+        assignment_locked BOOLEAN NOT NULL DEFAULT FALSE,
+        needs_manual_review BOOLEAN NOT NULL DEFAULT FALSE,
         company TEXT,
         job_title TEXT,
         created_at TEXT NOT NULL,
@@ -587,6 +616,19 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         ALTER TABLE leads ADD COLUMN IF NOT EXISTS message TEXT;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS inventory_id BIGINT REFERENCES inventory(id) ON DELETE SET NULL;
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS normalized_phone TEXT;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS full_name TEXT NOT NULL DEFAULT 'NN Lead';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS normalized_email TEXT;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS assigned_rep_id BIGINT REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS assignment_method TEXT NOT NULL DEFAULT 'auto_round_robin';
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS assignment_locked BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS needs_manual_review BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS is_available BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS working_days_json TEXT NOT NULL DEFAULT '["mon","tue","wed","thu","fri"]';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS working_hours_start TEXT NOT NULL DEFAULT '09:00';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS working_hours_end TEXT NOT NULL DEFAULT '18:00';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'America/Toronto';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS max_active_leads INTEGER;
       ALTER TABLE inventory ADD COLUMN IF NOT EXISTS drivetrain TEXT;
       ALTER TABLE inventory ADD COLUMN IF NOT EXISTS transmission TEXT;
       ALTER TABLE inventory ADD COLUMN IF NOT EXISTS engine TEXT;
@@ -605,6 +647,9 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       CREATE INDEX IF NOT EXISTS idx_leads_normalized_email ON leads(normalized_email);
       CREATE INDEX IF NOT EXISTS idx_leads_inventory_id ON leads(inventory_id);
       CREATE INDEX IF NOT EXISTS idx_contacts_normalized_phone ON contacts(normalized_phone);
+      CREATE INDEX IF NOT EXISTS idx_contacts_normalized_email ON contacts(normalized_email);
+      CREATE INDEX IF NOT EXISTS idx_contacts_assigned_rep_id ON contacts(assigned_rep_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_users_sales_availability ON users(dealership_id, role, is_active, is_available);
       CREATE INDEX IF NOT EXISTS idx_activities_lead_id_created_at ON activities(lead_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_imported_messages_external_id ON imported_messages(external_id);
       CREATE INDEX IF NOT EXISTS idx_inventory_dealership_id ON inventory(dealership_id, updated_at DESC);
@@ -647,6 +692,20 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     await this.execute("UPDATE lead_activities SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
     await this.execute("UPDATE activities SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
     await this.execute("UPDATE imported_messages SET dealership_id = ? WHERE dealership_id IS NULL", [dealershipId]);
+    await this.execute("UPDATE users SET is_active = TRUE WHERE is_active IS NULL");
+    await this.execute("UPDATE users SET is_available = TRUE WHERE is_available IS NULL");
+    await this.execute("UPDATE users SET working_days_json = ? WHERE working_days_json IS NULL OR BTRIM(working_days_json) = ''", [
+      JSON.stringify(DEFAULT_WORKING_DAYS),
+    ]);
+    await this.execute(
+      "UPDATE users SET working_hours_start = ? WHERE working_hours_start IS NULL OR BTRIM(working_hours_start) = ''",
+      [DEFAULT_WORKING_HOURS_START]
+    );
+    await this.execute(
+      "UPDATE users SET working_hours_end = ? WHERE working_hours_end IS NULL OR BTRIM(working_hours_end) = ''",
+      [DEFAULT_WORKING_HOURS_END]
+    );
+    await this.execute("UPDATE users SET timezone = ? WHERE timezone IS NULL OR BTRIM(timezone) = ''", [DEFAULT_REP_TIMEZONE]);
     await this.execute(
       "UPDATE inventory SET is_active = CASE WHEN status = 'active' THEN TRUE ELSE FALSE END WHERE is_active IS NULL",
       []
@@ -694,23 +753,23 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         contact.id,
       ]);
     }
+    await this.execute("UPDATE contacts SET normalized_email = ? WHERE email IS NULL OR BTRIM(email) = ''", [null]);
+    const contactEmails = await this.all(
+      "SELECT id, email, first_name, last_name FROM contacts"
+    );
+    for (const contact of contactEmails) {
+      await this.execute(
+        "UPDATE contacts SET normalized_email = ?, full_name = ? WHERE id = ?",
+        [
+          normalizeLeadEmailForStorage(contact.email),
+          buildContactFullName(contact.first_name, contact.last_name),
+          contact.id,
+        ]
+      );
+    }
 
-    await this.ensureOptionalUniqueIndex(
-      "idx_leads_dealership_normalized_phone_unique",
-      `
-        CREATE UNIQUE INDEX idx_leads_dealership_normalized_phone_unique
-        ON leads(dealership_id, normalized_phone)
-        WHERE normalized_phone IS NOT NULL AND BTRIM(normalized_phone) <> ''
-      `
-    );
-    await this.ensureOptionalUniqueIndex(
-      "idx_leads_dealership_normalized_email_unique",
-      `
-        CREATE UNIQUE INDEX idx_leads_dealership_normalized_email_unique
-        ON leads(dealership_id, normalized_email)
-        WHERE normalized_email IS NOT NULL AND BTRIM(normalized_email) <> ''
-      `
-    );
+    await this.execute("DROP INDEX IF EXISTS idx_leads_dealership_normalized_phone_unique");
+    await this.execute("DROP INDEX IF EXISTS idx_leads_dealership_normalized_email_unique");
   }
 
   async seedDefaultUsers() {
@@ -898,9 +957,18 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         leads.contact_id,
         leads.assigned_to,
         leads.inventory_id,
+        contacts.first_name AS contact_first_name,
+        contacts.last_name AS contact_last_name,
+        contacts.full_name AS contact_full_name,
         contacts.phone AS contact_phone,
         contacts.normalized_phone AS contact_normalized_phone,
         contacts.email AS contact_email,
+        contacts.normalized_email AS contact_normalized_email,
+        contacts.assigned_rep_id AS contact_assigned_rep_id,
+        contact_rep.name AS contact_assigned_rep_name,
+        contacts.assignment_method AS contact_assignment_method,
+        contacts.assignment_locked AS contact_assignment_locked,
+        contacts.needs_manual_review AS contact_needs_manual_review,
         inventory.stock_number AS inventory_stock_number,
         inventory.vin AS inventory_vin,
         inventory.year AS inventory_year,
@@ -937,7 +1005,12 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
           LIMIT 1
         ) AS latest_activity_at
       FROM leads
-      LEFT JOIN contacts ON contacts.id = leads.contact_id
+      LEFT JOIN contacts
+        ON contacts.id = leads.contact_id
+       AND contacts.dealership_id = leads.dealership_id
+      LEFT JOIN users AS contact_rep
+        ON contact_rep.id = contacts.assigned_rep_id
+       AND contact_rep.dealership_id = leads.dealership_id
       LEFT JOIN inventory ON inventory.id = leads.inventory_id AND inventory.dealership_id = leads.dealership_id
       LEFT JOIN users AS sales_user ON sales_user.id = leads.assigned_to
     `;
@@ -955,11 +1028,13 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       dealership_id: Number(row.dealership_id || getDefaultDealershipId()),
       source: row.source || "manual",
       customer_name: customerName,
+      contact_id: row.contact_id == null ? null : Number(row.contact_id),
       assigned_to: row.assigned_to == null ? null : Number(row.assigned_to),
       inventory_id: row.inventory_id == null ? null : Number(row.inventory_id),
       phone,
       normalized_phone: row.normalized_phone || row.contact_normalized_phone || null,
       email,
+      normalized_email: row.normalized_email || row.contact_normalized_email || null,
       vehicle_interest: row.vehicle_interest || row.next_action || "Vehicle inquiry",
       vehicle_id: row.vehicle_id || null,
       stock_number: row.stock_number || null,
@@ -979,6 +1054,30 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       created_at: row.created_at,
       updated_at: row.updated_at,
       latest_activity_at: row.latest_activity_at || row.updated_at,
+      contact:
+        row.contact_id == null
+          ? null
+          : {
+              id: Number(row.contact_id),
+              first_name: row.contact_first_name || "",
+              last_name: row.contact_last_name || "",
+              full_name: row.contact_full_name || buildContactFullName(row.contact_first_name, row.contact_last_name),
+              phone: row.contact_phone || null,
+              normalized_phone: row.contact_normalized_phone || null,
+              email: row.contact_email || null,
+              normalized_email: row.contact_normalized_email || null,
+              assigned_rep_id: row.contact_assigned_rep_id == null ? null : Number(row.contact_assigned_rep_id),
+              assigned_rep_name: row.contact_assigned_rep_name || "Unassigned",
+              assignment_method: row.contact_assignment_method || null,
+              assignment_locked:
+                row.contact_assignment_locked === true ||
+                row.contact_assignment_locked === "t" ||
+                row.contact_assignment_locked === 1,
+              needs_manual_review:
+                row.contact_needs_manual_review === true ||
+                row.contact_needs_manual_review === "t" ||
+                row.contact_needs_manual_review === 1,
+            },
       inventory:
         row.inventory_id == null
           ? null
@@ -1029,10 +1128,56 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     };
   }
 
+  formatUserRow(row) {
+    if (!row) {
+      return null;
+    }
+
+    const availability = normalizeRepAvailabilityInput({
+      is_active: row.is_active,
+      is_available: row.is_available,
+      working_days: row.working_days_json,
+      working_hours_start: row.working_hours_start,
+      working_hours_end: row.working_hours_end,
+      timezone: row.timezone,
+      max_active_leads: row.max_active_leads,
+    });
+
+    return {
+      id: Number(row.id),
+      dealership_id: Number(row.dealership_id || getDefaultDealershipId()),
+      name: row.name,
+      email: row.email,
+      password_hash: row.password_hash,
+      role: row.role,
+      is_active: availability.is_active,
+      is_available: availability.is_available,
+      working_days: availability.working_days,
+      working_hours_start: availability.working_hours_start,
+      working_hours_end: availability.working_hours_end,
+      timezone: availability.timezone,
+      max_active_leads: availability.max_active_leads,
+      created_at: row.created_at,
+    };
+  }
+
   async listUsers(user = null) {
-    return this.all(
+    const rows = await this.all(
       `
-        SELECT id, dealership_id, name, email, role, created_at
+        SELECT
+          id,
+          dealership_id,
+          name,
+          email,
+          role,
+          is_active,
+          is_available,
+          working_days_json,
+          working_hours_start,
+          working_hours_end,
+          timezone,
+          max_active_leads,
+          created_at
         FROM users
         WHERE dealership_id = ?
         ORDER BY
@@ -1045,34 +1190,64 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       `,
       [this.currentDealershipId(user)]
     );
+    return rows.map((row) => this.formatUserRow(row));
   }
 
   async getUser(id) {
-    const user = await this.get(
+    const row = await this.get(
       `
-        SELECT id, dealership_id, name, email, password_hash, role, created_at
+        SELECT
+          id,
+          dealership_id,
+          name,
+          email,
+          password_hash,
+          role,
+          is_active,
+          is_available,
+          working_days_json,
+          working_hours_start,
+          working_hours_end,
+          timezone,
+          max_active_leads,
+          created_at
         FROM users
         WHERE id = ?
       `,
       [id]
     );
 
-    if (!user) {
+    if (!row) {
       throw new NotFoundError("User not found");
     }
 
-    return user;
+    return this.formatUserRow(row);
   }
 
   async getUserByEmail(email) {
-    return this.get(
+    const row = await this.get(
       `
-        SELECT id, dealership_id, name, email, password_hash, role, created_at
+        SELECT
+          id,
+          dealership_id,
+          name,
+          email,
+          password_hash,
+          role,
+          is_active,
+          is_available,
+          working_days_json,
+          working_hours_start,
+          working_hours_end,
+          timezone,
+          max_active_leads,
+          created_at
         FROM users
         WHERE LOWER(email) = LOWER(?)
       `,
       [email]
     );
+    return this.formatUserRow(row);
   }
 
   async authenticateUser(email, password) {
@@ -2226,7 +2401,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     const storedStatus = toStoredStatus(input.status || "new");
     const dealershipId =
       parsePositiveInteger(input.dealership_id) || (user ? this.currentDealershipId(user) : getDefaultDealershipId());
-    const assignedTo = input.assigned_to == null ? null : parsePositiveInteger(input.assigned_to);
+    const requestedAssignedTo = input.assigned_to == null ? null : parsePositiveInteger(input.assigned_to);
     const inventoryId = await this.resolveLeadInventoryId(input, dealershipId);
     const inventory = inventoryId
       ? await this.get("SELECT * FROM inventory WHERE id = ? AND dealership_id = ?", [inventoryId, dealershipId])
@@ -2234,149 +2409,115 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     const leadPayload = this.normalizeLeadPayloadForStorage(input, inventory);
     const normalizedPhone = normalizeLeadPhoneForStorage(leadPayload.phone);
     const normalizedEmail = normalizeLeadEmailForStorage(leadPayload.email);
-    const duplicateInput = {
-      ...input,
-      ...leadPayload,
+    const contactResolution = await this.findOrCreateContactFromLead(
+      {
+        dealership_id: dealershipId,
+        customer_name: leadPayload.customer_name,
+        phone: leadPayload.phone,
+        email: leadPayload.email,
+      },
+      user,
+      { dealership_id: dealershipId, now }
+    );
+    let contact = contactResolution.contact;
+
+    if (requestedAssignedTo && contact && (contactResolution.created || contact.assigned_rep_id == null)) {
+      contact = await this.assignContact(contact.id, requestedAssignedTo, user, {
+        assignment_method: "manual_override",
+        needs_manual_review: contact.needs_manual_review,
+      });
+    }
+
+    const assignedTo = contact?.assigned_rep_id == null ? null : Number(contact.assigned_rep_id);
+    const row = await this.get(
+      `
+        INSERT INTO leads (
+          dealership_id,
+          contact_id,
+          source,
+          status,
+          assigned_to,
+          customer_name,
+          phone,
+          normalized_phone,
+          email,
+          normalized_email,
+          vehicle_interest,
+          vehicle_id,
+          stock_number,
+          vehicle_year,
+          vehicle_make,
+          vehicle_model,
+          vehicle_trim,
+          vehicle_condition,
+          vehicle_price,
+          lead_type,
+          listing_url,
+          message,
+          inventory_id,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
+      `,
+      [
+        dealershipId,
+        contact ? Number(contact.id) : null,
+        input.source || "website",
+        storedStatus || "new",
+        assignedTo,
+        leadPayload.customer_name,
+        leadPayload.phone,
+        normalizedPhone,
+        leadPayload.email,
+        normalizedEmail,
+        leadPayload.vehicle_interest,
+        leadPayload.vehicle_id,
+        leadPayload.stock_number,
+        leadPayload.vehicle_year,
+        leadPayload.vehicle_make,
+        leadPayload.vehicle_model,
+        leadPayload.vehicle_trim,
+        leadPayload.vehicle_condition,
+        leadPayload.vehicle_price,
+        input.lead_type || null,
+        input.listing_url || null,
+        input.message || null,
+        inventoryId,
+        now,
+        now,
+      ]
+    );
+
+    await this.createActivity({
+      lead_id: row.id,
+      type: "lead_created",
+      content: `Lead created from ${input.source || "website"}`,
+      created_at: now,
+    });
+    logLeadDedupeDecision({
+      action: contactResolution.created ? "created_new_contact_and_lead" : "created_lead_for_existing_contact",
+      reason: contactResolution.reason || "contact_resolution",
+      lead_id: Number(row.id),
+      contact_id: contact ? Number(contact.id) : null,
       dealership_id: dealershipId,
-      assigned_to: assignedTo,
-      inventory_id: inventoryId,
-      status: storedStatus || "new",
-    };
+      source: input.source || "website",
+      normalized_phone: normalizedPhone,
+      normalized_email: normalizedEmail,
+      assigned_rep_id: assignedTo,
+    });
 
-    const mergeDuplicateLead = async (duplicate, event = "lead_dedupe_decision") => {
-      const existingLead = await this.getApiLead(duplicate.lead.id, user);
-      const mergedInput = buildMergedLeadInput(existingLead, duplicateInput);
-      const lead = await this.updateApiLead(existingLead.id, mergedInput, user);
-      await this.createActivity({
-        lead_id: existingLead.id,
-        type: "note_added",
-        content: `Merged duplicate lead by ${duplicate.reason}.`,
-        created_at: now,
-      });
-      logLeadDedupeDecision({
-        event,
-        action: "merged_existing_lead",
-        reason: duplicate.reason,
-        lead_id: Number(existingLead.id),
-        dealership_id: dealershipId,
-        source: duplicateInput.source || "website",
-        normalized_phone: normalizedPhone,
-        normalized_email: normalizedEmail,
-      });
-      return attachLeadDedupeMeta(
-        lead,
-        {
-          merged: true,
-          created: false,
-          reason: duplicate.reason,
-          lead_id: Number(existingLead.id),
-        },
-        options
-      );
-    };
-
-    const duplicate = await this.findLeadDuplicate(duplicateInput, { dealership_id: dealershipId });
-    if (duplicate) {
-      return mergeDuplicateLead(duplicate);
-    }
-
-    try {
-      const row = await this.get(
-        `
-          INSERT INTO leads (
-            dealership_id,
-            source,
-            status,
-            assigned_to,
-            customer_name,
-            phone,
-            normalized_phone,
-            email,
-            normalized_email,
-            vehicle_interest,
-            vehicle_id,
-            stock_number,
-            vehicle_year,
-            vehicle_make,
-            vehicle_model,
-            vehicle_trim,
-            vehicle_condition,
-            vehicle_price,
-            lead_type,
-            listing_url,
-            message,
-            inventory_id,
-            created_at,
-            updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          RETURNING id
-        `,
-        [
-          dealershipId,
-          input.source || "website",
-          storedStatus || "new",
-          assignedTo,
-          leadPayload.customer_name,
-          leadPayload.phone,
-          normalizedPhone,
-          leadPayload.email,
-          normalizedEmail,
-          leadPayload.vehicle_interest,
-          leadPayload.vehicle_id,
-          leadPayload.stock_number,
-          leadPayload.vehicle_year,
-          leadPayload.vehicle_make,
-          leadPayload.vehicle_model,
-          leadPayload.vehicle_trim,
-          leadPayload.vehicle_condition,
-          leadPayload.vehicle_price,
-          input.lead_type || null,
-          input.listing_url || null,
-          input.message || null,
-          inventoryId,
-          now,
-          now,
-        ]
-      );
-
-      await this.createActivity({
-        lead_id: row.id,
-        type: "lead_created",
-        content: `Lead created from ${input.source || "website"}`,
-        created_at: now,
-      });
-      logLeadDedupeDecision({
-        action: "created_new_lead",
-        reason: "no_match",
+    return attachLeadDedupeMeta(
+      await this.getApiLead(row.id, user),
+      {
+        merged: false,
+        created: true,
+        reason: contactResolution.reason || null,
         lead_id: Number(row.id),
-        dealership_id: dealershipId,
-        source: input.source || "website",
-        normalized_phone: normalizedPhone,
-        normalized_email: normalizedEmail,
-      });
-
-      return attachLeadDedupeMeta(
-        await this.getApiLead(row.id, user),
-        {
-          merged: false,
-          created: true,
-          reason: null,
-          lead_id: Number(row.id),
-        },
-        options
-      );
-    } catch (error) {
-      if (!isLeadIdentityUniqueConstraintError(error)) {
-        throw error;
-      }
-
-      const raceDuplicate = await this.findLeadDuplicate(duplicateInput, { dealership_id: dealershipId });
-      if (!raceDuplicate) {
-        throw error;
-      }
-
-      return mergeDuplicateLead(raceDuplicate, "lead_dedupe_race_recovered");
-    }
+        contact_id: contact ? Number(contact.id) : null,
+      },
+      options
+    );
   }
 
   async updateApiLead(id, input, actor = null) {
@@ -2601,7 +2742,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
           completed_at,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING *
         `,
         [
@@ -3040,7 +3181,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
           first_seen_at,
           created_at,
           updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           RETURNING *
         `,
         [dealershipId, ...payload, now, now]
@@ -3274,13 +3415,42 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
 
   async createUser(input, actor = null) {
     const dealershipId = this.currentDealershipId(actor);
+    const availability = normalizeRepAvailabilityInput(input);
     const row = await this.get(
       `
-        INSERT INTO users (dealership_id, name, email, password_hash, role, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO users (
+          dealership_id,
+          name,
+          email,
+          password_hash,
+          role,
+          is_active,
+          is_available,
+          working_days_json,
+          working_hours_start,
+          working_hours_end,
+          timezone,
+          max_active_leads,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id
       `,
-      [dealershipId, input.name, input.email.toLowerCase(), input.password_hash, input.role, new Date().toISOString()]
+      [
+        dealershipId,
+        input.name,
+        input.email.toLowerCase(),
+        input.password_hash,
+        input.role,
+        availability.is_active,
+        availability.is_available,
+        JSON.stringify(availability.working_days),
+        availability.working_hours_start,
+        availability.working_hours_end,
+        availability.timezone,
+        availability.max_active_leads,
+        new Date().toISOString(),
+      ]
     );
 
     return this.getUser(row.id);
@@ -3291,8 +3461,31 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     if (Number(existing.dealership_id || getDefaultDealershipId()) !== this.currentDealershipId(actor)) {
       throw new NotFoundError("User not found");
     }
-    const fields = ["name = ?", "email = ?", "role = ?"];
-    const params = [input.name, input.email.toLowerCase(), input.role];
+    const availability = normalizeRepAvailabilityInput(input, existing);
+    const fields = [
+      "name = ?",
+      "email = ?",
+      "role = ?",
+      "is_active = ?",
+      "is_available = ?",
+      "working_days_json = ?",
+      "working_hours_start = ?",
+      "working_hours_end = ?",
+      "timezone = ?",
+      "max_active_leads = ?",
+    ];
+    const params = [
+      input.name,
+      input.email.toLowerCase(),
+      input.role,
+      availability.is_active,
+      availability.is_available,
+      JSON.stringify(availability.working_days),
+      availability.working_hours_start,
+      availability.working_hours_end,
+      availability.timezone,
+      availability.max_active_leads,
+    ];
 
     if (input.password_hash) {
       fields.push("password_hash = ?");
@@ -3307,6 +3500,42 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         WHERE id = ? AND dealership_id = ?
       `,
       params
+    );
+
+    return this.getUser(id);
+  }
+
+  async updateUserAvailability(id, input = {}, actor = null) {
+    const existing = await this.getUser(id);
+    if (Number(existing.dealership_id || getDefaultDealershipId()) !== this.currentDealershipId(actor)) {
+      throw new NotFoundError("User not found");
+    }
+
+    const availability = normalizeRepAvailabilityInput(input, existing);
+    await this.execute(
+      `
+        UPDATE users
+        SET
+          is_active = ?,
+          is_available = ?,
+          working_days_json = ?,
+          working_hours_start = ?,
+          working_hours_end = ?,
+          timezone = ?,
+          max_active_leads = ?
+        WHERE id = ? AND dealership_id = ?
+      `,
+      [
+        availability.is_active,
+        availability.is_available,
+        JSON.stringify(availability.working_days),
+        availability.working_hours_start,
+        availability.working_hours_end,
+        availability.timezone,
+        availability.max_active_leads,
+        id,
+        this.currentDealershipId(actor),
+      ]
     );
 
     return this.getUser(id);
@@ -3343,52 +3572,435 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
   }
 
   async listSalesUsers(user = null) {
-    return this.all(
-      `
-        SELECT id, dealership_id, name, email, role, created_at
-        FROM users
-        WHERE role = 'sales'
-          AND dealership_id = ?
-        ORDER BY LOWER(name) ASC, id ASC
-      `,
-      [this.currentDealershipId(user)]
-    );
-  }
-
-  async getAssignableSalesUser(user = null) {
-    return this.get(
-      `
-        SELECT id, dealership_id, name, email, role, created_at
-        FROM users
-        WHERE role = 'sales'
-          AND dealership_id = ?
-        ORDER BY LOWER(name) ASC, id ASC
-        LIMIT 1
-      `,
-      [this.currentDealershipId(user)]
-    );
-  }
-
-  async listContacts(user = null) {
-    return this.all(
+    const rows = await this.all(
       `
         SELECT
           id,
           dealership_id,
-          first_name,
-          last_name,
+          name,
           email,
-          phone,
-          company,
-          job_title,
-          created_at,
-          updated_at
-        FROM contacts
-        WHERE dealership_id = ?
+          role,
+          is_active,
+          is_available,
+          working_days_json,
+          working_hours_start,
+          working_hours_end,
+          timezone,
+          max_active_leads,
+          created_at
+        FROM users
+        WHERE role = 'sales'
+          AND dealership_id = ?
+        ORDER BY LOWER(name) ASC, id ASC
+      `,
+      [this.currentDealershipId(user)]
+    );
+    return rows.map((row) => this.formatUserRow(row));
+  }
+
+  async listEligibleSalesUsers(context = {}) {
+    const dealershipId =
+      parsePositiveInteger(context.dealership_id) ||
+      (context.user ? this.currentDealershipId(context.user) : getDefaultDealershipId());
+    const evaluatedAt = context.now ? new Date(context.now) : new Date();
+    const reps = await this.listSalesUsers({ dealership_id: dealershipId });
+    return reps.filter((rep) => evaluateRepAvailability(rep, evaluatedAt).eligible);
+  }
+
+  contactAssignmentCursorKey(dealershipId) {
+    return `contact_assignment_cursor:${Number(dealershipId || getDefaultDealershipId())}`;
+  }
+
+  async getSettingValue(key) {
+    const row = await this.get("SELECT value FROM crm_settings WHERE key = ?", [key]);
+    return row ? row.value : null;
+  }
+
+  async setSettingValue(key, value) {
+    await this.execute(
+      `
+        INSERT INTO crm_settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT (key) DO UPDATE SET
+          value = EXCLUDED.value,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [key, value, new Date().toISOString()]
+    );
+  }
+
+  async getAssignableSalesUser(user = null, options = {}) {
+    const dealershipId =
+      parsePositiveInteger(options.dealership_id) || (user ? this.currentDealershipId(user) : getDefaultDealershipId());
+    const eligible = await this.listEligibleSalesUsers({ dealership_id: dealershipId, now: options.now, user });
+    if (!eligible.length) {
+      return null;
+    }
+
+    const cursorKey = this.contactAssignmentCursorKey(dealershipId);
+    const previousAssignedId = parsePositiveInteger(await this.getSettingValue(cursorKey));
+    const currentIndex = previousAssignedId
+      ? eligible.findIndex((rep) => Number(rep.id) === Number(previousAssignedId))
+      : -1;
+    const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % eligible.length;
+    const chosen = eligible[nextIndex];
+    if (options.advanceCursor !== false) {
+      await this.setSettingValue(cursorKey, String(chosen.id));
+    }
+    return chosen;
+  }
+
+  async assignRepToNewContact({ dealership_id = null, user = null, now = null } = {}) {
+    const dealershipId = parsePositiveInteger(dealership_id) || this.currentDealershipId(user);
+    const rep = await this.getAssignableSalesUser(user, { dealership_id: dealershipId, now });
+    if (!rep) {
+      return {
+        assigned_rep_id: null,
+        assignment_method: "unassigned_no_available_rep",
+        needs_manual_review: true,
+      };
+    }
+
+    return {
+      assigned_rep_id: Number(rep.id),
+      assignment_method: "auto_round_robin",
+      needs_manual_review: false,
+    };
+  }
+
+  async getLegacyLeadForContactResolution({ dealership_id, normalized_phone = null, normalized_email = null } = {}) {
+    if (!normalized_phone && !normalized_email) {
+      return null;
+    }
+
+    const clauses = [];
+    const params = [dealership_id];
+    if (normalized_phone) {
+      clauses.push("(leads.normalized_phone = ? OR contacts.normalized_phone = ?)");
+      params.push(normalized_phone, normalized_phone);
+    }
+    if (normalized_email) {
+      clauses.push("(leads.normalized_email = ? OR contacts.normalized_email = ?)");
+      params.push(normalized_email, normalized_email);
+    }
+
+    const row = await this.get(
+      `
+        ${this.apiLeadSelectSql()}
+        WHERE leads.dealership_id = ?
+          AND (${clauses.join(" OR ")})
+        ORDER BY leads.updated_at DESC, leads.id DESC
+        LIMIT 1
+      `,
+      params
+    );
+    return row ? this.formatApiLead(row) : null;
+  }
+
+  contactSelectSql() {
+    return `
+      SELECT
+        contacts.id,
+        contacts.dealership_id,
+        contacts.first_name,
+        contacts.last_name,
+        contacts.full_name,
+        contacts.email,
+        contacts.normalized_email,
+        contacts.phone,
+        contacts.normalized_phone,
+        contacts.assigned_rep_id,
+        contacts.assignment_method,
+        contacts.assignment_locked,
+        contacts.needs_manual_review,
+        contacts.company,
+        contacts.job_title,
+        contacts.created_at,
+        contacts.updated_at,
+        assigned_rep.name AS assigned_rep_name
+      FROM contacts
+      LEFT JOIN users AS assigned_rep
+        ON assigned_rep.id = contacts.assigned_rep_id
+       AND assigned_rep.dealership_id = contacts.dealership_id
+    `;
+  }
+
+  formatContactRow(row) {
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: Number(row.id),
+      dealership_id: Number(row.dealership_id || getDefaultDealershipId()),
+      first_name: row.first_name || "",
+      last_name: row.last_name || "",
+      full_name: row.full_name || buildContactFullName(row.first_name, row.last_name),
+      email: row.email || null,
+      normalized_email: row.normalized_email || null,
+      phone: row.phone || null,
+      normalized_phone: row.normalized_phone || null,
+      assigned_rep_id: row.assigned_rep_id == null ? null : Number(row.assigned_rep_id),
+      assigned_rep_name: row.assigned_rep_name || "Unassigned",
+      assignment_method: normalizeAssignmentMethod(row.assignment_method, "auto_round_robin"),
+      assignment_locked: row.assignment_locked === true || row.assignment_locked === "t" || row.assignment_locked === 1,
+      needs_manual_review:
+        row.needs_manual_review === true || row.needs_manual_review === "t" || row.needs_manual_review === 1,
+      company: row.company || null,
+      job_title: row.job_title || null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  async findContactByNormalizedPhone(normalizedPhone, dealershipId) {
+    if (!normalizedPhone) {
+      return null;
+    }
+
+    const row = await this.get(
+      `
+        ${this.contactSelectSql()}
+        WHERE contacts.dealership_id = ?
+          AND contacts.normalized_phone = ?
+        ORDER BY contacts.updated_at DESC, contacts.id DESC
+        LIMIT 1
+      `,
+      [dealershipId, normalizedPhone]
+    );
+    return this.formatContactRow(row);
+  }
+
+  async findContactByNormalizedEmail(normalizedEmail, dealershipId) {
+    if (!normalizedEmail) {
+      return null;
+    }
+
+    const row = await this.get(
+      `
+        ${this.contactSelectSql()}
+        WHERE contacts.dealership_id = ?
+          AND contacts.normalized_email = ?
+        ORDER BY contacts.updated_at DESC, contacts.id DESC
+        LIMIT 1
+      `,
+      [dealershipId, normalizedEmail]
+    );
+    return this.formatContactRow(row);
+  }
+
+  async linkLeadToContact(leadId, contactId, dealershipId, assignedTo = null) {
+    await this.execute(
+      `
+        UPDATE leads
+        SET
+          contact_id = ?,
+          assigned_to = COALESCE(assigned_to, ?),
+          updated_at = ?
+        WHERE id = ? AND dealership_id = ?
+      `,
+      [contactId, assignedTo, new Date().toISOString(), leadId, dealershipId]
+    );
+  }
+
+  async assignContact(id, assignedRepId, actor = null, options = {}) {
+    const contact = await this.getContact(id, actor);
+    let assignee = null;
+    if (assignedRepId != null) {
+      assignee = await this.getUser(assignedRepId);
+      if (Number(assignee.dealership_id || getDefaultDealershipId()) !== Number(contact.dealership_id || getDefaultDealershipId())) {
+        throw new ValidationError("Choose a valid salesperson.");
+      }
+      if (assignee.role !== "sales") {
+        throw new ValidationError("Choose a valid salesperson.");
+      }
+    }
+
+    await this.execute(
+      `
+        UPDATE contacts
+        SET
+          assigned_rep_id = ?,
+          assignment_method = ?,
+          needs_manual_review = COALESCE(?, needs_manual_review),
+          updated_at = ?
+        WHERE id = ? AND dealership_id = ?
+      `,
+      [
+        assignedRepId || null,
+        options.assignment_method || (assignedRepId ? "manual_override" : "manual_unassigned"),
+        options.needs_manual_review == null ? null : Boolean(options.needs_manual_review),
+        new Date().toISOString(),
+        id,
+        contact.dealership_id,
+      ]
+    );
+
+    return this.getContact(id, actor);
+  }
+
+  async findOrCreateContactFromLead(input = {}, user = null, options = {}) {
+    const dealershipId =
+      parsePositiveInteger(input.dealership_id) ||
+      parsePositiveInteger(options.dealership_id) ||
+      (user ? this.currentDealershipId(user) : getDefaultDealershipId());
+    const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
+    const normalizedEmail = normalizeLeadEmailForStorage(input.email);
+    const parsedName = splitCustomerNameParts(normalizeLeadCustomerName(input.customer_name || "", "NN Lead"));
+    const now = options.now || new Date().toISOString();
+
+    const phoneMatch = normalizedPhone ? await this.findContactByNormalizedPhone(normalizedPhone, dealershipId) : null;
+    const emailMatch = normalizedEmail ? await this.findContactByNormalizedEmail(normalizedEmail, dealershipId) : null;
+
+    if (phoneMatch && emailMatch && Number(phoneMatch.id) !== Number(emailMatch.id)) {
+      const assignment = await this.assignRepToNewContact({ dealership_id: dealershipId, user, now });
+      const conflictContact = await this.createContact(
+        {
+          first_name: parsedName.firstName,
+          last_name: parsedName.lastName,
+          email: input.email || null,
+          phone: input.phone || null,
+          company: null,
+          job_title: null,
+          assigned_rep_id: assignment.assigned_rep_id,
+          assignment_method: "conflict_review",
+          needs_manual_review: true,
+        },
+        user,
+        { dealership_id: dealershipId, now }
+      );
+
+      return {
+        contact: conflictContact,
+        created: true,
+        reason: "conflicting_identity_match",
+        needs_manual_review: true,
+      };
+    }
+
+    const matchedContact = phoneMatch || emailMatch;
+    if (matchedContact) {
+      const mergedFirstName = matchedContact.first_name || parsedName.firstName || "";
+      const mergedLastName = matchedContact.last_name || parsedName.lastName || "";
+      const nextEmail = matchedContact.email || input.email || null;
+      const nextPhone = matchedContact.phone || input.phone || null;
+      const requiresUpdate =
+        mergedFirstName !== matchedContact.first_name ||
+        mergedLastName !== matchedContact.last_name ||
+        nextEmail !== matchedContact.email ||
+        nextPhone !== matchedContact.phone;
+
+      const contact = requiresUpdate
+        ? await this.updateContact(
+            matchedContact.id,
+            {
+              first_name: mergedFirstName,
+              last_name: mergedLastName,
+              email: nextEmail,
+              phone: nextPhone,
+              company: matchedContact.company,
+              job_title: matchedContact.job_title,
+              assigned_rep_id: matchedContact.assigned_rep_id,
+              assignment_method: matchedContact.assignment_method,
+              needs_manual_review: matchedContact.needs_manual_review,
+              assignment_locked: matchedContact.assignment_locked,
+            },
+            user
+          )
+        : matchedContact;
+
+      return {
+        contact,
+        created: false,
+        reason: phoneMatch ? "normalized_phone" : "normalized_email",
+        needs_manual_review: contact.needs_manual_review,
+      };
+    }
+
+    const legacyLead = await this.getLegacyLeadForContactResolution({
+      dealership_id: dealershipId,
+      normalized_phone: normalizedPhone,
+      normalized_email: normalizedEmail,
+    });
+    if (legacyLead?.contact_id) {
+      const legacyContact = await this.getContact(Number(legacyLead.contact_id), { dealership_id: dealershipId });
+      return {
+        contact: legacyContact,
+        created: false,
+        reason: "legacy_contact_link",
+        needs_manual_review: legacyContact.needs_manual_review,
+      };
+    }
+
+    if (legacyLead && !legacyLead.contact_id) {
+      const legacyName = splitCustomerNameParts(normalizeLeadCustomerName(legacyLead.customer_name || "", "NN Lead"));
+      const assignment =
+        legacyLead.assigned_to != null
+          ? {
+              assigned_rep_id: Number(legacyLead.assigned_to),
+              assignment_method: "legacy_lead_owner",
+              needs_manual_review: false,
+            }
+          : await this.assignRepToNewContact({ dealership_id: dealershipId, user, now });
+      const legacyContact = await this.createContact(
+        {
+          first_name: parsedName.firstName || legacyName.firstName,
+          last_name: parsedName.lastName || legacyName.lastName,
+          email: input.email || legacyLead.email || null,
+          phone: input.phone || legacyLead.phone || null,
+          company: null,
+          job_title: null,
+          assigned_rep_id: assignment.assigned_rep_id,
+          assignment_method: assignment.assignment_method,
+          needs_manual_review: assignment.needs_manual_review || !(normalizedPhone || normalizedEmail),
+        },
+        user,
+        { dealership_id: dealershipId, now }
+      );
+      await this.linkLeadToContact(legacyLead.id, legacyContact.id, dealershipId, legacyContact.assigned_rep_id);
+      return {
+        contact: legacyContact,
+        created: true,
+        reason: "legacy_lead_promoted_to_contact",
+        needs_manual_review: legacyContact.needs_manual_review,
+      };
+    }
+
+    const assignment = await this.assignRepToNewContact({ dealership_id: dealershipId, user, now });
+    const contact = await this.createContact(
+      {
+        first_name: parsedName.firstName,
+        last_name: parsedName.lastName,
+        email: input.email || null,
+        phone: input.phone || null,
+        company: null,
+        job_title: null,
+        assigned_rep_id: assignment.assigned_rep_id,
+        assignment_method: assignment.assignment_method,
+        needs_manual_review: assignment.needs_manual_review || !(normalizedPhone || normalizedEmail),
+      },
+      user,
+      { dealership_id: dealershipId, now }
+    );
+
+    return {
+      contact,
+      created: true,
+      reason: normalizedPhone || normalizedEmail ? "new_contact" : "missing_identity",
+      needs_manual_review: contact.needs_manual_review,
+    };
+  }
+
+  async listContacts(user = null) {
+    const rows = await this.all(
+      `
+        ${this.contactSelectSql()}
+        WHERE contacts.dealership_id = ?
         ${this.contactOrderSql()}
       `,
       [this.currentDealershipId(user)]
     );
+    return rows.map((row) => this.formatContactRow(row));
   }
 
   async listContactsForSelect(user = null) {
@@ -3400,31 +4012,24 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
   }
 
   async getContact(id, user = null) {
-    const contact = await this.get(
+    const dealershipId =
+      parsePositiveInteger(user?.dealership_id) ||
+      parsePositiveInteger(user?.dealershipId) ||
+      this.currentDealershipId(user);
+    const row = await this.get(
       `
-        SELECT
-          id,
-          dealership_id,
-          first_name,
-          last_name,
-          email,
-          phone,
-          company,
-          job_title,
-          created_at,
-          updated_at
-        FROM contacts
+        ${this.contactSelectSql()}
         WHERE id = ?
-          AND dealership_id = ?
+          AND contacts.dealership_id = ?
       `,
-      [id, this.currentDealershipId(user)]
+      [id, dealershipId]
     );
 
-    if (!contact) {
+    if (!row) {
       throw new NotFoundError("Contact not found");
     }
 
-    return contact;
+    return this.formatContactRow(row);
   }
 
   async getContactLeads(contactId, user) {
@@ -3439,75 +4044,106 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     );
   }
 
-  async createContact(input, user = null) {
-    const now = new Date().toISOString();
-    const dealershipId = this.currentDealershipId(user);
+  async createContact(input, user = null, options = {}) {
+    const now = options.now || new Date().toISOString();
+    const dealershipId = parsePositiveInteger(options.dealership_id) || this.currentDealershipId(user);
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
+    const normalizedEmail = normalizeLeadEmailForStorage(input.email);
+    const firstName = String(input.first_name || "").trim();
+    const lastName = String(input.last_name || "").trim();
+    const fullName = buildContactFullName(firstName, lastName);
     const row = await this.get(
       `
         INSERT INTO contacts (
           dealership_id,
           first_name,
           last_name,
+          full_name,
           email,
+          normalized_email,
           phone,
           normalized_phone,
+          assigned_rep_id,
+          assignment_method,
+          assignment_locked,
+          needs_manual_review,
           company,
           job_title,
           created_at,
           updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           RETURNING id
         `,
         [
           dealershipId,
-          input.first_name,
-          input.last_name,
+          firstName,
+          lastName,
+          fullName,
           input.email,
+          normalizedEmail,
           input.phone,
           normalizedPhone,
+          parsePositiveInteger(input.assigned_rep_id),
+          normalizeAssignmentMethod(input.assignment_method, "auto_round_robin"),
+          Boolean(input.assignment_locked),
+          Boolean(input.needs_manual_review),
           input.company,
           input.job_title,
           now,
-        now,
+          now,
       ]
     );
 
-    return this.getContact(row.id, user);
+    return this.getContact(row.id, { dealership_id: dealershipId });
   }
 
   async updateContact(id, input, user = null) {
-    await this.getContact(id, user);
+    const existing = await this.getContact(id, user);
     const normalizedPhone = normalizeLeadPhoneForStorage(input.phone);
+    const normalizedEmail = normalizeLeadEmailForStorage(input.email);
+    const firstName = String(input.first_name || "").trim();
+    const lastName = String(input.last_name || "").trim();
     await this.execute(
       `
         UPDATE contacts
         SET
           first_name = ?,
           last_name = ?,
+          full_name = ?,
           email = ?,
+          normalized_email = ?,
           phone = ?,
           normalized_phone = ?,
+          assigned_rep_id = COALESCE(?, assigned_rep_id),
+          assignment_method = COALESCE(?, assignment_method),
+          assignment_locked = COALESCE(?, assignment_locked),
+          needs_manual_review = COALESCE(?, needs_manual_review),
           company = ?,
           job_title = ?,
           updated_at = ?
         WHERE id = ? AND dealership_id = ?
       `,
       [
-        input.first_name,
-        input.last_name,
+        firstName,
+        lastName,
+        buildContactFullName(firstName, lastName),
         input.email,
+        normalizedEmail,
         input.phone,
         normalizedPhone,
+        parsePositiveInteger(input.assigned_rep_id),
+        stringOrNull(input.assignment_method),
+        input.assignment_locked == null ? null : Boolean(input.assignment_locked),
+        input.needs_manual_review == null ? null : Boolean(input.needs_manual_review),
         input.company,
         input.job_title,
         new Date().toISOString(),
         id,
-        this.currentDealershipId(user),
+        existing.dealership_id,
       ]
     );
 
-    return this.getContact(id, user);
+    return this.getContact(id, { dealership_id: existing.dealership_id });
   }
 
   async deleteContact(id, user = null) {
@@ -3951,7 +4587,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
   }
 
   async getDefaultAssigneeId() {
-    const user = await this.getAssignableSalesUser();
+    const user = await this.getAssignableSalesUser(null, { advanceCursor: false });
     return user ? Number(user.id) : null;
   }
 

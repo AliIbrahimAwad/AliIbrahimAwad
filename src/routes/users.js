@@ -15,6 +15,35 @@ function sanitizeUserPayload(body) {
   };
 }
 
+function sanitizeAvailabilityPayload(body) {
+  return {
+    is_active: body.is_active,
+    is_available: body.is_available,
+    working_days: body.working_days || body.workingDays,
+    working_hours_start: body.working_hours_start || body.workingHoursStart,
+    working_hours_end: body.working_hours_end || body.workingHoursEnd,
+    timezone: body.timezone,
+    max_active_leads: body.max_active_leads || body.maxActiveLeads,
+  };
+}
+
+function serializeUser(user) {
+  return {
+    id: Number(user.id),
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    is_active: Boolean(user.is_active),
+    is_available: Boolean(user.is_available),
+    working_days: user.working_days || [],
+    working_hours_start: user.working_hours_start || null,
+    working_hours_end: user.working_hours_end || null,
+    timezone: user.timezone || null,
+    max_active_leads: user.max_active_leads == null ? null : Number(user.max_active_leads),
+    created_at: user.created_at,
+  };
+}
+
 function validateUserPayload(payload, { requirePassword }) {
   const errors = {};
 
@@ -53,13 +82,7 @@ function registerUserRoutes(app) {
 
       const users = await req.app.locals.db.listSalesUsers(req.currentUser);
       res.json({
-        items: users.map((user) => ({
-          id: Number(user.id),
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          created_at: user.created_at,
-        })),
+        items: users.map(serializeUser),
       });
     })
   );
@@ -67,17 +90,15 @@ function registerUserRoutes(app) {
   app.get(
     "/api/users",
     requireAuth,
-    requireAdmin,
     asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser) && !canManageUsers(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
       const users = await req.app.locals.db.listUsers(req.currentUser);
       res.json({
-        items: users.map((user) => ({
-          id: Number(user.id),
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          created_at: user.created_at,
-        })),
+        items: users.map(serializeUser),
       });
     })
   );
@@ -104,13 +125,7 @@ function registerUserRoutes(app) {
           role: payload.role,
         }, req.currentUser);
 
-        res.status(201).json({
-          id: Number(user.id),
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          created_at: user.created_at,
-        });
+        res.status(201).json(serializeUser(user));
       } catch (error) {
         res.status(422).json({
           error:
@@ -135,6 +150,42 @@ function registerUserRoutes(app) {
 
       await req.app.locals.db.deleteUser(userId, req.currentUser);
       res.status(204).end();
+    })
+  );
+
+  app.patch(
+    "/api/users/:id/availability",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const userId = Number(req.params.id);
+      if (!Number.isInteger(userId) || userId <= 0) {
+        res.status(422).json({ error: "A valid user is required." });
+        return;
+      }
+
+      const isSelf = Number(req.currentUser.id) === userId;
+      const canManageAvailability = canAssignLeads(req.currentUser) || canManageUsers(req.currentUser);
+      if (!isSelf && !canManageAvailability) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const targetUser = await req.app.locals.db.getUser(userId);
+      if (
+        Number(targetUser.dealership_id || 0) !== Number(req.currentUser.dealership_id || 0) ||
+        (!isSelf && targetUser.role !== "sales")
+      ) {
+        res.status(404).json({ error: "User not found." });
+        return;
+      }
+
+      const updated = await req.app.locals.db.updateUserAvailability(
+        userId,
+        sanitizeAvailabilityPayload(req.body),
+        req.currentUser
+      );
+
+      res.json({ item: serializeUser(updated) });
     })
   );
 

@@ -45,6 +45,7 @@ import {
   resolveEmailIntakeItem,
   sendLeadSms,
   syncInventoryNow,
+  updateUserAvailability,
   updateLead,
   updateLeadStatus,
 } from "./lib/api";
@@ -414,6 +415,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [userSubmitting, setUserSubmitting] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState(null);
+  const [availabilityUpdatingId, setAvailabilityUpdatingId] = useState(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [leadLibraryLoaded, setLeadLibraryLoaded] = useState(false);
   const [inventoryLoaded, setInventoryLoaded] = useState(false);
@@ -818,7 +820,7 @@ export default function App() {
   }, [activeSection, conversationFeed, leadLibrary, selectedLeadId]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || currentUser?.role !== "admin") {
+    if (authStatus !== "authenticated" || !["admin", "manager"].includes(currentUser?.role)) {
       setUsers([]);
       return;
     }
@@ -1516,6 +1518,28 @@ export default function App() {
     }
   }
 
+  async function handleToggleAvailability(targetUser, nextValue) {
+    try {
+      setAvailabilityUpdatingId(targetUser.id);
+      const response = await updateUserAvailability(targetUser.id, { is_available: nextValue });
+      const updated = response?.item || null;
+      if (!updated) {
+        return;
+      }
+
+      setUsers((current) => current.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
+      setAssignees((current) => current.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
+      if (Number(currentUser?.id) === Number(updated.id)) {
+        setCurrentUser((current) => (current ? { ...current, ...updated } : current));
+      }
+      setError("");
+    } catch (toggleError) {
+      setError(toggleError.message || "Unable to update availability.");
+    } finally {
+      setAvailabilityUpdatingId(null);
+    }
+  }
+
   if (authStatus === "loading") {
     return (
       <div className="min-h-screen bg-ink-950 bg-dashboard px-4 py-6 font-body text-slate-100 sm:px-6 lg:px-8">
@@ -1533,7 +1557,7 @@ export default function App() {
     return <LoginPage onSubmit={handleLogin} loading={authLoading} error={error} />;
   }
 
-  const showTeam = activeSection === "Team" && currentUser?.role === "admin";
+  const showTeam = activeSection === "Team" && (currentUser?.role === "admin" || currentUser?.role === "manager");
   const showDashboard = activeSection === "Dashboard";
   const showIntake = activeSection === "Intake" && (currentUser?.role === "admin" || currentUser?.role === "manager");
   const showLeads = activeSection === "Leads";
@@ -1573,7 +1597,18 @@ export default function App() {
                 setActiveSection(section);
               });
             }}
-            currentUser={currentUser}
+            currentUser={
+              currentUser
+                ? {
+                    ...currentUser,
+                    availabilityUpdating: availabilityUpdatingId === currentUser.id,
+                    onToggleAvailability:
+                      currentUser.role === "sales"
+                        ? (nextValue) => handleToggleAvailability(currentUser, nextValue)
+                        : null,
+                  }
+                : currentUser
+            }
           />
         </div>
 
@@ -1671,9 +1706,11 @@ export default function App() {
               loading={usersLoading}
               submitting={userSubmitting}
               deletingUserId={deletingUserId}
+              availabilityUpdatingId={availabilityUpdatingId}
               onFormChange={(field, value) => setUserForm((current) => ({ ...current, [field]: value }))}
               onSubmit={handleCreateUser}
               onDelete={handleDeleteUser}
+              onToggleAvailability={handleToggleAvailability}
             />
           ) : showAnalytics ? (
             <section className="mt-6 grid gap-4 xl:grid-cols-3">

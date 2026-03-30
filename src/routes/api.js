@@ -465,6 +465,38 @@ function registerApiRoutes(app) {
     })
   );
 
+  app.patch(
+    "/api/contacts/:id/assign",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const rawAssignedTo = req.body.assigned_to ?? req.body.assignedTo ?? req.body.salesperson_id ?? null;
+      const assignedTo =
+        rawAssignedTo == null || String(rawAssignedTo).trim() === "" ? null : Number(rawAssignedTo);
+      if (assignedTo != null && (!Number.isInteger(assignedTo) || assignedTo <= 0)) {
+        throw new ValidationError("A valid salesperson is required.");
+      }
+
+      if (assignedTo != null) {
+        const assignees = await req.app.locals.db.listSalesUsers(req.currentUser);
+        if (!assignees.some((user) => Number(user.id) === assignedTo)) {
+          throw new ValidationError("A valid salesperson is required.");
+        }
+      }
+
+      const contact = await req.app.locals.db.assignContact(Number(req.params.id), assignedTo, req.currentUser, {
+        assignment_method: assignedTo ? "manual_override" : "manual_unassigned",
+        needs_manual_review: false,
+      });
+
+      res.json({ contact });
+    })
+  );
+
   app.get(
     "/api/dashboard/metrics",
     requireAuth,

@@ -75,7 +75,7 @@ function renderContactsListPage({ contacts, activePath = "/contacts", currentUse
           (contact) => `
             <tr>
               <td><a href="/contacts/${contact.id}">${escapeHtml(contactLabel(contact))}</a></td>
-              <td>${escapeHtml(contact.company || "N/A")}</td>
+              <td>${escapeHtml(contact.assigned_rep_name || "Unassigned")}</td>
               <td>${escapeHtml(contact.email || "N/A")}</td>
               <td>${escapeHtml(contact.phone || "N/A")}</td>
             </tr>
@@ -101,7 +101,7 @@ function renderContactsListPage({ contacts, activePath = "/contacts", currentUse
           <thead>
             <tr>
               <th>Name</th>
-              <th>Company</th>
+              <th>Assigned rep</th>
               <th>Email</th>
               <th>Phone</th>
             </tr>
@@ -150,6 +150,8 @@ function renderContactDetailPage({ contact, leads, activePath = "/contacts", cur
         <dl class="details-grid">
           <div><dt>Email</dt><dd>${escapeHtml(contact.email || "N/A")}</dd></div>
           <div><dt>Phone</dt><dd>${escapeHtml(contact.phone || "N/A")}</dd></div>
+          <div><dt>Assigned rep</dt><dd>${escapeHtml(contact.assigned_rep_name || "Unassigned")}</dd></div>
+          <div><dt>Assignment method</dt><dd>${escapeHtml(contact.assignment_method || "N/A")}</dd></div>
           <div><dt>Company</dt><dd>${escapeHtml(contact.company || "N/A")}</dd></div>
           <div><dt>Job title</dt><dd>${escapeHtml(contact.job_title || "N/A")}</dd></div>
         </dl>
