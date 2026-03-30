@@ -4101,7 +4101,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     const row = await this.get(
       `
         ${this.contactSelectSql()}
-        WHERE id = ?
+        WHERE contacts.id = ?
           AND contacts.dealership_id = ?
       `,
       [id, dealershipId]
