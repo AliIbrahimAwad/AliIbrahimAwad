@@ -214,6 +214,13 @@ export function sendLeadSms(id, message) {
   });
 }
 
+export function getLeadSmsSuggestion(id, payload = {}) {
+  return request(`/api/leads/${id}/sms-suggestion`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function logLeadCall(id) {
   return request(`/api/leads/${id}/call`, {
     method: "POST",
@@ -239,6 +246,24 @@ export function getNotifications(limit = 20) {
 export function markNotificationRead(id) {
   return request(`/api/notifications/${id}/read`, {
     method: "PATCH",
+  });
+}
+
+export function getExecutionSettings() {
+  return request("/api/settings/execution");
+}
+
+export function updateExecutionSettings(payload = {}) {
+  return request("/api/settings/execution", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function runAutoSmsNow(limit = 20) {
+  return request("/api/settings/execution/run-auto-sms", {
+    method: "POST",
+    body: JSON.stringify({ limit }),
   });
 }
 

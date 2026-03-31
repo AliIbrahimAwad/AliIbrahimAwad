@@ -22,23 +22,27 @@ import {
   getAssignableUsers,
   getConversations,
   getDashboardWorklist,
+  getExecutionSettings,
   getInventory,
   getInventoryImportErrors,
   getInventoryImportRuns,
   getInventorySyncStatus,
   getLead,
   getLeads,
+  getLeadSmsSuggestion,
   getUnmatchedCommunications,
   holdLeadVehicle,
     importInventory,
     getSession,
+    runAutoSmsNow,
     getUsers,
-  login,
+    login,
   logLeadCall,
   logout,
   markNotificationRead,
   sendLeadSms,
   syncInventoryNow,
+  updateExecutionSettings,
   updateUserAvailability,
   updateLead,
   updateLeadStatus,
@@ -381,6 +385,11 @@ export default function App() {
   const [inventoryLoaded, setInventoryLoaded] = useState(false);
   const [unmatchedLoaded, setUnmatchedLoaded] = useState(false);
   const [conversationFeedLoaded, setConversationFeedLoaded] = useState(false);
+  const [executionSettings, setExecutionSettings] = useState(null);
+  const [executionSettingsLoading, setExecutionSettingsLoading] = useState(false);
+  const [executionSettingsSaving, setExecutionSettingsSaving] = useState(false);
+  const [autoSmsRunning, setAutoSmsRunning] = useState(false);
+  const [smsSuggestionLoading, setSmsSuggestionLoading] = useState(false);
   const [error, setError] = useState("");
   const [inventoryImportForm, setInventoryImportForm] = useState({
     sourceName: "",
@@ -816,6 +825,44 @@ export default function App() {
   }, [authStatus, currentUser?.role]);
 
   useEffect(() => {
+    const canManageExecution = currentUser?.role === "admin" || currentUser?.role === "manager";
+    if (authStatus !== "authenticated" || !canManageExecution) {
+      setExecutionSettings(null);
+      return;
+    }
+
+    let active = true;
+
+    async function loadExecutionSettings() {
+      try {
+        setExecutionSettingsLoading(true);
+        const response = await getExecutionSettings();
+        if (!active) {
+          return;
+        }
+
+        setExecutionSettings(response);
+      } catch (loadError) {
+        if (!active) {
+          return;
+        }
+
+        setError(loadError.message || "Unable to load CRM execution settings.");
+      } finally {
+        if (active) {
+          setExecutionSettingsLoading(false);
+        }
+      }
+    }
+
+    loadExecutionSettings();
+
+    return () => {
+      active = false;
+    };
+  }, [authStatus, currentUser?.role]);
+
+  useEffect(() => {
     if (authStatus !== "authenticated") {
       return;
     }
@@ -1093,6 +1140,7 @@ export default function App() {
       setMetrics(emptyMetrics);
       setUsers([]);
       setAssignees([]);
+      setExecutionSettings(null);
       setNotifications([]);
       setLeadLibraryLoaded(false);
       setInventoryLoaded(false);
@@ -1362,6 +1410,58 @@ export default function App() {
     }
   }
 
+  async function handleSaveExecutionSettings(nextSettings) {
+    try {
+      setExecutionSettingsSaving(true);
+      const response = await updateExecutionSettings(nextSettings);
+      setExecutionSettings(response);
+      setError("");
+    } catch (settingsError) {
+      setError(settingsError.message || "Unable to save texting automation settings.");
+    } finally {
+      setExecutionSettingsSaving(false);
+    }
+  }
+
+  async function handleRunAutoSms() {
+    try {
+      setAutoSmsRunning(true);
+      const result = await runAutoSmsNow();
+      await refreshWorklist();
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary();
+      }
+      if (conversationFeedLoaded) {
+        await loadConversationFeed();
+      }
+      setError("");
+      return result;
+    } catch (runError) {
+      setError(runError.message || "Unable to run automatic texting.");
+      throw runError;
+    } finally {
+      setAutoSmsRunning(false);
+    }
+  }
+
+  async function handleGenerateSmsSuggestion(payload = {}) {
+    if (!selectedLeadId) {
+      return null;
+    }
+
+    try {
+      setSmsSuggestionLoading(true);
+      const response = await getLeadSmsSuggestion(selectedLeadId, payload);
+      setError("");
+      return response?.suggestion || null;
+    } catch (suggestionError) {
+      setError(suggestionError.message || "Unable to generate an AI SMS suggestion.");
+      throw suggestionError;
+    } finally {
+      setSmsSuggestionLoading(false);
+    }
+  }
+
   if (authStatus === "loading") {
     return (
       <div className="min-h-screen bg-ink-950 bg-dashboard px-4 py-6 font-body text-slate-100 sm:px-6 lg:px-8">
@@ -1526,10 +1626,16 @@ export default function App() {
               submitting={userSubmitting}
               deletingUserId={deletingUserId}
               availabilityUpdatingId={availabilityUpdatingId}
+              executionSettings={executionSettings}
+              executionSettingsLoading={executionSettingsLoading}
+              executionSettingsSaving={executionSettingsSaving}
+              autoSmsRunning={autoSmsRunning}
               onFormChange={(field, value) => setUserForm((current) => ({ ...current, [field]: value }))}
               onSubmit={handleCreateUser}
               onDelete={handleDeleteUser}
               onToggleAvailability={handleToggleAvailability}
+              onSaveExecutionSettings={handleSaveExecutionSettings}
+              onRunAutoSms={handleRunAutoSms}
             />
           ) : showAnalytics ? (
             <section className="mt-6 grid gap-4 xl:grid-cols-3">
@@ -1975,6 +2081,8 @@ export default function App() {
               taskCompletingId={taskCompletingId}
               onSendSms={handleSendSms}
               smsSending={smsSending}
+              onGenerateSmsSuggestion={handleGenerateSmsSuggestion}
+              smsSuggestionLoading={smsSuggestionLoading}
               onLogCall={handleLogCall}
               callLogging={callLogging}
               onHoldVehicle={handleHoldVehicle}

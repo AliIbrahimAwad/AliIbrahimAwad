@@ -588,6 +588,20 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS lead_auto_text_runs (
+        id BIGSERIAL PRIMARY KEY,
+        dealership_id BIGINT NOT NULL DEFAULT 1,
+        lead_id BIGINT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+        automation_key TEXT NOT NULL,
+        automation_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        assigned_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+        message_body TEXT,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       ALTER TABLE users ADD COLUMN IF NOT EXISTS dealership_id BIGINT NOT NULL DEFAULT 1;
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS dealership_id BIGINT NOT NULL DEFAULT 1;
       ALTER TABLE leads ADD COLUMN IF NOT EXISTS dealership_id BIGINT NOT NULL DEFAULT 1;
@@ -677,6 +691,10 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       CREATE INDEX IF NOT EXISTS idx_tasks_user_status_due_at ON tasks(user_id, status, due_at);
       CREATE INDEX IF NOT EXISTS idx_tasks_lead_status_due_at ON tasks(lead_id, status, due_at);
       CREATE INDEX IF NOT EXISTS idx_notifications_user_status_created_at ON notifications(user_id, status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_lead_auto_text_runs_lead_id_created_at
+        ON lead_auto_text_runs(lead_id, created_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_auto_text_runs_unique_key
+        ON lead_auto_text_runs(dealership_id, lead_id, automation_key);
     `);
 
     const dealershipId = getDefaultDealershipId();
@@ -1806,6 +1824,109 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     }
 
     return settings;
+  }
+
+  async listLeadsEligibleForAutoText({ delayMinutes = 10, limit = 25, dealership_id = null } = {}) {
+    const dealershipId = parsePositiveInteger(dealership_id) || this.currentDealershipId();
+    const safeLimit = Math.max(1, Math.min(100, Number(limit) || 25));
+    const delay = Math.max(1, Number(delayMinutes) || 10);
+    const cutoff = new Date(Date.now() - delay * 60000).toISOString();
+    const rows = await this.all(
+      `
+        ${this.apiLeadSelectSql()}
+        WHERE leads.dealership_id = ?
+          AND LOWER(COALESCE(leads.status, 'new')) IN ('new', 'contacted')
+          AND COALESCE(NULLIF(BTRIM(leads.phone), ''), NULLIF(BTRIM(contacts.phone), '')) IS NOT NULL
+          AND COALESCE(leads.assigned_to, contacts.assigned_rep_id) IS NOT NULL
+          AND COALESCE(leads.created_at, leads.updated_at) <= ?
+          AND NOT EXISTS (
+            SELECT 1
+            FROM lead_messages
+            WHERE lead_messages.lead_id = leads.id
+              AND lead_messages.dealership_id = leads.dealership_id
+              AND LOWER(COALESCE(lead_messages.direction, '')) = 'outbound'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM lead_auto_text_runs
+            WHERE lead_auto_text_runs.lead_id = leads.id
+              AND lead_auto_text_runs.dealership_id = leads.dealership_id
+              AND lead_auto_text_runs.automation_key = 'new_lead_follow_up'
+          )
+        ORDER BY COALESCE(leads.created_at, leads.updated_at) ASC, leads.id ASC
+        LIMIT ?
+      `,
+      [dealershipId, cutoff, safeLimit]
+    );
+
+    return rows.map((row) => this.formatApiLead(row));
+  }
+
+  async createLeadAutoTextRun(input = {}) {
+    const dealershipId = parsePositiveInteger(input.dealership_id) || this.currentDealershipId();
+    const leadId = parsePositiveInteger(input.lead_id);
+    if (!leadId) {
+      throw new ValidationError("A valid lead is required for auto text logging.");
+    }
+
+    const automationKey = stringOrNull(input.automation_key);
+    const automationType = stringOrNull(input.automation_type);
+    const status = stringOrNull(input.status) || "sent";
+    if (!automationKey || !automationType) {
+      throw new ValidationError("Automation key and type are required.");
+    }
+
+    const timestamp = input.created_at || new Date().toISOString();
+    const row = await this.get(
+      `
+        INSERT INTO lead_auto_text_runs (
+          dealership_id,
+          lead_id,
+          automation_key,
+          automation_type,
+          status,
+          assigned_user_id,
+          message_body,
+          metadata_json,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (dealership_id, lead_id, automation_key) DO UPDATE
+        SET
+          status = EXCLUDED.status,
+          assigned_user_id = EXCLUDED.assigned_user_id,
+          message_body = EXCLUDED.message_body,
+          metadata_json = EXCLUDED.metadata_json,
+          updated_at = EXCLUDED.updated_at
+        RETURNING *
+      `,
+      [
+        dealershipId,
+        leadId,
+        automationKey,
+        automationType,
+        status,
+        parsePositiveInteger(input.assigned_user_id),
+        stringOrNull(input.message_body),
+        JSON.stringify(input.metadata || {}),
+        timestamp,
+        new Date().toISOString(),
+      ]
+    );
+
+    return {
+      id: Number(row.id),
+      dealership_id: Number(row.dealership_id),
+      lead_id: Number(row.lead_id),
+      automation_key: row.automation_key,
+      automation_type: row.automation_type,
+      status: row.status,
+      assigned_user_id: row.assigned_user_id == null ? null : Number(row.assigned_user_id),
+      message_body: row.message_body || null,
+      metadata: parseJson(row.metadata_json, {}),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
   }
 
   formatTaskForApi(row) {

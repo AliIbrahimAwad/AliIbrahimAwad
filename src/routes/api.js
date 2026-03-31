@@ -6,6 +6,7 @@ const { toDateOnlyString } = require("../utils/dates");
 const { buildCustomerNameFromParts, normalizeLeadCustomerName, splitCustomerNameParts } = require("../utils/leadNames");
 const { asyncHandler } = require("./helpers");
 const { importInventoryCsv } = require("../../services/inventoryImport");
+const { generateLeadSmsSuggestion, runAutomaticTexting } = require("../../services/leadTextingAutomation");
 
 function toPagination(query = {}) {
   return {
@@ -821,6 +822,32 @@ function registerApiRoutes(app) {
   );
 
   app.post(
+    "/api/leads/:id/sms-suggestion",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const leadId = Number(req.params.id);
+      const lead = await req.app.locals.db.getApiLead(leadId, req.currentUser);
+      const messages = req.app.locals.ringcentral.store
+        ? await req.app.locals.ringcentral.store.listLeadMessages(leadId, 6)
+        : [];
+      const settings = await req.app.locals.db.getExecutionSettings();
+
+      if (!Number(settings.ai_sms_enabled)) {
+        throw new ValidationError("AI SMS suggestions are currently disabled.");
+      }
+
+      const suggestion = await generateLeadSmsSuggestion({
+        lead,
+        messages,
+        goal: String(req.body.goal || "follow_up"),
+        extraContext: String(req.body.context || "").trim(),
+      });
+
+      res.json({ suggestion });
+    })
+  );
+
+  app.post(
     "/api/leads/:id/sms",
     requireAuth,
     asyncHandler(async (req, res) => {
@@ -996,6 +1023,25 @@ function registerApiRoutes(app) {
       }
 
       res.json(await req.app.locals.db.setExecutionSettings(req.body || {}));
+    })
+  );
+
+  app.post(
+    "/api/settings/execution/run-auto-sms",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canManageUsers(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      res.json(
+        await runAutomaticTexting({
+          db: req.app.locals.db,
+          ringcentral: req.app.locals.ringcentral,
+          limit: Math.max(1, Math.min(50, Number(req.body.limit) || 20)),
+        })
+      );
     })
   );
 }

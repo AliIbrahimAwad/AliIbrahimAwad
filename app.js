@@ -9,6 +9,7 @@ const { createLeadInboxService } = require("./services/leadInbox");
 const { buildGraphService } = require("./services/microsoftGraph");
 const { InventorySyncService } = require("./services/inventorySync");
 const { InventorySyncScheduler } = require("./services/inventorySyncScheduler");
+const { runAutomaticTexting } = require("./services/leadTextingAutomation");
 const { createRingCentralService } = require("./services/ringcentral");
 const { buildInventorySyncConfig } = require("./src/config/inventorySync");
 const { initializeDatabase } = require("./src/data");
@@ -120,6 +121,32 @@ async function configureInventorySync(app, db, options = {}) {
   app.locals.stopInventorySyncScheduler = () => scheduler.stop();
 }
 
+async function configureAutoTexting(app, db, ringcentral, options = {}) {
+  if (options.disableAutoTextingScheduler) {
+    app.locals.stopAutoTextingScheduler = null;
+    return;
+  }
+
+  const intervalMs = Math.max(
+    60_000,
+    Number(options.autoTextingIntervalMs || process.env.AUTO_SMS_INTERVAL_MS) || 300_000
+  );
+
+  const run = async () => {
+    try {
+      await runAutomaticTexting({ db, ringcentral });
+    } catch (error) {
+      console.error("Automatic texting run failed.", error);
+    }
+  };
+
+  const startupTimer = setTimeout(run, 5_000);
+  startupTimer.unref?.();
+  const interval = setInterval(run, intervalMs);
+  interval.unref?.();
+  app.locals.stopAutoTextingScheduler = () => clearInterval(interval);
+}
+
 async function createApp(options = {}) {
   const app = express();
   const db = await initializeDatabase({
@@ -142,6 +169,7 @@ async function createApp(options = {}) {
   app.locals.ringcentral = ringcentral;
   app.locals.stopLeadInboxPolling = null;
   app.locals.stopInventorySyncScheduler = null;
+  app.locals.stopAutoTextingScheduler = null;
 
   app.use(express.urlencoded({ extended: false }));
   app.use(express.json({ limit: "10mb" }));
@@ -169,6 +197,7 @@ async function createApp(options = {}) {
   registerUserRoutes(app);
   await configureLeadInbox(app, db, options);
   await configureInventorySync(app, db, options);
+  await configureAutoTexting(app, db, ringcentral, options);
 
   if (serveReactApp) {
     app.use(express.static(frontendDistPath, { index: false }));

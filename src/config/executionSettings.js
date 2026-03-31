@@ -4,6 +4,9 @@ const DEFAULT_EXECUTION_SETTINGS = {
   ai_task_due_hours: 4,
   appointment_task_due_hours: 2,
   missed_call_task_due_minutes: 30,
+  ai_sms_enabled: 1,
+  auto_sms_enabled: 0,
+  auto_sms_delay_minutes: 10,
 };
 
 function normalizePositiveNumber(value, fallback) {
@@ -32,6 +35,13 @@ function normalizeExecutionSettings(input = {}) {
     missed_call_task_due_minutes: normalizePositiveNumber(
       input.missed_call_task_due_minutes,
       DEFAULT_EXECUTION_SETTINGS.missed_call_task_due_minutes
+    ),
+    ai_sms_enabled: normalizePositiveNumber(input.ai_sms_enabled, DEFAULT_EXECUTION_SETTINGS.ai_sms_enabled) > 0 ? 1 : 0,
+    auto_sms_enabled:
+      normalizePositiveNumber(input.auto_sms_enabled, DEFAULT_EXECUTION_SETTINGS.auto_sms_enabled) > 0 ? 1 : 0,
+    auto_sms_delay_minutes: normalizePositiveNumber(
+      input.auto_sms_delay_minutes,
+      DEFAULT_EXECUTION_SETTINGS.auto_sms_delay_minutes
     ),
   };
 }

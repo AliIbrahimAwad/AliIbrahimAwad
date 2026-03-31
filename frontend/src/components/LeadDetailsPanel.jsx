@@ -57,6 +57,8 @@ export function LeadDetailsPanel({
   taskCompletingId = null,
   onSendSms,
   smsSending = false,
+  onGenerateSmsSuggestion,
+  smsSuggestionLoading = false,
   onLogCall,
   callLogging = false,
   onHoldVehicle,
@@ -64,6 +66,8 @@ export function LeadDetailsPanel({
 }) {
   const [assignmentValue, setAssignmentValue] = useState("");
   const [smsDraft, setSmsDraft] = useState("");
+  const [smsGoal, setSmsGoal] = useState("follow_up");
+  const [smsSuggestionInfo, setSmsSuggestionInfo] = useState(null);
   const [smsComposerOpen, setSmsComposerOpen] = useState(false);
   const [actionNotice, setActionNotice] = useState("");
   const [editingLead, setEditingLead] = useState(false);
@@ -83,6 +87,8 @@ export function LeadDetailsPanel({
 
   useEffect(() => {
     setSmsDraft("");
+    setSmsGoal("follow_up");
+    setSmsSuggestionInfo(null);
     setSmsComposerOpen(false);
     setActionNotice("");
     setEditingLead(false);
@@ -296,6 +302,7 @@ export function LeadDetailsPanel({
                     });
                     setEditingLead(false);
                     setActionNotice("Lead details updated.");
+                    setSmsSuggestionInfo(null);
                   } catch (_error) {
                     // The parent surfaces API errors, so we keep the form open here.
                   }
@@ -593,9 +600,56 @@ export function LeadDetailsPanel({
 
       {smsComposerOpen ? (
         <div className="mt-4 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <Send className="h-4 w-4 text-ice-300" />
-            Compose SMS
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-white">
+              <Send className="h-4 w-4 text-ice-300" />
+              Compose SMS
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <select
+                value={smsGoal}
+                onChange={(event) => setSmsGoal(event.target.value)}
+                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white outline-none"
+              >
+                <option value="follow_up" className="bg-ink-900">
+                  Follow-up
+                </option>
+                <option value="appointment" className="bg-ink-900">
+                  Appointment
+                </option>
+                <option value="price_drop" className="bg-ink-900">
+                  Price drop
+                </option>
+                <option value="missed_call" className="bg-ink-900">
+                  Missed call
+                </option>
+              </select>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const suggestion = await onGenerateSmsSuggestion?.({ goal: smsGoal });
+                    if (!suggestion?.message) {
+                      return;
+                    }
+                    setSmsDraft(suggestion.message);
+                    setSmsSuggestionInfo(suggestion);
+                    setActionNotice(
+                      suggestion.source === "openai"
+                        ? `AI draft ready${suggestion.confidence ? ` (${Math.round(suggestion.confidence * 100)}% confidence)` : ""}.`
+                        : "Suggested SMS draft ready."
+                    );
+                  } catch (_error) {
+                    // The parent surfaces API errors.
+                  }
+                }}
+                disabled={smsSuggestionLoading || !hasCallablePhone}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-2 text-sm font-semibold text-amber-100 transition hover:bg-amber-300/15 disabled:cursor-wait disabled:opacity-60"
+              >
+                <Sparkles className="h-4 w-4" />
+                {smsSuggestionLoading ? "Generating..." : "AI Draft"}
+              </button>
+            </div>
           </div>
           <textarea
             ref={smsComposerRef}
@@ -605,6 +659,15 @@ export function LeadDetailsPanel({
             placeholder="Write a quick follow-up..."
             className="mt-4 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
           />
+          {smsSuggestionInfo ? (
+            <div className="mt-3 rounded-2xl border border-amber-300/15 bg-amber-300/5 px-4 py-3 text-sm text-amber-100">
+              <p className="font-semibold text-white">AI suggestion</p>
+              <p className="mt-1 text-xs uppercase tracking-[0.22em] text-amber-200/80">
+                {smsSuggestionInfo.source === "openai" ? "OpenAI draft" : "Template draft"} | Goal {smsSuggestionInfo.goal}
+              </p>
+              <p className="mt-2 text-sm leading-6 text-slate-200">{smsSuggestionInfo.reasoning}</p>
+            </div>
+          ) : null}
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
               Sending to {hasCallablePhone ? lead.phone : "No phone number"}
@@ -615,6 +678,7 @@ export function LeadDetailsPanel({
                 onClick={() => {
                   setSmsComposerOpen(false);
                   setSmsDraft("");
+                  setSmsSuggestionInfo(null);
                   setActionNotice("");
                 }}
                 className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
@@ -631,6 +695,7 @@ export function LeadDetailsPanel({
                   try {
                     await onSendSms?.(trimmed);
                     setSmsDraft("");
+                    setSmsSuggestionInfo(null);
                     setSmsComposerOpen(false);
                     setActionNotice("SMS sent through RingCentral.");
                   } catch (_error) {

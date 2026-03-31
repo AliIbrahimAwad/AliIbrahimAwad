@@ -18,12 +18,19 @@ export function TeamManagementPanel({
   onSubmit,
   onDelete,
   onToggleAvailability,
+  executionSettings,
+  executionSettingsLoading = false,
+  executionSettingsSaving = false,
+  autoSmsRunning = false,
+  onSaveExecutionSettings,
+  onRunAutoSms,
   loading = false,
   submitting = false,
   deletingUserId = null,
   availabilityUpdatingId = null,
 }) {
   const canManageRoster = currentUser?.role === "admin";
+  const canManageAutomation = currentUser?.role === "admin" || currentUser?.role === "manager";
 
   return (
     <section className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
@@ -103,10 +110,92 @@ export function TeamManagementPanel({
             </button>
           </div>
         ) : (
-          <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-4 text-sm leading-6 text-slate-300">
-            Managers can review who is available for fresh contact routing here. Sales reps can also pause their own
-            routing from the sidebar without losing ownership of existing contacts.
-          </div>
+          <>
+            <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-4 text-sm leading-6 text-slate-300">
+              Managers can review who is available for fresh contact routing here. Sales reps can also pause their own
+              routing from the sidebar without losing ownership of existing contacts.
+            </div>
+
+            {canManageAutomation ? (
+              <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Texting automation</p>
+                  <h3 className="mt-1 font-display text-xl font-semibold text-white">AI texting controls</h3>
+                </div>
+
+                {executionSettingsLoading ? (
+                  <div className="mt-4 h-36 animate-pulse rounded-2xl border border-white/10 bg-white/[0.04]" />
+                ) : (
+                  <div className="mt-4 grid gap-4">
+                    <label className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                      <span>
+                        <span className="block text-sm font-semibold text-white">AI SMS suggestions</span>
+                        <span className="block text-xs text-slate-400">Allow reps to generate AI draft replies in the lead modal.</span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(Number(executionSettings?.ai_sms_enabled || 0))}
+                        onChange={(event) =>
+                          onSaveExecutionSettings?.({
+                            ...executionSettings,
+                            ai_sms_enabled: event.target.checked ? 1 : 0,
+                          })
+                        }
+                        disabled={executionSettingsSaving}
+                        className="h-5 w-5 rounded border-white/10 bg-white/5"
+                      />
+                    </label>
+
+                    <label className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                      <span>
+                        <span className="block text-sm font-semibold text-white">Automatic first follow-up texts</span>
+                        <span className="block text-xs text-slate-400">Send one automatic first-response SMS to clean fresh leads.</span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(Number(executionSettings?.auto_sms_enabled || 0))}
+                        onChange={(event) =>
+                          onSaveExecutionSettings?.({
+                            ...executionSettings,
+                            auto_sms_enabled: event.target.checked ? 1 : 0,
+                          })
+                        }
+                        disabled={executionSettingsSaving}
+                        className="h-5 w-5 rounded border-white/10 bg-white/5"
+                      />
+                    </label>
+
+                    <label className="grid gap-2">
+                      <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Delay before first auto-text</span>
+                      <div className="flex gap-3">
+                        <input
+                          type="number"
+                          min="1"
+                          value={executionSettings?.auto_sms_delay_minutes ?? 10}
+                          onChange={(event) =>
+                            onSaveExecutionSettings?.({
+                              ...executionSettings,
+                              auto_sms_delay_minutes: Number(event.target.value) || 10,
+                            })
+                          }
+                          disabled={executionSettingsSaving}
+                          className="w-32 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => onRunAutoSms?.()}
+                          disabled={autoSmsRunning || executionSettingsSaving}
+                          className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {autoSmsRunning ? "Running..." : "Run auto-texts now"}
+                        </button>
+                      </div>
+                    </label>
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </>
         )}
       </div>
 
