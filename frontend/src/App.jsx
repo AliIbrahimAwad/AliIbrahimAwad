@@ -3,8 +3,8 @@ import { Menu, Search, SlidersHorizontal, X } from "lucide-react";
 
 import { AttentionLeadCard } from "./components/AttentionLeadCard";
 import { InventoryPanel } from "./components/InventoryPanel";
-import { LeadCard } from "./components/LeadCard";
 import { LeadDetailsPanel } from "./components/LeadDetailsPanel";
+import { LeadPipelineBoard } from "./components/LeadPipelineBoard";
 import { LoginPage } from "./components/LoginPage";
 import { MetricCard } from "./components/MetricCard";
 import { NotificationTray } from "./components/NotificationTray";
@@ -51,6 +51,7 @@ import { formatPhoneNumber, pipelineLabel } from "./lib/format";
 import { splitCustomerNameParts } from "./lib/leadNames";
 
 const organizedGroups = ["contacted", "appointment", "negotiation", "sold", "lost"];
+const pipelineStages = ["new", ...organizedGroups];
 
 function capitalizeSource(source) {
   return String(source || "")
@@ -390,6 +391,8 @@ export default function App() {
   const [executionSettingsSaving, setExecutionSettingsSaving] = useState(false);
   const [autoSmsRunning, setAutoSmsRunning] = useState(false);
   const [smsSuggestionLoading, setSmsSuggestionLoading] = useState(false);
+  const [draggingLeadId, setDraggingLeadId] = useState(null);
+  const [pipelineMovingLeadId, setPipelineMovingLeadId] = useState(null);
   const [error, setError] = useState("");
   const [inventoryImportForm, setInventoryImportForm] = useState({
     sourceName: "",
@@ -924,6 +927,14 @@ export default function App() {
 
   const visibleAttentionLeads = leads.filter(matchesSearch);
   const visibleLeadLibrary = leadLibrary.filter(matchesSearch);
+  const visiblePipelineGroups = Object.fromEntries(
+    pipelineStages.map((status) => [
+      status,
+      visibleLeadLibrary.filter(
+        (lead) => (leadStatusFilter === "all" || lead.status === leadStatusFilter) && lead.status === status
+      ),
+    ])
+  );
   const visibleOrganizedGroups = Object.fromEntries(
     organizedGroups.map((group) => [group, organizedLeadGroups[group].filter(matchesSearch)])
   );
@@ -934,6 +945,7 @@ export default function App() {
     ])
   );
   const flattenedOrganizedLeads = organizedGroups.flatMap((group) => filteredOrganizedGroups[group]);
+  const flattenedPipelineLeads = pipelineStages.flatMap((status) => visiblePipelineGroups[status] || []);
   const visibleConversationFeed = conversationFeed.filter((item) =>
     !search ||
     [
@@ -979,6 +991,7 @@ export default function App() {
         leads.find((lead) => lead.id === selectedLeadId) ??
         visibleLeadLibrary.find((lead) => lead.id === selectedLeadId) ??
         leadLibrary.find((lead) => lead.id === selectedLeadId) ??
+        flattenedPipelineLeads.find((lead) => lead.id === selectedLeadId) ??
         flattenedOrganizedLeads.find((lead) => lead.id === selectedLeadId) ??
         organizedGroups.flatMap((group) => organizedLeadGroups[group]).find((lead) => lead.id === selectedLeadId) ??
         null;
@@ -1014,6 +1027,47 @@ export default function App() {
       setError(updateError.message || "Unable to update lead status.");
     } finally {
       setStatusUpdating(false);
+    }
+  }
+
+  async function handlePipelineMove(leadId, nextStatus) {
+    const currentLead =
+      leadLibrary.find((lead) => Number(lead.id) === Number(leadId)) ??
+      leads.find((lead) => Number(lead.id) === Number(leadId)) ??
+      null;
+
+    if (!currentLead || currentLead.status === nextStatus) {
+      return;
+    }
+
+    try {
+      setPipelineMovingLeadId(leadId);
+      const payload = await updateLeadStatus(leadId, nextStatus);
+      const nextLead = formatLead(payload.lead);
+
+      if (Number(selectedLeadId) === Number(leadId)) {
+        setSelectedLeadDetails({
+          ...nextLead,
+          activities: (payload.activities || []).map(formatActivity),
+          timeline: (payload.timeline || []).map(formatTimelineItem),
+          tasks: payload.tasks || [],
+        });
+      }
+
+      await refreshWorklist();
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary({ preserveSelection: true });
+      }
+      if (conversationFeedLoaded) {
+        await loadConversationFeed();
+      }
+      setSelectedLeadId(leadId);
+      setError("");
+    } catch (moveError) {
+      setError(moveError.message || "Unable to move the lead in the pipeline.");
+    } finally {
+      setPipelineMovingLeadId(null);
+      setDraggingLeadId(null);
     }
   }
 
@@ -1762,9 +1816,9 @@ export default function App() {
                           className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
                         >
                           <option value="all" className="bg-ink-900">
-                            All organized leads
+                            All stages
                           </option>
-                          {organizedGroups.map((status) => (
+                          {pipelineStages.map((status) => (
                             <option key={status} value={status} className="bg-ink-900">
                               {pipelineLabel(status)}
                             </option>
@@ -1812,40 +1866,43 @@ export default function App() {
                             </div>
                           </div>
 
-                          {flattenedOrganizedLeads.length ? (
-                            organizedGroups.map((group) =>
-                              filteredOrganizedGroups[group]?.length ? (
-                                <div key={group} className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
-                                  <div className="mb-4 flex items-center justify-between gap-3">
-                                    <div>
-                                      <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Stage</p>
-                                      <h3 className="mt-1 font-display text-xl font-semibold text-white">{pipelineLabel(group)}</h3>
-                                    </div>
-                                    <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
-                                      {filteredOrganizedGroups[group].length}
-                                    </span>
-                                  </div>
-                                  <div className="grid gap-4">
-                                    {filteredOrganizedGroups[group].map((lead) => (
-                                      <LeadCard
-                                        key={lead.id}
-                                        lead={lead}
-                                        selected={lead.id === selectedLead?.id}
-                                        onSelect={() => {
-                                          startTransition(() => {
-                                            setSelectedLeadId(lead.id);
-                                            setLeadModalOpen(true);
-                                          });
-                                        }}
-                                      />
-                                    ))}
-                                  </div>
+                          {flattenedPipelineLeads.length ? (
+                            <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
+                              <div className="mb-4 flex flex-col gap-3 border-b border-white/10 pb-4 lg:flex-row lg:items-end lg:justify-between">
+                                <div>
+                                  <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Pipeline board</p>
+                                  <h3 className="mt-1 font-display text-xl font-semibold text-white">Drag leads through the desk</h3>
+                                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+                                    The full lead library is grouped by stage here. Drag a lead into a different lane to update the CRM status, or click a card to open the lead popup.
+                                  </p>
                                 </div>
-                              ) : null
-                            )
+                                <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-300">
+                                  {flattenedPipelineLeads.length} visible leads
+                                </span>
+                              </div>
+
+                              <LeadPipelineBoard
+                                stages={pipelineStages.map((status) => ({
+                                  key: status,
+                                  label: pipelineLabel(status),
+                                }))}
+                                groups={visiblePipelineGroups}
+                                selectedLeadId={selectedLead?.id}
+                                draggingLeadId={draggingLeadId}
+                                movingLeadId={pipelineMovingLeadId}
+                                onSelectLead={(leadId) => {
+                                  startTransition(() => {
+                                    setSelectedLeadId(leadId);
+                                    setLeadModalOpen(true);
+                                  });
+                                }}
+                                onMoveLead={handlePipelineMove}
+                                onDragStateChange={setDraggingLeadId}
+                              />
+                            </div>
                           ) : (
                             <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                              No organized leads match this search.
+                              No leads match this search or stage filter.
                             </div>
                           )}
                         </>
