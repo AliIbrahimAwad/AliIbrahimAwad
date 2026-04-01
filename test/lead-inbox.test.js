@@ -10,6 +10,7 @@ const {
   parseCarGurusEmail,
   parseLeadEmail,
   parseWebsiteLeadEmail,
+  shouldSkipParsedEmail,
 } = require("../services/leadInbox");
 
 test("parses AutoTrader lead emails", () => {
@@ -154,6 +155,25 @@ View Listing on CarGurus: https://example.com/listing
   assert.equal(lead.phone, "(519) 504-9958");
   assert.equal(lead.vehicle_id, "5YJ3E1EB6NF126791");
   assert.equal(lead.stock_number, "D9783");
+});
+
+test("classifies CarGurus phone lead notifications as non-direct intake", () => {
+  const text = `<![CDATA[Phone Lead from CarGurus. Caller Id: None, Duration: 1 minutes, 18 seconds]]>`;
+  const message = {
+    subject: "Phone Lead from CarGurus",
+    from: {
+      emailAddress: {
+        address: "dealer-leads@messages.cargurus.com",
+      },
+    },
+  };
+
+  const lead = parseCarGurusEmail(text, message);
+
+  assert.equal(lead.source, "cargurus");
+  assert.equal(lead.lead_type, "phone_lead_event");
+  assert.equal(classifyParsedEmail(lead, message, text), "other");
+  assert.equal(shouldSkipParsedEmail(lead, message, text), true);
 });
 
 test("parses CarGurus ADF XML emails", () => {
@@ -439,4 +459,59 @@ Stock Number: D9756`,
 
   assert.equal(createdLeads[0].customer_name, "NN Lead");
   assert.equal(intakeItems[0].customer_name, "NN Lead");
+});
+
+test("lead inbox importer skips CarGurus phone lead notifications entirely", async () => {
+  const intakeItems = [];
+  const importedMessages = [];
+  let markProcessedCalls = 0;
+  let createdLeadCalls = 0;
+  const importer = await createLeadInboxService({
+    db: {
+      async getImportedMessageByExternalId() {
+        return null;
+      },
+      async createApiLead() {
+        createdLeadCalls += 1;
+        throw new Error("CarGurus phone lead notifications should not create CRM leads.");
+      },
+      async createEmailIntakeItem(payload) {
+        intakeItems.push(payload);
+        return payload;
+      },
+      async recordImportedMessage(payload) {
+        importedMessages.push(payload);
+        return payload;
+      },
+    },
+    graph: {
+      async markProcessed() {
+        markProcessedCalls += 1;
+      },
+    },
+  });
+
+  const result = await importer.importMessage({
+    id: "message-cg-phone-1",
+    internetMessageId: "<message-cg-phone-1@example.com>",
+    subject: "Phone Lead from CarGurus",
+    receivedDateTime: "2026-04-01T12:30:00.000Z",
+    from: {
+      emailAddress: {
+        address: "dealer-leads@messages.cargurus.com",
+      },
+    },
+    body: {
+      contentType: "text",
+      content: "<![CDATA[Phone Lead from CarGurus. Caller Id: None, Duration: 1 minutes, 18 seconds]]>",
+    },
+  });
+
+  assert.equal(createdLeadCalls, 0);
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, "phone_lead_event");
+  assert.equal(intakeItems.length, 0);
+  assert.equal(markProcessedCalls, 1);
+  assert.equal(importedMessages[0].status, "skipped");
+  assert.equal(importedMessages[0].matched_reason, "phone_lead_event");
 });

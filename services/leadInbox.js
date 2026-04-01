@@ -398,8 +398,8 @@ function parseCarGurusEmail(text, message = {}) {
     vehicle_condition: null,
     vehicle_price: getField(text, "Listed Price", ["View Listing on CarGurus"]),
     listing_url: getField(text, "View Listing on CarGurus"),
-    message: getMultilineField(text, "Comments", ["Listing", "VIN", "Vehicle", "Stock Number"]),
-    lead_type: "general_inquiry",
+    message: getMultilineField(text, "Comments", ["Listing", "VIN", "Vehicle", "Stock Number"]) || cleanValue(text),
+    lead_type: /phone lead from cargurus/i.test(String(text || "")) ? "phone_lead_event" : "general_inquiry",
     sender: getSenderEmail(message),
   };
 }
@@ -548,12 +548,23 @@ function buildGenericEmailParse(message, text) {
 
 function classifyParsedEmail(parsed, message, text) {
   const source = String(parsed.source || "").toLowerCase();
+  const normalizedText = String(text || "").toLowerCase();
+  if (
+    source === "cargurus" &&
+    (
+      normalizedText.includes("phone lead from cargurus") ||
+      String(parsed.lead_type || "").toLowerCase() === "phone_lead_event"
+    )
+  ) {
+    return "other";
+  }
+
   if (source === "autotrader" || source === "cargurus") {
     return "direct_lead";
   }
 
   const subject = String(message.subject || "").toLowerCase();
-  const haystack = `${subject}\n${String(text || "").toLowerCase()}`;
+  const haystack = `${subject}\n${normalizedText}`;
   const directSignals = [
     "availability",
     "available",
@@ -578,6 +589,21 @@ function classifyParsedEmail(parsed, message, text) {
   }
 
   return "other";
+}
+
+function shouldSkipParsedEmail(parsed, message, text) {
+  const source = String(parsed.source || "").toLowerCase();
+  const subject = String(message.subject || "").toLowerCase();
+  const normalizedText = String(text || "").toLowerCase();
+
+  return (
+    source === "cargurus" &&
+    (
+      subject.includes("phone lead from cargurus") ||
+      normalizedText.includes("phone lead from cargurus") ||
+      String(parsed.lead_type || "").toLowerCase() === "phone_lead_event"
+    )
+  );
 }
 
 function mergeLeadData(existingLead, importedLead) {
@@ -669,6 +695,21 @@ async function createLeadInboxService({ db, graph }) {
       ...parsedCandidate,
       customer_name: normalizeLeadCustomerName(parsedCandidate.customer_name || ""),
     };
+    if (shouldSkipParsedEmail(parsedLead, message, text)) {
+      await db.recordImportedMessage({
+        external_id: externalId,
+        source: parsedLead.source || "email",
+        lead_id: null,
+        subject: message.subject,
+        sender: getSenderEmail(message),
+        received_at: message.receivedDateTime,
+        status: "skipped",
+        matched_reason: "phone_lead_event",
+      });
+      await graph.markProcessed(message);
+      return { skipped: true, reason: "phone_lead_event" };
+    }
+
     const classification = classifyParsedEmail(parsedLead, message, text);
     let lead = null;
     let duplicate = null;
@@ -737,6 +778,7 @@ module.exports = {
   detectLeadSource,
   mergeLeadData,
   normalizeContent,
+  shouldSkipParsedEmail,
   parseAdfLeadXml,
   parseAutoTraderEmail,
   parseCarGurusEmail,
