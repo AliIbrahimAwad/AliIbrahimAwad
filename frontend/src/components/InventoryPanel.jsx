@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 function formatInventoryTitle(item) {
   return [item.year, item.make, item.model, item.trim].filter(Boolean).join(" ") || item.stockNumber || "Inventory unit";
 }
@@ -27,11 +29,15 @@ export function InventoryPanel({
   syncStatus = null,
   syncSubmitting = false,
   importErrors = [],
+  inventoryLeadLookup = {},
   onImportSourceNameChange,
   onImportMarkMissingInactiveChange,
   onImportFileSelected,
   onSyncNow,
+  onLoadInventoryLeads,
+  onOpenLead,
 }) {
+  const [expandedInventoryId, setExpandedInventoryId] = useState(null);
   const lastRun = syncStatus?.latest_run || null;
 
   return (
@@ -181,9 +187,24 @@ export function InventoryPanel({
                   </p>
                   <h3 className="mt-2 font-display text-lg font-semibold text-white">{formatInventoryTitle(item)}</h3>
                 </div>
-                <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-300">
-                  {item.status}
-                </span>
+                <div className="flex flex-col items-end gap-2">
+                  <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-300">
+                    {item.status}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextExpanded = expandedInventoryId === item.id ? null : item.id;
+                      setExpandedInventoryId(nextExpanded);
+                      if (nextExpanded && !inventoryLeadLookup[item.id]?.loaded) {
+                        onLoadInventoryLeads?.(item.id);
+                      }
+                    }}
+                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/10"
+                  >
+                    {item.leadCount} lead{item.leadCount === 1 ? "" : "s"}
+                  </button>
+                </div>
               </div>
               <div className="mt-4 flex flex-wrap gap-2 text-sm text-slate-300">
                 {item.condition ? <span>{item.condition}</span> : null}
@@ -196,6 +217,64 @@ export function InventoryPanel({
                 {item.interiorColor ? <span>{item.interiorColor}</span> : null}
                 {item.lastSeenAt ? <span>Seen {new Date(item.lastSeenAt).toLocaleString()}</span> : null}
               </div>
+              {expandedInventoryId === item.id ? (
+                <div className="mt-5 rounded-[1.5rem] border border-white/10 bg-ink-950/30 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Linked leads</p>
+                      <p className="mt-1 text-sm text-slate-300">
+                        See every visible lead tied to this inventory unit.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onLoadInventoryLeads?.(item.id, { force: true })}
+                      className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/10"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {inventoryLeadLookup[item.id]?.loading ? (
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-5 text-sm text-slate-400">
+                        Loading linked leads...
+                      </div>
+                    ) : inventoryLeadLookup[item.id]?.error ? (
+                      <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-5 text-sm text-rose-100">
+                        {inventoryLeadLookup[item.id].error}
+                      </div>
+                    ) : inventoryLeadLookup[item.id]?.items?.length ? (
+                      inventoryLeadLookup[item.id].items.map((lead) => (
+                        <button
+                          key={lead.id}
+                          type="button"
+                          onClick={() => onOpenLead?.(lead.id)}
+                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4 text-left transition hover:border-white/20 hover:bg-white/[0.06]"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-white">{lead.customerName}</p>
+                              <p className="mt-1 text-sm text-slate-300">{lead.vehicleInterest}</p>
+                            </div>
+                            <span className="rounded-full bg-white/5 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-300">
+                              {lead.statusLabel}
+                            </span>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2 text-xs uppercase tracking-[0.18em] text-slate-500">
+                            {lead.source ? <span>{lead.source}</span> : null}
+                            {lead.assignedRep ? <span>{lead.assignedRep}</span> : null}
+                            {lead.createdAtLabel ? <span>{lead.createdAtLabel}</span> : null}
+                          </div>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm text-slate-400">
+                        No visible leads are linked to this unit yet.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ))
         ) : (

@@ -1145,6 +1145,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       first_seen_at: row.first_seen_at || null,
       created_at: row.created_at,
       updated_at: row.updated_at,
+      lead_count: Number(row.lead_count || 0),
     };
   }
 
@@ -2821,7 +2822,33 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       [...params, limit]
     );
 
-    return rows.map((row) => this.formatInventoryRow(row));
+    const formattedRows = rows.map((row) => this.formatInventoryRow(row));
+    const inventoryIds = formattedRows.map((row) => Number(row.id)).filter(Boolean);
+    if (!inventoryIds.length) {
+      return formattedRows;
+    }
+
+    const access = this.accessClauseForUser(user);
+    const placeholders = inventoryIds.map(() => "?").join(", ");
+    const leadCountRows = await this.all(
+      `
+        SELECT leads.inventory_id, COUNT(*) AS lead_count
+        FROM leads
+        WHERE ${access.clause}
+          AND leads.inventory_id IN (${placeholders})
+        GROUP BY leads.inventory_id
+      `,
+      [...access.params, ...inventoryIds]
+    );
+
+    const leadCountMap = new Map(
+      leadCountRows.map((row) => [Number(row.inventory_id), Number(row.lead_count || 0)])
+    );
+
+    return formattedRows.map((row) => ({
+      ...row,
+      lead_count: leadCountMap.get(Number(row.id)) || 0,
+    }));
   }
 
   async getInventoryForApi(id, user = null) {
@@ -2838,7 +2865,45 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       throw new NotFoundError("Inventory unit not found");
     }
 
-    return this.formatInventoryRow(row);
+    const access = this.accessClauseForUser(user);
+    const leadCountRow = await this.get(
+      `
+        SELECT COUNT(*) AS count
+        FROM leads
+        WHERE ${access.clause}
+          AND leads.inventory_id = ?
+      `,
+      [...access.params, Number(id)]
+    );
+
+    return {
+      ...this.formatInventoryRow(row),
+      lead_count: Number(leadCountRow?.count || 0),
+    };
+  }
+
+  async listInventoryLeadsForApi(inventoryId, { limit = 100 } = {}, user = null) {
+    const unitId = parsePositiveInteger(inventoryId);
+    if (!unitId) {
+      throw new ValidationError("Inventory unit ID is invalid.");
+    }
+
+    await this.getInventoryForApi(unitId, user);
+
+    const access = this.accessClauseForUser(user);
+    const safeLimit = Math.max(1, Math.min(200, Number(limit) || 100));
+    const rows = await this.all(
+      `
+        ${this.apiLeadSelectSql()}
+        WHERE ${access.clause}
+          AND leads.inventory_id = ?
+        ORDER BY leads.created_at DESC, leads.id DESC
+        LIMIT ?
+      `,
+      [...access.params, unitId, safeLimit]
+    );
+
+    return rows.map((row) => this.formatApiLead(row));
   }
 
   async createInventoryImportRun(input, user = null) {

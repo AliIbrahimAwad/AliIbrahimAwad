@@ -658,6 +658,17 @@ function registerApiRoutes(app) {
     })
   );
 
+  app.get(
+    "/api/inventory/:id/leads",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 100));
+      res.json({
+        items: await req.app.locals.db.listInventoryLeadsForApi(Number(req.params.id), { limit }, req.currentUser),
+      });
+    })
+  );
+
   app.post(
     "/api/inventory/import",
     requireAuth,

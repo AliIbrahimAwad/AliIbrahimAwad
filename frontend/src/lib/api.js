@@ -135,6 +135,10 @@ export function getInventoryById(id) {
   return request(`/api/inventory/${id}`);
 }
 
+export function getInventoryLeads(id, limit = 100) {
+  return request(`/api/inventory/${id}/leads?limit=${limit}`);
+}
+
 export function importInventory(payload) {
   return request("/api/inventory/import", {
     method: "POST",

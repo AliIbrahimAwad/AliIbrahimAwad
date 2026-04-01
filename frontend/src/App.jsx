@@ -26,6 +26,7 @@ import {
   getInventory,
   getInventoryImportErrors,
   getInventoryImportRuns,
+  getInventoryLeads,
   getInventorySyncStatus,
   getLead,
   getLeads,
@@ -238,6 +239,7 @@ function formatInventoryItem(item) {
     lastSeenAt: item.last_seen_at || null,
     firstSeenAt: item.first_seen_at || null,
     updatedAt: item.updated_at || null,
+    leadCount: Number(item.lead_count || 0),
   };
 }
 
@@ -336,6 +338,7 @@ export default function App() {
   const [inventoryImportRuns, setInventoryImportRuns] = useState([]);
   const [inventorySyncStatus, setInventorySyncStatus] = useState(null);
   const [inventoryImportErrors, setInventoryImportErrors] = useState([]);
+  const [inventoryLeadLookup, setInventoryLeadLookup] = useState({});
   const [unmatchedItems, setUnmatchedItems] = useState([]);
   const [conversationFeed, setConversationFeed] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -406,6 +409,18 @@ export default function App() {
   });
   const deferredQuery = useDeferredValue(query);
   const showLeadModal = leadModalOpen && !["Analytics", "Unmatched"].includes(activeSection) && Boolean(selectedLeadId);
+
+  function openLeadModal(leadId) {
+    if (!leadId) {
+      return;
+    }
+
+    startTransition(() => {
+      setSelectedLeadId(Number(leadId));
+      setLeadModalOpen(true);
+      setError("");
+    });
+  }
 
   useEffect(() => {
     if (activeSection !== "Intake") {
@@ -507,6 +522,52 @@ export default function App() {
       setInventoryLoaded(true);
     } finally {
       setInventoryLoading(false);
+    }
+  }
+
+  async function handleLoadInventoryLeads(inventoryId, { force = false } = {}) {
+    const normalizedInventoryId = Number(inventoryId);
+    if (!Number.isInteger(normalizedInventoryId) || normalizedInventoryId <= 0) {
+      return;
+    }
+
+    const cached = inventoryLeadLookup[normalizedInventoryId];
+    if (!force && cached?.loaded && !cached.loading) {
+      return;
+    }
+
+    setInventoryLeadLookup((current) => ({
+      ...current,
+      [normalizedInventoryId]: {
+        items: current[normalizedInventoryId]?.items || [],
+        loading: true,
+        loaded: current[normalizedInventoryId]?.loaded || false,
+        error: "",
+      },
+    }));
+
+    try {
+      const payload = await getInventoryLeads(normalizedInventoryId, 100);
+      setInventoryLeadLookup((current) => ({
+        ...current,
+        [normalizedInventoryId]: {
+          items: (payload.items || []).map(formatLead),
+          loading: false,
+          loaded: true,
+          error: "",
+        },
+      }));
+    } catch (loadError) {
+      setInventoryLeadLookup((current) => ({
+        ...current,
+        [normalizedInventoryId]: {
+          items: current[normalizedInventoryId]?.items || [],
+          loading: false,
+          loaded: false,
+          error: loadError.message || "Unable to load linked leads.",
+        },
+      }));
+      setError(loadError.message || "Unable to load linked leads.");
     }
   }
 
@@ -1182,6 +1243,7 @@ export default function App() {
       setLeadLibrary([]);
       setInventoryItems([]);
       setInventoryImportRuns([]);
+      setInventoryLeadLookup({});
       setOrganizedLeadGroups({
         contacted: [],
         appointment: [],
@@ -1851,10 +1913,7 @@ export default function App() {
                                     lead={lead}
                                     selected={lead.id === selectedLead?.id}
                                     onSelect={() => {
-                                      startTransition(() => {
-                                        setSelectedLeadId(lead.id);
-                                        setLeadModalOpen(true);
-                                      });
+                                      openLeadModal(lead.id);
                                     }}
                                   />
                                 ))
@@ -1891,10 +1950,7 @@ export default function App() {
                                 draggingLeadId={draggingLeadId}
                                 movingLeadId={pipelineMovingLeadId}
                                 onSelectLead={(leadId) => {
-                                  startTransition(() => {
-                                    setSelectedLeadId(leadId);
-                                    setLeadModalOpen(true);
-                                  });
+                                  openLeadModal(leadId);
                                 }}
                                 onMoveLead={handlePipelineMove}
                                 onDragStateChange={setDraggingLeadId}
@@ -2006,8 +2062,7 @@ export default function App() {
                             key={item.id}
                             type="button"
                             onClick={() => {
-                              setSelectedLeadId(item.leadId);
-                              setLeadModalOpen(true);
+                              openLeadModal(item.leadId);
                             }}
                             className={`w-full rounded-[1.75rem] border p-5 text-left transition ${
                               Number(item.leadId) === Number(selectedLead?.id)
@@ -2064,6 +2119,7 @@ export default function App() {
                     syncStatus={inventorySyncStatus}
                     syncSubmitting={inventorySyncing}
                     importErrors={inventoryImportErrors}
+                    inventoryLeadLookup={inventoryLeadLookup}
                     onImportSourceNameChange={(value) =>
                       setInventoryImportForm((current) => ({
                         ...current,
@@ -2078,6 +2134,8 @@ export default function App() {
                     }
                     onImportFileSelected={handleImportInventoryFile}
                     onSyncNow={handleSyncInventoryNow}
+                    onLoadInventoryLeads={handleLoadInventoryLeads}
+                    onOpenLead={openLeadModal}
                   />
                 ) : null}
               </div>
