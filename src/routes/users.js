@@ -1,6 +1,6 @@
 const bcrypt = require("bcrypt");
 
-const { canAssignLeads, isValidUserRole, normalizeUserRole } = require("../models/user");
+const { canAssignLeads, canManageUsers, isValidUserRole, normalizeUserRole } = require("../models/user");
 const { USER_ROLES } = require("../types/models");
 const { renderUserForm, renderUsersListPage } = require("../views/users");
 const { requireAdmin, requireAuth } = require("../middleware/auth");
