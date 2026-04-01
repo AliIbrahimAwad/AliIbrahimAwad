@@ -21,12 +21,30 @@ function normalizeBoolean(value) {
   return value === true || value === 1 || value === "1" || value === "true";
 }
 
+function extractResponseText(payload = {}) {
+  if (typeof payload.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text;
+  }
+
+  const chunks = Array.isArray(payload.output)
+    ? payload.output.flatMap((item) =>
+        Array.isArray(item?.content)
+          ? item.content
+              .filter((contentItem) => contentItem?.type === "output_text" && typeof contentItem.text === "string")
+              .map((contentItem) => contentItem.text)
+          : []
+      )
+    : [];
+
+  return chunks.join("").trim();
+}
+
 function getAiConfig() {
   return {
     enabled: Boolean(process.env.OPENAI_API_KEY),
     apiKey: process.env.OPENAI_API_KEY || "",
     apiBaseUrl: process.env.OPENAI_API_BASE_URL || "https://api.openai.com/v1",
-    analysisModel: process.env.OPENAI_ANALYSIS_MODEL || "gpt-5-mini",
+    analysisModel: process.env.OPENAI_ANALYSIS_MODEL || "gpt-5.4-mini",
     transcriptionModel: process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe",
     autoStatusUpdates: process.env.RINGCENTRAL_AUTO_STATUS_UPDATES !== "false",
     confidenceThreshold: Number(process.env.RINGCENTRAL_AI_CONFIDENCE_THRESHOLD || 0.78),
@@ -267,7 +285,7 @@ async function analyzeWithOpenAi(sourceType, content, config = getAiConfig()) {
   }
 
   const payload = await response.json();
-  const textOutput = payload.output_text || "";
+  const textOutput = extractResponseText(payload);
   const parsed = parseJson(textOutput);
   if (!parsed) {
     throw new Error("OpenAI analysis did not return valid JSON.");
@@ -407,4 +425,5 @@ module.exports = {
   heuristicAnalyzeText,
   mapCanonicalStatusToCrmStatus,
   transcribeAudioFile,
+  extractResponseText,
 };

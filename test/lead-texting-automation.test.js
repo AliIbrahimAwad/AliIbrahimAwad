@@ -41,6 +41,58 @@ test("AI SMS suggestion falls back to heuristic when OpenAI is unavailable", asy
   process.env.OPENAI_API_KEY = originalKey;
 });
 
+test("AI SMS suggestion parses structured output from the Responses API output array", async () => {
+  const originalKey = process.env.OPENAI_API_KEY;
+  const originalModel = process.env.OPENAI_TEXTING_MODEL;
+  const originalFetch = global.fetch;
+
+  process.env.OPENAI_API_KEY = "test-key";
+  process.env.OPENAI_TEXTING_MODEL = "gpt-5.4-mini";
+  global.fetch = async () => ({
+    ok: true,
+    async json() {
+      return {
+        output: [
+          {
+            type: "message",
+            content: [
+              {
+                type: "output_text",
+                text: JSON.stringify({
+                  message: "Hi Ali, the Mustang Mach-E is still available if you'd like to book a visit.",
+                  confidence: 0.91,
+                  reasoning: "Customer asked about availability, so a concise appointment-focused reply is appropriate.",
+                  tone: "friendly",
+                  objective: "appointment",
+                }),
+              },
+            ],
+          },
+        ],
+      };
+    },
+  });
+
+  const suggestion = await generateLeadSmsSuggestion({
+    lead: {
+      customer_name: "Ali Ibrahim",
+      vehicle_interest: "2021 Ford Mustang Mach-E",
+      source: "website",
+      status: "new",
+      message: "Is this still available?",
+    },
+    goal: "appointment",
+  });
+
+  assert.equal(suggestion.source, "openai");
+  assert.equal(suggestion.objective, "appointment");
+  assert.match(suggestion.message, /Mustang Mach-E/);
+
+  process.env.OPENAI_API_KEY = originalKey;
+  process.env.OPENAI_TEXTING_MODEL = originalModel;
+  global.fetch = originalFetch;
+});
+
 test("automatic texting sends and records a first follow-up", async () => {
   const sentMessages = [];
   const automationRuns = [];

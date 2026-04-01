@@ -1,4 +1,4 @@
-const { getAiConfig } = require("./leadStatusAutomation");
+const { extractResponseText, getAiConfig } = require("./leadStatusAutomation");
 
 function buildVehicleLabel(lead = {}) {
   return (
@@ -115,7 +115,7 @@ async function generateLeadSmsSuggestion({ lead = {}, messages = [], goal = "fol
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_TEXTING_MODEL || config.analysisModel || "gpt-5-mini",
+      model: process.env.OPENAI_TEXTING_MODEL || config.analysisModel || "gpt-5.4-mini",
       input: [
         {
           role: "system",
@@ -148,9 +148,10 @@ async function generateLeadSmsSuggestion({ lead = {}, messages = [], goal = "fol
   }
 
   const payload = await response.json();
+  const outputText = extractResponseText(payload);
   let parsed = null;
   try {
-    parsed = JSON.parse(payload.output_text || "{}");
+    parsed = JSON.parse(outputText || "{}");
   } catch (_error) {
     parsed = null;
   }
