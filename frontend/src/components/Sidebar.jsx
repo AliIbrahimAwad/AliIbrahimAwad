@@ -34,10 +34,10 @@ export function Sidebar({ activeSection = "Dashboard", onSelectSection, currentU
   });
 
   return (
-    <aside className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-ink-950/90 p-5 shadow-card backdrop-blur xl:min-h-[calc(100vh-3rem)]">
+    <aside className="crm-sidebar relative overflow-hidden rounded-[2rem] border border-white/10 bg-ink-950/90 p-5 shadow-card backdrop-blur xl:min-h-[calc(100vh-3rem)]">
       <div className="pointer-events-none absolute inset-x-4 top-0 h-48 rounded-b-[3rem] bg-gradient-to-b from-cyan-400/10 via-white/5 to-transparent" />
 
-      <div className="relative rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-4">
+      <div className="crm-sidebar-brand relative rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-4">
         <div className="flex items-center gap-3">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-ember-500 to-ice-500 text-sm font-bold text-white shadow-glow">
             AC
@@ -47,7 +47,7 @@ export function Sidebar({ activeSection = "Dashboard", onSelectSection, currentU
             <p className="text-xs uppercase tracking-[0.28em] text-slate-400">Sales Command</p>
           </div>
         </div>
-        <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
+        <div className="crm-sidebar-workspace mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
           <p className="text-[11px] uppercase tracking-[0.26em] text-slate-500">Current workspace</p>
           <p className="mt-1 text-sm font-medium text-white">
             {activeSection === "Conversations" || activeSection === "Unmatched" ? "Lead tools" : activeSection}
@@ -67,7 +67,7 @@ export function Sidebar({ activeSection = "Dashboard", onSelectSection, currentU
             key={label}
             type="button"
             onClick={() => onSelectSection?.(label)}
-            className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left transition ${
+            className={`crm-sidebar-nav-item flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left transition ${
               active
                 ? "bg-white text-ink-950 shadow-glow"
                 : "border border-transparent text-slate-300 hover:border-white/10 hover:bg-white/5 hover:text-white"
@@ -95,7 +95,7 @@ export function Sidebar({ activeSection = "Dashboard", onSelectSection, currentU
               key={label}
               type="button"
               onClick={() => onSelectSection?.(label)}
-              className={`flex items-center justify-between rounded-2xl border px-4 py-3 text-left transition ${
+              className={`crm-sidebar-tool-item flex items-center justify-between rounded-2xl border px-4 py-3 text-left transition ${
                 active
                   ? "border-cyan-400/30 bg-cyan-400/10 text-white"
                   : "border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.07] hover:text-white"
@@ -114,7 +114,7 @@ export function Sidebar({ activeSection = "Dashboard", onSelectSection, currentU
       </div>
 
       {currentUser?.role === "sales" ? (
-        <div className="relative mt-8 rounded-[1.75rem] border border-white/10 bg-white/5 p-4">
+        <div className="crm-sidebar-routing relative mt-8 rounded-[1.75rem] border border-white/10 bg-white/5 p-4">
           <p className="text-xs uppercase tracking-[0.28em] text-slate-400">New contact routing</p>
           <p className="mt-2 text-sm font-semibold text-white">
             {currentUser?.is_available ? "Available for new contacts" : "Paused for new contacts"}
@@ -137,7 +137,7 @@ export function Sidebar({ activeSection = "Dashboard", onSelectSection, currentU
         </div>
       ) : null}
 
-      <div className="relative mt-8 flex items-center gap-3 border-t border-white/10 pt-6">
+      <div className="crm-sidebar-footer relative mt-8 flex items-center gap-3 border-t border-white/10 pt-6">
         <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 font-semibold text-white">
           AI
         </div>

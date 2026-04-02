@@ -44,19 +44,19 @@ select {
 
 body.theme-light {
   color-scheme: light;
-  background-color: #edf3f8;
+  background-color: #eef4f8;
   color: #0f172a;
 }
 
 body.theme-light .bg-dashboard {
   background-image:
-    radial-gradient(circle at top left, rgba(43, 140, 255, 0.12), transparent 28%),
-    radial-gradient(circle at 85% 18%, rgba(240, 108, 52, 0.12), transparent 22%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(239, 246, 255, 0.85) 46%, rgba(237, 243, 248, 0.96));
+    radial-gradient(circle at 8% 0%, rgba(43, 140, 255, 0.16), transparent 24%),
+    radial-gradient(circle at 92% 8%, rgba(240, 108, 52, 0.1), transparent 18%),
+    linear-gradient(180deg, #f8fbfe 0%, #eef4f8 48%, #e9f1f6 100%);
 }
 
 body.theme-light [class~="bg-ink-950"] {
-  background-color: #edf3f8 !important;
+  background-color: #eef4f8 !important;
 }
 
 body.theme-light [class~="text-white"],
@@ -78,13 +78,6 @@ body.theme-light [class~="text-slate-400"] {
 
 body.theme-light [class~="text-slate-500"] {
   color: #94a3b8 !important;
-}
-
-body.theme-light [class*="bg-ink-900/95"],
-body.theme-light [class*="bg-ink-900/90"],
-body.theme-light [class~="bg-ink-900"],
-body.theme-light [class*="bg-ink-950/90"] {
-  background-color: rgba(255, 255, 255, 0.94) !important;
 }
 
 body.theme-light [class*="bg-white/5"],
@@ -131,4 +124,101 @@ body.theme-light select {
 body.theme-light input::placeholder,
 body.theme-light textarea::placeholder {
   color: #94a3b8;
+}
+
+body.theme-light .crm-main-shell {
+  background: rgba(255, 255, 255, 0.72) !important;
+  border-color: rgba(191, 219, 254, 0.58) !important;
+  box-shadow:
+    0 22px 55px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75) !important;
+}
+
+body.theme-light .crm-header-shell {
+  border-color: rgba(148, 163, 184, 0.22) !important;
+}
+
+body.theme-light .crm-workspace-panel,
+body.theme-light .crm-pipeline-panel {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 251, 254, 0.9)) !important;
+  border-color: rgba(191, 219, 254, 0.62) !important;
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.06) !important;
+}
+
+body.theme-light .crm-sidebar {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 249, 252, 0.94)) !important;
+  border-color: rgba(191, 219, 254, 0.56) !important;
+  box-shadow:
+    0 24px 54px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78) !important;
+}
+
+body.theme-light .crm-sidebar-brand,
+body.theme-light .crm-sidebar-routing,
+body.theme-light .crm-sidebar-workspace,
+body.theme-light .crm-sidebar-tool-item,
+body.theme-light .crm-sidebar-nav-item:not(.bg-white),
+body.theme-light .crm-metric-card,
+body.theme-light .crm-notification-panel,
+body.theme-light .crm-notification-item,
+body.theme-light .crm-search-shell,
+body.theme-light .crm-icon-button,
+body.theme-light .crm-secondary-button,
+body.theme-light .crm-pipeline-lane,
+body.theme-light .crm-pipeline-card,
+body.theme-light .crm-pipeline-empty {
+  background-color: rgba(255, 255, 255, 0.9) !important;
+  border-color: rgba(191, 219, 254, 0.62) !important;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05) !important;
+}
+
+body.theme-light .crm-sidebar-nav-item.bg-white {
+  background: linear-gradient(135deg, #ffffff, #f5f9fc) !important;
+  color: #0f172a !important;
+  border-color: rgba(191, 219, 254, 0.72) !important;
+}
+
+body.theme-light .crm-sidebar-workspace,
+body.theme-light .crm-sidebar-routing,
+body.theme-light .crm-notification-item,
+body.theme-light .crm-pipeline-card {
+  box-shadow: none !important;
+}
+
+body.theme-light .crm-icon-button,
+body.theme-light .crm-secondary-button {
+  color: #1e293b !important;
+}
+
+body.theme-light .crm-icon-button:hover,
+body.theme-light .crm-secondary-button:hover,
+body.theme-light .crm-search-shell:focus-within {
+  background-color: rgba(240, 247, 255, 0.98) !important;
+  border-color: rgba(96, 165, 250, 0.45) !important;
+}
+
+body.theme-light .crm-search-shell input {
+  color: #0f172a !important;
+}
+
+body.theme-light .crm-search-shell svg,
+body.theme-light .crm-icon-button svg,
+body.theme-light .crm-sidebar-footer svg {
+  color: #64748b !important;
+}
+
+body.theme-light .crm-pipeline-lane {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(246, 250, 253, 0.94)) !important;
+}
+
+body.theme-light .crm-pipeline-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 254, 0.96)) !important;
+}
+
+body.theme-light .crm-pipeline-empty {
+  background-color: rgba(247, 250, 252, 0.88) !important;
 }

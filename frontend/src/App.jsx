@@ -1,5 +1,5 @@
 import { startTransition, useDeferredValue, useEffect, useState } from "react";
-import { MoonStar, Search, SunMedium, X } from "lucide-react";
+import { Menu, MoonStar, Search, SunMedium, X } from "lucide-react";
 
 import { AttentionLeadCard } from "./components/AttentionLeadCard";
 import { InventoryPanel } from "./components/InventoryPanel";
@@ -337,6 +337,18 @@ export default function App() {
 
     return window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? "light" : "dark";
   });
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+
+    const storedState = window.localStorage.getItem("crm-sidebar-open");
+    if (storedState === "true" || storedState === "false") {
+      return storedState === "true";
+    }
+
+    return false;
+  });
   const [authStatus, setAuthStatus] = useState("loading");
   const [currentUser, setCurrentUser] = useState(null);
   const [leads, setLeads] = useState([]);
@@ -504,6 +516,14 @@ export default function App() {
     document.documentElement.style.colorScheme = theme;
     window.localStorage.setItem("crm-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem("crm-sidebar-open", String(sidebarOpen));
+  }, [sidebarOpen]);
 
   async function refreshWorklist({ preserveSelection = true } = {}) {
     const payload = await getDashboardWorklist();
@@ -1767,8 +1787,8 @@ export default function App() {
 
   if (authStatus === "loading") {
     return (
-      <div className="min-h-screen bg-ink-950 bg-dashboard px-4 py-6 font-body text-slate-100 sm:px-6 lg:px-8">
-        <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-[1200px] items-center justify-center rounded-[2.25rem] border border-white/10 bg-ink-900/80 shadow-card backdrop-blur">
+      <div className="crm-app-shell min-h-screen bg-ink-950 bg-dashboard px-4 py-6 font-body text-slate-100 sm:px-6 lg:px-8">
+        <div className="crm-main-shell mx-auto flex min-h-[calc(100vh-3rem)] max-w-[1200px] items-center justify-center rounded-[2.25rem] border border-white/10 bg-ink-900/80 shadow-card backdrop-blur">
           <div className="space-y-4 text-center">
             <div className="mx-auto h-14 w-14 animate-pulse rounded-2xl bg-gradient-to-br from-ember-500 to-ice-500" />
             <p className="text-sm uppercase tracking-[0.32em] text-slate-500">Loading CRM session</p>
@@ -1793,6 +1813,9 @@ export default function App() {
   const openSection = (section) => {
     startTransition(() => {
       setActiveSection(section);
+      if (typeof window !== "undefined" && window.innerWidth < 1280) {
+        setSidebarOpen(false);
+      }
     });
   };
   const pageCopy = {
@@ -1844,42 +1867,79 @@ export default function App() {
   const immersivePipelineShell = showPipeline;
 
   return (
-    <div className="min-h-screen bg-ink-950 bg-dashboard px-4 py-4 font-body text-slate-100 sm:px-6 lg:px-8">
-      <div className="grid w-full gap-4 xl:grid-cols-[290px_minmax(0,1fr)]">
-        <div className="xl:block">
-          <Sidebar
-            activeSection={activeSection}
-            onSelectSection={(section) => {
-              openSection(section);
-            }}
-            toolCounts={{
-              Conversations: visibleConversationFeed.length,
-              Unmatched: unmatchedItems.filter((item) => item.status === "new").length,
-            }}
-            currentUser={
-              currentUser
-                ? {
-                    ...currentUser,
-                    availabilityUpdating: availabilityUpdatingId === currentUser.id,
-                    onToggleAvailability:
-                      currentUser.role === "sales"
-                        ? (nextValue) => handleToggleAvailability(currentUser, nextValue)
-                        : null,
-                  }
-                : currentUser
-            }
+    <div className="crm-app-shell min-h-screen bg-ink-950 bg-dashboard px-4 py-4 font-body text-slate-100 sm:px-6 lg:px-8">
+      {sidebarOpen ? (
+        <>
+          <button
+            type="button"
+            aria-label="Close navigation"
+            onClick={() => setSidebarOpen(false)}
+            className="fixed inset-0 z-30 bg-ink-950/55 backdrop-blur-sm xl:hidden"
           />
-        </div>
+          <div className="fixed inset-y-4 left-4 z-40 w-[290px] xl:hidden">
+            <Sidebar
+              activeSection={activeSection}
+              onSelectSection={(section) => {
+                openSection(section);
+              }}
+              toolCounts={{
+                Conversations: visibleConversationFeed.length,
+                Unmatched: unmatchedItems.filter((item) => item.status === "new").length,
+              }}
+              currentUser={
+                currentUser
+                  ? {
+                      ...currentUser,
+                      availabilityUpdating: availabilityUpdatingId === currentUser.id,
+                      onToggleAvailability:
+                        currentUser.role === "sales"
+                          ? (nextValue) => handleToggleAvailability(currentUser, nextValue)
+                          : null,
+                    }
+                  : currentUser
+              }
+            />
+          </div>
+        </>
+      ) : null}
+
+      <div className={`grid w-full gap-4 ${sidebarOpen ? "xl:grid-cols-[290px_minmax(0,1fr)]" : "xl:grid-cols-[minmax(0,1fr)]"}`}>
+        {sidebarOpen ? (
+          <div className="hidden xl:block">
+            <Sidebar
+              activeSection={activeSection}
+              onSelectSection={(section) => {
+                openSection(section);
+              }}
+              toolCounts={{
+                Conversations: visibleConversationFeed.length,
+                Unmatched: unmatchedItems.filter((item) => item.status === "new").length,
+              }}
+              currentUser={
+                currentUser
+                  ? {
+                      ...currentUser,
+                      availabilityUpdating: availabilityUpdatingId === currentUser.id,
+                      onToggleAvailability:
+                        currentUser.role === "sales"
+                          ? (nextValue) => handleToggleAvailability(currentUser, nextValue)
+                          : null,
+                    }
+                  : currentUser
+              }
+            />
+          </div>
+        ) : null}
 
         <main
           className={`${
             immersivePipelineShell
-              ? "border border-white/5 bg-ink-950/55 p-0 shadow-[0_40px_120px_rgba(0,0,0,0.35)]"
-              : "rounded-[2rem] border border-white/10 bg-ink-900/70 p-4 shadow-card sm:p-6"
+              ? "crm-main-shell border border-white/5 bg-ink-950/55 p-0 shadow-[0_40px_120px_rgba(0,0,0,0.35)]"
+              : "crm-main-shell rounded-[2rem] border border-white/10 bg-ink-900/70 p-4 shadow-card sm:p-6"
           } backdrop-blur`}
         >
           <header
-            className={`flex flex-col gap-4 ${
+            className={`crm-header-shell flex flex-col gap-4 ${
               immersivePipelineShell
                 ? "border-b border-white/5 px-6 py-5 lg:flex-row lg:items-center lg:justify-between"
                 : "border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between"
@@ -1897,6 +1957,15 @@ export default function App() {
             </div>
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <button
+                type="button"
+                onClick={() => setSidebarOpen((current) => !current)}
+                aria-label={sidebarOpen ? "Hide navigation" : "Show navigation"}
+                title={sidebarOpen ? "Hide navigation" : "Show navigation"}
+                className="crm-icon-button inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10"
+              >
+                <Menu className="h-4 w-4" />
+              </button>
               <NotificationTray
                 notifications={notifications}
                 open={notificationsOpen}
@@ -1909,18 +1978,18 @@ export default function App() {
                 onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
                 aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
                 title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-                className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10"
+                className="crm-icon-button inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10"
               >
                 {theme === "dark" ? <SunMedium className="h-4 w-4" /> : <MoonStar className="h-4 w-4" />}
               </button>
               <button
                 type="button"
                 onClick={handleLogout}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+                className="crm-secondary-button inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
               >
                 Logout
               </button>
-              <label className="flex min-w-[260px] items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-slate-300 focus-within:border-ice-400/40 focus-within:bg-white/10">
+              <label className="crm-search-shell flex min-w-[260px] items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-slate-300 focus-within:border-ice-400/40 focus-within:bg-white/10">
                 <Search className="h-4 w-4 text-slate-500" />
                 <input
                   value={query}
@@ -1969,7 +2038,7 @@ export default function App() {
             />
           ) : (
             <section className={`mt-6 grid gap-6 ${showUnmatched ? "2xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]" : ""}`}>
-              <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 sm:p-5">
+              <div className="crm-workspace-panel rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 sm:p-5">
                 {showDashboard ? (
                   <div className="grid gap-6">
                     <div className="grid gap-6 2xl:grid-cols-[minmax(0,1.2fr)_360px]">
@@ -2360,7 +2429,7 @@ export default function App() {
 
                 {showPipeline ? (
                   <>
-                    <div className="mx-6 mt-6 rounded-[1.75rem] border border-white/5 bg-white/[0.025] p-5">
+                    <div className="crm-pipeline-panel mx-6 mt-6 rounded-[1.75rem] border border-white/5 bg-white/[0.025] p-5">
                       <div className="flex flex-col gap-4 border-b border-white/10 pb-4 xl:flex-row xl:items-center xl:justify-between">
                         <div className="flex flex-wrap items-center gap-3">
                           <span className="rounded-full bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100">

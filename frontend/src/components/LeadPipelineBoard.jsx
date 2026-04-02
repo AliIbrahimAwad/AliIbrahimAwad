@@ -14,7 +14,7 @@ function PipelineLeadCard({
 }) {
   return (
     <div
-      className={`flex h-full w-full min-w-0 flex-col overflow-hidden rounded-[1.35rem] border p-3.5 transition ${
+      className={`crm-pipeline-card flex h-full w-full min-w-0 flex-col overflow-hidden rounded-[1.35rem] border p-3.5 transition ${
         selected
           ? "border-ice-400/40 bg-white/10 shadow-glow"
           : "border-white/10 bg-white/[0.045] hover:border-white/20 hover:bg-white/[0.07]"
@@ -117,7 +117,7 @@ export function LeadPipelineBoard({
                 }
                 onMoveLead?.(leadId, stage.key);
               }}
-              className={`flex min-h-[24rem] min-w-0 flex-col overflow-hidden rounded-[1.75rem] border p-4 transition ${
+              className={`crm-pipeline-lane flex min-h-[24rem] min-w-0 flex-col overflow-hidden rounded-[1.75rem] border p-4 transition ${
                 isActiveDropTarget
                   ? "border-ice-400/25 bg-white/[0.045]"
                   : "border-white/10 bg-white/[0.02]"
@@ -149,7 +149,7 @@ export function LeadPipelineBoard({
                     />
                   ))
                 ) : (
-                  <div className="rounded-[1.5rem] border border-dashed border-white/10 bg-white/[0.03] px-4 py-8 text-center text-sm leading-6 text-slate-400">
+                  <div className="crm-pipeline-empty rounded-[1.5rem] border border-dashed border-white/10 bg-white/[0.03] px-4 py-8 text-center text-sm leading-6 text-slate-400">
                     {movingLeadId ? "Updating lead status..." : "Drop a lead here or wait for the next update."}
                   </div>
                 )}

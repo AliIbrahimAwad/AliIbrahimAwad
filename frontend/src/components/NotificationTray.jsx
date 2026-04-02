@@ -12,7 +12,7 @@ export function NotificationTray({
       <button
         type="button"
         onClick={onToggle}
-        className="relative inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10"
+        className="crm-icon-button relative inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10"
       >
         <Bell className="h-4 w-4" />
         {unreadCount ? (
@@ -23,7 +23,7 @@ export function NotificationTray({
       </button>
 
       {open ? (
-        <div className="absolute right-0 z-20 mt-3 w-[360px] rounded-[1.5rem] border border-white/10 bg-ink-900/95 p-4 shadow-card backdrop-blur">
+        <div className="crm-notification-panel absolute right-0 z-20 mt-3 w-[360px] rounded-[1.5rem] border border-white/10 bg-ink-900/95 p-4 shadow-card backdrop-blur">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Notifications</p>
@@ -37,7 +37,7 @@ export function NotificationTray({
           <div className="mt-4 space-y-3">
             {notifications.length ? (
               notifications.map((item) => (
-                <div key={item.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                <div key={item.id} className="crm-notification-item rounded-2xl border border-white/10 bg-white/[0.04] p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-sm font-semibold text-white">{item.title}</p>
