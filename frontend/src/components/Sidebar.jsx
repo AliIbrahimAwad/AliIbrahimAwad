@@ -4,6 +4,7 @@ import {
   ClipboardList,
   KanbanSquare,
   LayoutDashboard,
+  Menu,
   MessageSquareMore,
   Settings,
   Shuffle,
@@ -41,6 +42,7 @@ function getInitials(name = "") {
 export function Sidebar({
   activeSection = "Dashboard",
   onSelectSection,
+  onToggleExpanded,
   currentUser,
   toolCounts = {},
   collapsed = false,
@@ -186,11 +188,17 @@ export function Sidebar({
   return (
     <aside className="relative">
       <div className="crm-sidebar relative flex min-h-[calc(100vh-2rem)] w-[84px] flex-col items-center rounded-[2rem] border border-white/10 bg-ink-950/90 px-3 py-4 shadow-card backdrop-blur">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-ember-500 to-ice-500 text-sm font-bold text-white shadow-glow">
-          AC
-        </div>
+        <button
+          type="button"
+          aria-label="Open main menu"
+          title="Open main menu"
+          onClick={() => onToggleExpanded?.()}
+          className="inline-flex h-11 w-11 items-center justify-center rounded-full text-slate-300 transition hover:bg-white/5 hover:text-white"
+        >
+          <Menu className="h-4 w-4" />
+        </button>
 
-        <nav className="mt-6 flex w-full flex-col items-center gap-2">
+        <nav className="mt-5 flex w-full flex-col items-center gap-2">
           {visibleSections.map(({ label, icon: Icon }) => {
             const active = label === activeSection;
 
@@ -212,8 +220,6 @@ export function Sidebar({
             );
           })}
         </nav>
-
-        <div className="mt-4 h-px w-9 bg-white/10" />
 
         <div className="mt-4 flex w-full flex-col items-center gap-2">
           {utilitySections.map(({ label, icon: Icon }) => {
@@ -238,7 +244,7 @@ export function Sidebar({
           })}
         </div>
 
-        <div className="mt-auto flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 font-semibold text-white">
+        <div className="mt-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/5 text-sm font-semibold text-white">
           {userInitials}
         </div>
       </div>

@@ -1874,12 +1874,13 @@ export default function App() {
             type="button"
             aria-label="Close navigation"
             onClick={() => setSidebarOpen(false)}
-            className="fixed inset-0 z-30 bg-ink-950/55 backdrop-blur-sm xl:hidden"
+            className="fixed inset-0 z-30 bg-ink-950/55 backdrop-blur-sm xl:bg-transparent xl:backdrop-blur-0"
           />
-          <div className="fixed inset-y-4 left-4 z-40 w-[290px] xl:hidden">
+          <div className="fixed inset-y-4 left-4 z-40 w-[290px]">
             <Sidebar
               activeSection={activeSection}
               collapsed={false}
+              onToggleExpanded={() => setSidebarOpen(false)}
               onSelectSection={(section) => {
                 openSection(section);
               }}
@@ -1904,12 +1905,13 @@ export default function App() {
         </>
       ) : null}
 
-      <div className={`grid w-full gap-4 ${sidebarOpen ? "xl:grid-cols-[290px_minmax(0,1fr)]" : "xl:grid-cols-[84px_minmax(0,1fr)]"}`}>
+      <div className="grid w-full gap-4 xl:grid-cols-[84px_minmax(0,1fr)]">
         <div className="hidden xl:block">
-          <div className={sidebarOpen ? "w-[290px]" : "w-[84px]"}>
+          <div className="w-[84px]">
             <Sidebar
               activeSection={activeSection}
-              collapsed={!sidebarOpen}
+              collapsed
+              onToggleExpanded={() => setSidebarOpen(true)}
               onSelectSection={(section) => {
                 openSection(section);
               }}
@@ -1947,29 +1949,27 @@ export default function App() {
                 : "border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between"
             }`}
           >
-            <div className="flex items-start gap-4">
-              <button
-                type="button"
-                onClick={() => setSidebarOpen((current) => !current)}
-                aria-label={sidebarOpen ? "Hide navigation" : "Show navigation"}
-                title={sidebarOpen ? "Hide navigation" : "Show navigation"}
-                className="crm-icon-button mt-1 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10"
-              >
-                <Menu className="h-4 w-4" />
-              </button>
-              <div>
-                <p className="text-xs uppercase tracking-[0.34em] text-slate-500">{pageCopy.eyebrow}</p>
-                <h1 className={`mt-2 font-display font-semibold text-white ${immersivePipelineShell ? "text-2xl sm:text-3xl" : "text-3xl sm:text-4xl"}`}>{pageCopy.title}</h1>
-                <p className={`mt-2 ${immersivePipelineShell ? "max-w-4xl text-sm leading-6" : "max-w-3xl text-sm leading-7"} text-slate-300`}>
-                  {pageCopy.summary}
-                </p>
-                <p className={`text-xs uppercase tracking-[0.26em] text-slate-500 ${immersivePipelineShell ? "mt-2" : "mt-3"}`}>
-                  Signed in as {currentUser?.name} | {currentUser?.role}
-                </p>
-              </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.34em] text-slate-500">{pageCopy.eyebrow}</p>
+              <h1 className={`mt-2 font-display font-semibold text-white ${immersivePipelineShell ? "text-2xl sm:text-3xl" : "text-3xl sm:text-4xl"}`}>{pageCopy.title}</h1>
+              <p className={`mt-2 ${immersivePipelineShell ? "max-w-4xl text-sm leading-6" : "max-w-3xl text-sm leading-7"} text-slate-300`}>
+                {pageCopy.summary}
+              </p>
+              <p className={`text-xs uppercase tracking-[0.26em] text-slate-500 ${immersivePipelineShell ? "mt-2" : "mt-3"}`}>
+                Signed in as {currentUser?.name} | {currentUser?.role}
+              </p>
             </div>
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(true)}
+                aria-label="Open navigation"
+                title="Open navigation"
+                className="crm-icon-button inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10 xl:hidden"
+              >
+                <Menu className="h-4 w-4" />
+              </button>
               <NotificationTray
                 notifications={notifications}
                 open={notificationsOpen}
