@@ -2433,21 +2433,14 @@ export default function App() {
 
                 {showPipeline ? (
                   <>
-                    <div className="crm-pipeline-panel mx-6 mt-6 rounded-[1.85rem] border border-white/[0.04] bg-white/[0.02] p-5">
-                      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                        <div className="flex flex-wrap items-center gap-3">
-                          <span className="rounded-full bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100">
-                            {flattenedPipelineLeads.length} visible leads
-                          </span>
-                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">
-                            {(visiblePipelineGroups.new || []).length} new
-                          </span>
-                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">
-                            {(visiblePipelineGroups.appointment || []).length} appointment
-                          </span>
-                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">
-                            {(visiblePipelineGroups.negotiation || []).length} negotiation
-                          </span>
+                    <div className="crm-pipeline-panel mx-6 mt-6 rounded-[1.85rem] border border-white/[0.04] bg-white/[0.015] p-4">
+                      <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Visible pipeline</p>
+                          <div className="mt-2 flex flex-wrap items-center gap-3">
+                            <span className="text-2xl font-semibold text-white">{flattenedPipelineLeads.length}</span>
+                            <span className="text-sm text-slate-400">active leads on the board</span>
+                          </div>
                         </div>
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                           <label className="grid gap-2 sm:min-w-[220px]">

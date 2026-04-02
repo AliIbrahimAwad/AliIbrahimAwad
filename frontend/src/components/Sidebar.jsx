@@ -184,7 +184,7 @@ export function Sidebar({
   }
 
   return (
-    <aside className="group/sidebar relative">
+    <aside className="relative">
       <div className="crm-sidebar relative flex min-h-[calc(100vh-2rem)] w-[84px] flex-col items-center rounded-[2rem] border border-white/10 bg-ink-950/90 px-3 py-4 shadow-card backdrop-blur">
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-ember-500 to-ice-500 text-sm font-bold text-white shadow-glow">
           AC
@@ -243,9 +243,6 @@ export function Sidebar({
         </div>
       </div>
 
-      <div className="pointer-events-none absolute left-0 top-0 z-40 hidden translate-x-2 opacity-0 transition-all duration-200 xl:block xl:group-hover/sidebar:pointer-events-auto xl:group-hover/sidebar:translate-x-0 xl:group-hover/sidebar:opacity-100">
-        {renderExpandedPanel("w-[290px]")}
-      </div>
     </aside>
   );
 }
