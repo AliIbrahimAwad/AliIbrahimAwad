@@ -16,8 +16,8 @@ function PipelineLeadCard({
     <div
       className={`crm-pipeline-card flex h-full w-full min-w-0 flex-col overflow-hidden rounded-[1.35rem] border p-3.5 transition ${
         selected
-          ? "border-ice-400/40 bg-white/10 shadow-glow"
-          : "border-white/10 bg-white/[0.045] hover:border-white/20 hover:bg-white/[0.07]"
+          ? "border-ice-400/35 bg-white/8 shadow-glow"
+          : "border-white/[0.06] bg-white/[0.04] hover:border-white/[0.1] hover:bg-white/[0.06]"
       } ${selectionChecked ? "ring-1 ring-ice-300/50" : ""}`}
     >
       <div className="flex items-start justify-between gap-3">
@@ -117,13 +117,13 @@ export function LeadPipelineBoard({
                 }
                 onMoveLead?.(leadId, stage.key);
               }}
-              className={`crm-pipeline-lane flex min-h-[24rem] min-w-0 flex-col overflow-hidden rounded-[1.75rem] border p-4 transition ${
+              className={`crm-pipeline-lane flex min-h-[24rem] min-w-0 flex-col overflow-hidden rounded-[1.85rem] p-4 transition ${
                 isActiveDropTarget
-                  ? "border-ice-400/25 bg-white/[0.045]"
-                  : "border-white/10 bg-white/[0.02]"
+                  ? "bg-white/[0.045] shadow-[inset_0_0_0_1px_rgba(88,183,255,0.18)]"
+                  : "bg-white/[0.015]"
               }`}
             >
-              <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-4">
+              <div className="flex items-start justify-between gap-3 pb-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Pipeline stage</p>
                   <h3 className="mt-1 font-display text-lg font-semibold text-white">{stage.label}</h3>
@@ -133,7 +133,7 @@ export function LeadPipelineBoard({
                 </span>
               </div>
 
-              <div className="mt-4 grid min-w-0 gap-3">
+              <div className="mt-2 grid min-w-0 gap-3">
                 {lane.length ? (
                   lane.map((lead) => (
                     <PipelineLeadCard
@@ -149,7 +149,7 @@ export function LeadPipelineBoard({
                     />
                   ))
                 ) : (
-                  <div className="crm-pipeline-empty rounded-[1.5rem] border border-dashed border-white/10 bg-white/[0.03] px-4 py-8 text-center text-sm leading-6 text-slate-400">
+                  <div className="crm-pipeline-empty rounded-[1.5rem] bg-white/[0.03] px-4 py-8 text-center text-sm leading-6 text-slate-400">
                     {movingLeadId ? "Updating lead status..." : "Drop a lead here or wait for the next update."}
                   </div>
                 )}

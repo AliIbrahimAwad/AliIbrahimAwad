@@ -1879,6 +1879,7 @@ export default function App() {
           <div className="fixed inset-y-4 left-4 z-40 w-[290px] xl:hidden">
             <Sidebar
               activeSection={activeSection}
+              collapsed={false}
               onSelectSection={(section) => {
                 openSection(section);
               }}
@@ -1903,11 +1904,12 @@ export default function App() {
         </>
       ) : null}
 
-      <div className={`grid w-full gap-4 ${sidebarOpen ? "xl:grid-cols-[290px_minmax(0,1fr)]" : "xl:grid-cols-[minmax(0,1fr)]"}`}>
-        {sidebarOpen ? (
-          <div className="hidden xl:block">
+      <div className={`grid w-full gap-4 ${sidebarOpen ? "xl:grid-cols-[290px_minmax(0,1fr)]" : "xl:grid-cols-[84px_minmax(0,1fr)]"}`}>
+        <div className="hidden xl:block">
+          <div className={sidebarOpen ? "w-[290px]" : "w-[84px]"}>
             <Sidebar
               activeSection={activeSection}
+              collapsed={!sidebarOpen}
               onSelectSection={(section) => {
                 openSection(section);
               }}
@@ -1929,7 +1931,7 @@ export default function App() {
               }
             />
           </div>
-        ) : null}
+        </div>
 
         <main
           className={`${
@@ -1945,27 +1947,29 @@ export default function App() {
                 : "border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between"
             }`}
           >
-            <div>
-              <p className="text-xs uppercase tracking-[0.34em] text-slate-500">{pageCopy.eyebrow}</p>
-              <h1 className={`mt-2 font-display font-semibold text-white ${immersivePipelineShell ? "text-2xl sm:text-3xl" : "text-3xl sm:text-4xl"}`}>{pageCopy.title}</h1>
-              <p className={`mt-2 ${immersivePipelineShell ? "max-w-4xl text-sm leading-6" : "max-w-3xl text-sm leading-7"} text-slate-300`}>
-                {pageCopy.summary}
-              </p>
-              <p className={`text-xs uppercase tracking-[0.26em] text-slate-500 ${immersivePipelineShell ? "mt-2" : "mt-3"}`}>
-                Signed in as {currentUser?.name} | {currentUser?.role}
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="flex items-start gap-4">
               <button
                 type="button"
                 onClick={() => setSidebarOpen((current) => !current)}
                 aria-label={sidebarOpen ? "Hide navigation" : "Show navigation"}
                 title={sidebarOpen ? "Hide navigation" : "Show navigation"}
-                className="crm-icon-button inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10"
+                className="crm-icon-button mt-1 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10"
               >
                 <Menu className="h-4 w-4" />
               </button>
+              <div>
+                <p className="text-xs uppercase tracking-[0.34em] text-slate-500">{pageCopy.eyebrow}</p>
+                <h1 className={`mt-2 font-display font-semibold text-white ${immersivePipelineShell ? "text-2xl sm:text-3xl" : "text-3xl sm:text-4xl"}`}>{pageCopy.title}</h1>
+                <p className={`mt-2 ${immersivePipelineShell ? "max-w-4xl text-sm leading-6" : "max-w-3xl text-sm leading-7"} text-slate-300`}>
+                  {pageCopy.summary}
+                </p>
+                <p className={`text-xs uppercase tracking-[0.26em] text-slate-500 ${immersivePipelineShell ? "mt-2" : "mt-3"}`}>
+                  Signed in as {currentUser?.name} | {currentUser?.role}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <NotificationTray
                 notifications={notifications}
                 open={notificationsOpen}
@@ -2429,8 +2433,8 @@ export default function App() {
 
                 {showPipeline ? (
                   <>
-                    <div className="crm-pipeline-panel mx-6 mt-6 rounded-[1.75rem] border border-white/5 bg-white/[0.025] p-5">
-                      <div className="flex flex-col gap-4 border-b border-white/10 pb-4 xl:flex-row xl:items-center xl:justify-between">
+                    <div className="crm-pipeline-panel mx-6 mt-6 rounded-[1.85rem] border border-white/[0.04] bg-white/[0.02] p-5">
+                      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                         <div className="flex flex-wrap items-center gap-3">
                           <span className="rounded-full bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100">
                             {flattenedPipelineLeads.length} visible leads
@@ -2466,9 +2470,9 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="mt-5">
+                      <div className="mt-4">
                         {libraryLoading ? (
-                          <div className="h-[72vh] animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
+                          <div className="h-[72vh] animate-pulse rounded-[1.75rem] bg-white/[0.04]" />
                         ) : flattenedPipelineLeads.length ? (
                           <LeadPipelineBoard
                             stages={pipelineStages.map((status) => ({
