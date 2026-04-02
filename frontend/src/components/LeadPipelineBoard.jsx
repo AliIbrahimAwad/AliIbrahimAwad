@@ -93,7 +93,7 @@ export function LeadPipelineBoard({
   return (
     <div className="overflow-x-auto pb-2">
       <div
-        className="grid min-w-[1220px] gap-5"
+        className="grid min-w-[1220px] gap-0"
         style={{ gridTemplateColumns: `repeat(${Math.max(stages.length, 1)}, minmax(0, 1fr))` }}
       >
         {stages.map((stage, index) => {
@@ -116,11 +116,11 @@ export function LeadPipelineBoard({
                 }
                 onMoveLead?.(leadId, stage.key);
               }}
-              className={`crm-pipeline-lane flex min-h-[24rem] min-w-0 flex-col overflow-hidden rounded-[1.6rem] p-3 transition ${
+              className={`crm-pipeline-lane flex min-h-[24rem] min-w-0 flex-col overflow-hidden px-4 transition ${
                 isActiveDropTarget
-                  ? "bg-white/[0.03] shadow-[inset_0_0_0_1px_rgba(88,183,255,0.16)]"
+                  ? "bg-white/[0.02]"
                   : "bg-transparent"
-              } ${index === 0 ? "" : "border-l border-white/[0.07] pl-5"}`}
+              } ${index === 0 ? "" : "border-l border-white/[0.08] pl-5"}`}
             >
               <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-1 pb-3">
                 <div>
@@ -147,7 +147,7 @@ export function LeadPipelineBoard({
                     />
                   ))
                 ) : (
-                  <div className="crm-pipeline-empty rounded-[1.1rem] bg-white/[0.02] px-4 py-8 text-center text-sm leading-6 text-slate-500">
+                  <div className="crm-pipeline-empty px-4 py-8 text-center text-sm leading-6 text-slate-500">
                     {movingLeadId ? "Updating lead status..." : "Drop a lead here or wait for the next update."}
                   </div>
                 )}

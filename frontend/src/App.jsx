@@ -2433,7 +2433,7 @@ export default function App() {
 
                 {showPipeline ? (
                   <>
-                    <div className="crm-pipeline-panel mx-6 mt-6 rounded-[1.85rem] border border-white/[0.04] bg-white/[0.015] p-4">
+                    <div className="mx-6 mt-6">
                       <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
                         <div>
                           <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Visible pipeline</p>
@@ -2463,9 +2463,9 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="mt-4">
+                      <div className="mt-5">
                         {libraryLoading ? (
-                          <div className="h-[72vh] animate-pulse rounded-[1.75rem] bg-white/[0.04]" />
+                          <div className="h-[72vh] animate-pulse rounded-[1.75rem] bg-white/[0.02]" />
                         ) : flattenedPipelineLeads.length ? (
                           <LeadPipelineBoard
                             stages={pipelineStages.map((status) => ({
