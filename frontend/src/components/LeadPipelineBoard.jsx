@@ -14,7 +14,7 @@ function PipelineLeadCard({
 }) {
   return (
     <div
-      className={`rounded-[1.4rem] border p-4 transition ${
+      className={`w-full min-w-0 overflow-hidden rounded-[1.4rem] border p-4 transition ${
         selected
           ? "border-ice-400/40 bg-white/10 shadow-glow"
           : "border-white/10 bg-white/[0.045] hover:border-white/20 hover:bg-white/[0.07]"
@@ -31,15 +31,15 @@ function PipelineLeadCard({
             onDragStart?.(lead.id);
           }}
           onDragEnd={onDragEnd}
-          className="flex min-w-0 flex-1 items-start gap-3 text-left"
+          className="flex w-full min-w-0 flex-1 items-start gap-3 overflow-hidden text-left"
         >
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-ember-500/90 to-ice-500/90 text-xs font-bold text-white">
             {initials(lead.customerName)}
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1 overflow-hidden">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="truncate font-display text-base font-semibold text-white">{lead.customerName}</h3>
-              <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusTone(lead.status)}`}>
+              <span className={`max-w-full truncate rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusTone(lead.status)}`}>
                 {lead.statusLabel}
               </span>
             </div>
@@ -63,21 +63,21 @@ function PipelineLeadCard({
         ) : null}
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2 text-xs">
+      <div className="mt-4 flex min-w-0 flex-wrap gap-2 text-xs">
         {lead.stockNumber ? (
-          <span className="rounded-full bg-white/5 px-2.5 py-1 text-slate-300">Stock {lead.stockNumber}</span>
+          <span className="max-w-full truncate rounded-full bg-white/5 px-2.5 py-1 text-slate-300">Stock {lead.stockNumber}</span>
         ) : null}
-        <span className={`rounded-full px-2.5 py-1 font-semibold ${sourceTone(lead.source)}`}>{lead.source}</span>
+        <span className={`max-w-full truncate rounded-full px-2.5 py-1 font-semibold ${sourceTone(lead.source)}`}>{lead.source}</span>
       </div>
 
-      <div className="mt-4 flex items-center justify-between gap-3 text-xs uppercase tracking-[0.18em] text-slate-500">
+      <div className="mt-4 flex min-w-0 items-center justify-between gap-3 text-xs uppercase tracking-[0.18em] text-slate-500">
         <span className="truncate">{lead.assignedRep}</span>
         <span className="shrink-0">{lead.lastActivity}</span>
       </div>
 
-      <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-white/5 px-3 py-1.5 text-xs text-slate-300">
+      <div className="mt-3 inline-flex max-w-full items-center gap-2 overflow-hidden rounded-full bg-white/5 px-3 py-1.5 text-xs text-slate-300">
         <Phone className="h-3.5 w-3.5 text-ice-300" />
-        <span>{lead.phone}</span>
+        <span className="truncate">{lead.phone}</span>
       </div>
     </div>
   );
@@ -98,7 +98,10 @@ export function LeadPipelineBoard({
 }) {
   return (
     <div className="overflow-x-auto pb-2">
-      <div className="grid min-w-[1220px] gap-4 xl:grid-cols-6">
+      <div
+        className="grid min-w-[1220px] gap-4"
+        style={{ gridTemplateColumns: `repeat(${Math.max(stages.length, 1)}, minmax(0, 1fr))` }}
+      >
         {stages.map((stage) => {
           const lane = groups[stage.key] || [];
           const isActiveDropTarget = draggingLeadId != null;
@@ -119,7 +122,7 @@ export function LeadPipelineBoard({
                 }
                 onMoveLead?.(leadId, stage.key);
               }}
-              className={`flex min-h-[24rem] flex-col rounded-[1.75rem] border p-4 transition ${
+              className={`flex min-h-[24rem] min-w-0 flex-col overflow-hidden rounded-[1.75rem] border p-4 transition ${
                 isActiveDropTarget
                   ? "border-ice-400/25 bg-white/[0.045]"
                   : "border-white/10 bg-white/[0.02]"
@@ -135,7 +138,7 @@ export function LeadPipelineBoard({
                 </span>
               </div>
 
-              <div className="mt-4 grid gap-3">
+              <div className="mt-4 grid min-w-0 gap-3">
                 {lane.length ? (
                   lane.map((lead) => (
                     <PipelineLeadCard

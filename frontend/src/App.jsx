@@ -1818,10 +1818,11 @@ export default function App() {
     title: "CRM",
     summary: "Manage the desk with fewer distractions and clearer workflow boundaries.",
   };
+  const immersivePipelineShell = showPipeline;
 
   return (
     <div className="min-h-screen bg-ink-950 bg-dashboard px-4 py-4 font-body text-slate-100 sm:px-6 lg:px-8">
-      <div className="mx-auto grid max-w-[1800px] gap-4 xl:grid-cols-[290px_minmax(0,1fr)]">
+      <div className="grid w-full gap-4 xl:grid-cols-[290px_minmax(0,1fr)]">
         <div className="xl:block">
           <Sidebar
             activeSection={activeSection}
@@ -1847,13 +1848,27 @@ export default function App() {
           />
         </div>
 
-        <main className="rounded-[2rem] border border-white/10 bg-ink-900/70 p-4 shadow-card backdrop-blur sm:p-6">
-          <header className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
+        <main
+          className={`${
+            immersivePipelineShell
+              ? "border border-white/5 bg-ink-950/55 p-0 shadow-[0_40px_120px_rgba(0,0,0,0.35)]"
+              : "rounded-[2rem] border border-white/10 bg-ink-900/70 p-4 shadow-card sm:p-6"
+          } backdrop-blur`}
+        >
+          <header
+            className={`flex flex-col gap-4 ${
+              immersivePipelineShell
+                ? "border-b border-white/5 px-6 py-5 lg:flex-row lg:items-center lg:justify-between"
+                : "border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between"
+            }`}
+          >
             <div>
               <p className="text-xs uppercase tracking-[0.34em] text-slate-500">{pageCopy.eyebrow}</p>
-              <h1 className="mt-2 font-display text-3xl font-semibold text-white sm:text-4xl">{pageCopy.title}</h1>
-              <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-300">{pageCopy.summary}</p>
-              <p className="mt-3 text-xs uppercase tracking-[0.26em] text-slate-500">
+              <h1 className={`mt-2 font-display font-semibold text-white ${immersivePipelineShell ? "text-2xl sm:text-3xl" : "text-3xl sm:text-4xl"}`}>{pageCopy.title}</h1>
+              <p className={`mt-2 ${immersivePipelineShell ? "max-w-4xl text-sm leading-6" : "max-w-3xl text-sm leading-7"} text-slate-300`}>
+                {pageCopy.summary}
+              </p>
+              <p className={`text-xs uppercase tracking-[0.26em] text-slate-500 ${immersivePipelineShell ? "mt-2" : "mt-3"}`}>
                 Signed in as {currentUser?.name} | {currentUser?.role}
               </p>
             </div>
@@ -1890,7 +1905,7 @@ export default function App() {
           </header>
 
           {error ? (
-            <div className="mt-4 rounded-2xl border border-ember-500/30 bg-ember-500/10 px-4 py-3 text-sm text-ember-300">
+            <div className={`${immersivePipelineShell ? "mx-6 mt-4" : "mt-4"} rounded-2xl border border-ember-500/30 bg-ember-500/10 px-4 py-3 text-sm text-ember-300`}>
               {error}
             </div>
           ) : null}
@@ -2313,44 +2328,24 @@ export default function App() {
 
                 {showPipeline ? (
                   <>
-                    <div className="grid gap-4 xl:grid-cols-4">
-                      <MetricCard
-                        eyebrow="Visible pipeline"
-                        value={flattenedPipelineLeads.length}
-                        detail="All active leads currently shown on the board."
-                        accent="from-cyan-500/20 to-transparent"
-                      />
-                      <MetricCard
-                        eyebrow="New"
-                        value={(visiblePipelineGroups.new || []).length}
-                        detail="Fresh opportunities waiting for first movement."
-                        accent="from-amber-500/20 to-transparent"
-                      />
-                      <MetricCard
-                        eyebrow="Appointments"
-                        value={(visiblePipelineGroups.appointment || []).length}
-                        detail="Leads that have already reached the appointment stage."
-                        accent="from-lime-500/20 to-transparent"
-                      />
-                      <MetricCard
-                        eyebrow="Negotiation"
-                        value={(visiblePipelineGroups.negotiation || []).length}
-                        detail="Leads currently inside active deal negotiation."
-                        accent="from-violet-500/20 to-transparent"
-                      />
-                    </div>
-
-                    <div className="mt-2 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-                      <div className="flex flex-col gap-4 border-b border-white/10 pb-4 xl:flex-row xl:items-end xl:justify-between">
-                        <div>
-                          <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Pipeline controls</p>
-                          <h2 className="mt-2 font-display text-2xl font-semibold text-white">Full-stage pipeline board</h2>
-                          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-                            This workspace is dedicated to dragging leads between stages. Reps and managers can both move cards here, while detailed follow-up stays on the lead desk.
-                          </p>
+                    <div className="mx-6 mt-6 rounded-[1.75rem] border border-white/5 bg-white/[0.025] p-5">
+                      <div className="flex flex-col gap-4 border-b border-white/10 pb-4 xl:flex-row xl:items-center xl:justify-between">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <span className="rounded-full bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100">
+                            {flattenedPipelineLeads.length} visible leads
+                          </span>
+                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">
+                            {(visiblePipelineGroups.new || []).length} new
+                          </span>
+                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">
+                            {(visiblePipelineGroups.appointment || []).length} appointment
+                          </span>
+                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">
+                            {(visiblePipelineGroups.negotiation || []).length} negotiation
+                          </span>
                         </div>
-                        <div className="flex flex-col gap-3 xl:items-end">
-                          <label className="grid gap-2 xl:min-w-[220px]">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                          <label className="grid gap-2 sm:min-w-[220px]">
                             <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Stage filter</span>
                             <select
                               value={leadStatusFilter}
@@ -2367,15 +2362,12 @@ export default function App() {
                               ))}
                             </select>
                           </label>
-                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-300">
-                            {flattenedPipelineLeads.length} visible leads
-                          </span>
                         </div>
                       </div>
 
                       <div className="mt-5">
                         {libraryLoading ? (
-                          <div className="h-[70vh] animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
+                          <div className="h-[72vh] animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
                         ) : flattenedPipelineLeads.length ? (
                           <LeadPipelineBoard
                             stages={pipelineStages.map((status) => ({

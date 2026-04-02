@@ -412,7 +412,9 @@ function registerApiRoutes(app) {
     "/api/leads/:id/status",
     requireAuth,
     asyncHandler(async (req, res) => {
-      if (!canUpdateLeadStatus(req.currentUser)) {
+      const lead = await req.app.locals.db.getApiLead(Number(req.params.id), req.currentUser);
+
+      if (!canUpdateLeadStatus(req.currentUser, lead)) {
         res.status(403).json({ error: "Forbidden" });
         return;
       }

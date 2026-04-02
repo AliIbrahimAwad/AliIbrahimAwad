@@ -134,6 +134,51 @@ function preferLeadValue(existingValue, incomingValue, options = {}) {
   return existing;
 }
 
+function normalizeComparableMessage(value) {
+  return normalizeComparableText(value).replace(/\s+/g, " ").trim();
+}
+
+function mergeDistinctLeadMessages(existingValue, incomingValue) {
+  const existing = stringOrNull(existingValue);
+  const incoming = stringOrNull(incomingValue);
+  if (!incoming) {
+    return existing;
+  }
+
+  if (!existing) {
+    return incoming;
+  }
+
+  const existingWeak = isWeakLeadMessage(existing);
+  const incomingWeak = isWeakLeadMessage(incoming);
+  if (existingWeak && !incomingWeak) {
+    return incoming;
+  }
+  if (!existingWeak && incomingWeak) {
+    return existing;
+  }
+
+  const normalizedExisting = normalizeComparableMessage(existing);
+  const normalizedIncoming = normalizeComparableMessage(incoming);
+  if (!normalizedExisting) {
+    return incoming;
+  }
+  if (!normalizedIncoming) {
+    return existing;
+  }
+  if (normalizedExisting === normalizedIncoming) {
+    return existing.length >= incoming.length ? existing : incoming;
+  }
+  if (normalizedExisting.includes(normalizedIncoming)) {
+    return existing;
+  }
+  if (normalizedIncoming.includes(normalizedExisting)) {
+    return incoming;
+  }
+
+  return `${existing}\n\n---\n${incoming}`;
+}
+
 function buildMergedLeadInput(existingLead, incomingInput = {}) {
   const existingStatus = toStoredStatus(existingLead.status || "new");
   const incomingStatus = incomingInput.status ? toStoredStatus(incomingInput.status) : null;
@@ -158,12 +203,45 @@ function buildMergedLeadInput(existingLead, incomingInput = {}) {
     vehicle_price: preferLeadValue(existingLead.vehicle_price, incomingInput.vehicle_price),
     lead_type: preferLeadValue(existingLead.lead_type, incomingInput.lead_type),
     listing_url: preferLeadValue(existingLead.listing_url, incomingInput.listing_url),
-    message: preferLeadValue(existingLead.message, incomingInput.message, {
-      isWeak: isWeakLeadMessage,
-      preferLonger: true,
-    }),
+    message: mergeDistinctLeadMessages(existingLead.message, incomingInput.message),
     inventory_id: existingLead.inventory_id || incomingInput.inventory_id || null,
   };
+}
+
+function normalizeVehicleIdentityForLead(value) {
+  return normalizeInventoryIdentity(value);
+}
+
+function normalizeVehicleDescriptor(value) {
+  return normalizeComparableText(value).replace(/\s+/g, " ").trim();
+}
+
+function isSameLeadVehicle(existingLead = {}, incomingInput = {}) {
+  const existingInventoryId = parsePositiveInteger(existingLead.inventory_id);
+  const incomingInventoryId = parsePositiveInteger(incomingInput.inventory_id);
+  if (existingInventoryId && incomingInventoryId) {
+    return existingInventoryId === incomingInventoryId;
+  }
+
+  const existingStock = normalizeVehicleIdentityForLead(existingLead.stock_number);
+  const incomingStock = normalizeVehicleIdentityForLead(incomingInput.stock_number);
+  if (existingStock && incomingStock) {
+    return existingStock === incomingStock;
+  }
+
+  const existingVin = normalizeVehicleIdentityForLead(existingLead.vehicle_id);
+  const incomingVin = normalizeVehicleIdentityForLead(incomingInput.vehicle_id);
+  if (existingVin && incomingVin) {
+    return existingVin === incomingVin;
+  }
+
+  const existingVehicle = normalizeVehicleDescriptor(existingLead.vehicle_interest);
+  const incomingVehicle = normalizeVehicleDescriptor(incomingInput.vehicle_interest);
+  if (existingVehicle && incomingVehicle && !isWeakLeadVehicle(existingVehicle) && !isWeakLeadVehicle(incomingVehicle)) {
+    return existingVehicle === incomingVehicle;
+  }
+
+  return false;
 }
 
 function logLeadDedupeDecision(payload = {}) {
@@ -2553,6 +2631,92 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     }
 
     const assignedTo = contact?.assigned_rep_id == null ? null : Number(contact.assigned_rep_id);
+    const duplicateLead = contact && typeof this.findDuplicateLeadForContactVehicle === "function"
+      ? await this.findDuplicateLeadForContactVehicle(
+          {
+            dealership_id: dealershipId,
+            contact_id: contact.id,
+            input: {
+              source: input.source || "website",
+              status: storedStatus || "new",
+              assigned_to: assignedTo,
+              customer_name: leadPayload.customer_name,
+              phone: leadPayload.phone,
+              email: leadPayload.email,
+              vehicle_interest: leadPayload.vehicle_interest,
+              vehicle_id: leadPayload.vehicle_id,
+              stock_number: leadPayload.stock_number,
+              vehicle_year: leadPayload.vehicle_year,
+              vehicle_make: leadPayload.vehicle_make,
+              vehicle_model: leadPayload.vehicle_model,
+              vehicle_trim: leadPayload.vehicle_trim,
+              vehicle_condition: leadPayload.vehicle_condition,
+              vehicle_price: leadPayload.vehicle_price,
+              lead_type: input.lead_type || null,
+              listing_url: input.listing_url || null,
+              message: input.message || null,
+              inventory_id: inventoryId,
+            },
+          },
+          user
+        )
+      : null;
+
+    if (duplicateLead) {
+      const mergedInput = buildMergedLeadInput(duplicateLead, {
+        source: input.source || "website",
+        status: storedStatus || "new",
+        assigned_to: assignedTo,
+        customer_name: leadPayload.customer_name,
+        phone: leadPayload.phone,
+        email: leadPayload.email,
+        vehicle_interest: leadPayload.vehicle_interest,
+        vehicle_id: leadPayload.vehicle_id,
+        stock_number: leadPayload.stock_number,
+        vehicle_year: leadPayload.vehicle_year,
+        vehicle_make: leadPayload.vehicle_make,
+        vehicle_model: leadPayload.vehicle_model,
+        vehicle_trim: leadPayload.vehicle_trim,
+        vehicle_condition: leadPayload.vehicle_condition,
+        vehicle_price: leadPayload.vehicle_price,
+        lead_type: input.lead_type || null,
+        listing_url: input.listing_url || null,
+        message: input.message || null,
+        inventory_id: inventoryId,
+      });
+
+      await this.updateApiLead(duplicateLead.id, mergedInput, user);
+      await this.createActivity({
+        lead_id: duplicateLead.id,
+        type: "lead_updated",
+        content: `Duplicate ${input.source || "website"} lead merged into existing lead`,
+        created_at: now,
+      });
+      logLeadDedupeDecision({
+        action: "reused_existing_lead",
+        reason: "same_contact_same_vehicle",
+        lead_id: Number(duplicateLead.id),
+        contact_id: contact ? Number(contact.id) : null,
+        dealership_id: dealershipId,
+        source: input.source || "website",
+        normalized_phone: normalizedPhone,
+        normalized_email: normalizedEmail,
+        assigned_rep_id: assignedTo,
+      });
+
+      return attachLeadDedupeMeta(
+        await this.getApiLead(duplicateLead.id, user),
+        {
+          merged: true,
+          created: false,
+          reason: "same_contact_same_vehicle",
+          lead_id: Number(duplicateLead.id),
+          contact_id: contact ? Number(contact.id) : null,
+        },
+        options
+      );
+    }
+
     const row = await this.get(
       `
         INSERT INTO leads (
@@ -3854,6 +4018,30 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       assignment_method: "auto_round_robin",
       needs_manual_review: false,
     };
+  }
+
+  async findDuplicateLeadForContactVehicle({ dealership_id, contact_id, input = {} } = {}, user = null) {
+    const dealershipId = parsePositiveInteger(dealership_id);
+    const contactId = parsePositiveInteger(contact_id);
+    if (!dealershipId || !contactId) {
+      return null;
+    }
+
+    const rows = await this.all(
+      `
+        ${this.apiLeadSelectSql()}
+        WHERE leads.dealership_id = ?
+          AND leads.contact_id = ?
+        ORDER BY leads.created_at DESC, leads.id DESC
+      `,
+      [dealershipId, contactId]
+    );
+
+    const candidate = rows
+      .map((row) => this.formatApiLead(row))
+      .find((lead) => isSameLeadVehicle(lead, input));
+
+    return candidate || null;
   }
 
   async getLegacyLeadForContactResolution({ dealership_id, normalized_phone = null, normalized_email = null } = {}) {

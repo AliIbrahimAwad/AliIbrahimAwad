@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { PostgresCrmDatabase } = require("../src/data/postgres");
+const { canUpdateLeadStatus } = require("../src/models/user");
 const { evaluateRepAvailability } = require("../src/utils/repAvailability");
 
 test("rep availability respects active, manual availability, and working days", () => {
@@ -573,4 +574,109 @@ test("bulk auto-assign links unassigned leads through contact ownership", async 
     assigned_count: 1,
     skipped_count: 0,
   });
+});
+
+test("sales reps can update status only on leads they own", () => {
+  assert.equal(canUpdateLeadStatus({ id: 4, role: "sales" }, { assigned_to: 4 }), true);
+  assert.equal(canUpdateLeadStatus({ id: 4, role: "sales" }, { assigned_to: 9 }), false);
+  assert.equal(canUpdateLeadStatus({ id: 1, role: "manager" }, { assigned_to: 9 }), true);
+});
+
+test("same contact plus same vehicle reuses the existing lead instead of creating a duplicate", async () => {
+  let inserted = false;
+  let updatedLeadId = null;
+  let updatedPayload = null;
+  let activityLogged = false;
+
+  const result = await PostgresCrmDatabase.prototype.createApiLead.call(
+    {
+      currentDealershipId() {
+        return 1;
+      },
+      async resolveLeadInventoryId() {
+        return 88;
+      },
+      async get(sql) {
+        if (String(sql).includes("INSERT INTO leads")) {
+          inserted = true;
+          return { id: 999 };
+        }
+
+        return {
+          id: 88,
+          stock_number: "D9499",
+          vin: "VIN123",
+          year: 2015,
+          make: "Dodge",
+          model: "Grand Caravan",
+          trim: null,
+          price: null,
+          condition: null,
+        };
+      },
+      normalizeLeadPayloadForStorage(input) {
+        return input;
+      },
+      async findOrCreateContactFromLead() {
+        return {
+          created: false,
+          reason: "normalized_phone",
+          contact: {
+            id: 44,
+            assigned_rep_id: 12,
+            needs_manual_review: false,
+          },
+        };
+      },
+      async findDuplicateLeadForContactVehicle() {
+        return {
+          id: 321,
+          dealership_id: 1,
+          contact_id: 44,
+          assigned_to: 12,
+          source: "autotrader",
+          status: "new",
+          customer_name: "Luc Joanis",
+          phone: "4165550101",
+          email: "luc@example.com",
+          vehicle_interest: "2015 Dodge Grand Caravan",
+          vehicle_id: "VIN123",
+          stock_number: "D9499",
+          message: "Is this vehicle still available?",
+          inventory_id: 88,
+        };
+      },
+      async updateApiLead(id, payload) {
+        updatedLeadId = id;
+        updatedPayload = payload;
+        return { id };
+      },
+      async createActivity() {
+        activityLogged = true;
+      },
+      async getApiLead(id) {
+        return { id, contact_id: 44, assigned_to: 12 };
+      },
+    },
+    {
+      source: "autotrader",
+      customer_name: "Luc Joanis",
+      phone: "4165550101",
+      email: "luc@example.com",
+      vehicle_interest: "2015 Dodge Grand Caravan",
+      vehicle_id: "VIN123",
+      stock_number: "D9499",
+      message: "Can I book a test drive tomorrow?",
+    },
+    null,
+    { returnDedupeMeta: true }
+  );
+
+  assert.equal(inserted, false);
+  assert.equal(updatedLeadId, 321);
+  assert.equal(updatedPayload.message, "Is this vehicle still available?\n\n---\nCan I book a test drive tomorrow?");
+  assert.equal(activityLogged, true);
+  assert.equal(result.id, 321);
+  assert.equal(result._dedupe.merged, true);
+  assert.equal(result._dedupe.reason, "same_contact_same_vehicle");
 });
