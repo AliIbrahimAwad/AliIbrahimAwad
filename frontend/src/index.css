@@ -96,7 +96,6 @@ body:not(.theme-light) .crm-pipeline-panel {
 }
 
 body:not(.theme-light) .crm-pipeline-lane {
-  border-color: transparent !important;
   box-shadow: none !important;
 }
 
