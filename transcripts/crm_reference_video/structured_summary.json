@@ -1,0 +1,48 @@
+{
+  "system_type": "Dealership CRM",
+  "summary": "Pipeline-based lead management CRM with visual stages, basic assignment, integrated calling/text/email, manager oversight, conversion reporting, inventory linkage, and rule-based follow-up automation.",
+  "core_model": "Pipeline-based",
+  "entities": [
+    "leads",
+    "deals",
+    "contacts",
+    "inventory"
+  ],
+  "lead_flow": [
+    "lead_created",
+    "assigned_to_rep",
+    "moved_through_pipeline",
+    "converted_or_lost"
+  ],
+  "features": {
+    "routing": "basic_round_robin",
+    "automation": "rule_based_triggers",
+    "communication": [
+      "calling",
+      "sms",
+      "email"
+    ],
+    "reporting": [
+      "conversion_tracking",
+      "rep_activity"
+    ],
+    "inventory_integration": true
+  },
+  "ui_characteristics": [
+    "drag_and_drop_pipeline",
+    "dashboard_metrics",
+    "manager_overview"
+  ],
+  "sequential_topics": [
+    "Overview of CRM dashboard and purpose",
+    "Sidebar navigation for leads, deals, contacts, and reporting",
+    "Lead intake from website and third-party marketplaces",
+    "Pipeline stages from new to sold",
+    "Lead actions including assign, call, text, and email",
+    "Basic automation and follow-ups",
+    "Manager view for team performance and distribution",
+    "Reporting on conversions and activity",
+    "Inventory linked to deals",
+    "Built-in calling and texting"
+  ]
+}

@@ -1,0 +1,60 @@
+Reference CRM video notes
+
+If transcript is not directly available, summarize spoken content sequentially:
+
+- Intro: Overview of CRM dashboard and purpose
+- Navigation: Sidebar structure (leads, deals, contacts, reporting)
+- Lead Intake: Sources (website, AutoTrader, etc.)
+- Pipeline: Visual stages (new -> contacted -> appointment -> sold)
+- Lead Actions: Assign, call, text, email
+- Automation: Basic triggers and follow-ups
+- Manager View: Team performance and lead distribution
+- Reporting: Conversion rates, activity tracking
+- Inventory: Vehicle linking to deals
+- Communication: Built-in calling/texting system
+
+Reference observations:
+
+- System type: Dealership CRM
+- Pipeline-based lead management with visual stages
+- Manual or basic automatic lead assignment
+- Integrated communication tools (call, SMS, email)
+- Manager dashboard for team performance
+- Reporting on conversions and activity
+- Inventory linked to deals
+- Rule-based automation (follow-ups, triggers)
+
+Reference CRM vs internal CRM:
+
+Data Model:
+- Reference: Lead/deal pipeline
+- Internal: Contact ownership as source of truth
+
+Routing:
+- Reference: Basic round robin
+- Internal: Availability-aware, eligibility-based routing
+
+Automation:
+- Reference: Rule-based triggers
+- Internal: AI-driven (planned: call transcription, auto status updates)
+
+Focus:
+- Reference: UI and usability
+- Internal: Backend logic and data integrity
+
+Communication:
+- Reference: Tool (call/text/email)
+- Internal: Data input for AI analysis
+
+Inventory:
+- Reference: Passive linking
+- Internal: Active ingestion + future AI matching
+
+Manager Control:
+- Reference: Visibility
+- Internal: Control over routing + rep availability
+
+Current Gaps:
+- No advanced UI pipeline yet
+- No deep reporting dashboards yet
+- No deployed AI agents yet

@@ -459,8 +459,15 @@ function registerApiRoutes(app) {
         throw new ValidationError("A valid salesperson is required.");
       }
 
-      await req.app.locals.db.getApiLead(Number(req.params.id), req.currentUser);
-      await req.app.locals.db.assignLead(Number(req.params.id), assignedTo, req.currentUser);
+      const lead = await req.app.locals.db.getApiLead(Number(req.params.id), req.currentUser);
+      if (lead.contact_id) {
+        await req.app.locals.db.assignContact(Number(lead.contact_id), assignedTo, req.currentUser, {
+          assignment_method: "manual_override",
+          needs_manual_review: false,
+        });
+      } else {
+        await req.app.locals.db.assignLead(Number(req.params.id), assignedTo, req.currentUser);
+      }
 
       res.json(await req.app.locals.db.getApiLeadWithActivities(Number(req.params.id), req.currentUser));
     })

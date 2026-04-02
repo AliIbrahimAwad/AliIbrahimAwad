@@ -1,8 +1,9 @@
 import { startTransition, useDeferredValue, useEffect, useState } from "react";
-import { Menu, Search, SlidersHorizontal, X } from "lucide-react";
+import { Search, X } from "lucide-react";
 
 import { AttentionLeadCard } from "./components/AttentionLeadCard";
 import { InventoryPanel } from "./components/InventoryPanel";
+import { LeadAssignmentBoard } from "./components/LeadAssignmentBoard";
 import { LeadDetailsPanel } from "./components/LeadDetailsPanel";
 import { LeadPipelineBoard } from "./components/LeadPipelineBoard";
 import { LoginPage } from "./components/LoginPage";
@@ -399,6 +400,8 @@ export default function App() {
   const [smsSuggestionLoading, setSmsSuggestionLoading] = useState(false);
   const [draggingLeadId, setDraggingLeadId] = useState(null);
   const [pipelineMovingLeadId, setPipelineMovingLeadId] = useState(null);
+  const [assignmentDraggingLeadId, setAssignmentDraggingLeadId] = useState(null);
+  const [assignmentMovingLeadId, setAssignmentMovingLeadId] = useState(null);
   const [error, setError] = useState("");
   const [inventoryImportForm, setInventoryImportForm] = useState({
     sourceName: "",
@@ -424,6 +427,30 @@ export default function App() {
       setError("");
     });
   }
+
+  useEffect(() => {
+    if (activeSection !== "Analytics") {
+      return;
+    }
+
+    startTransition(() => {
+      setActiveSection("Dashboard");
+    });
+  }, [activeSection]);
+
+  useEffect(() => {
+    if (activeSection !== "Assignments") {
+      return;
+    }
+
+    if (currentUser?.role === "admin" || currentUser?.role === "manager") {
+      return;
+    }
+
+    startTransition(() => {
+      setActiveSection("Leads");
+    });
+  }, [activeSection, currentUser?.role]);
 
   useEffect(() => {
     if (activeSection !== "Intake") {
@@ -722,7 +749,7 @@ export default function App() {
 
     async function loadSectionData() {
       try {
-        if (["Leads", "Analytics", "Unmatched"].includes(activeSection) && !leadLibraryLoaded) {
+        if (["Leads", "Assignments", "Analytics", "Unmatched"].includes(activeSection) && !leadLibraryLoaded) {
           await loadLeadLibrary();
         }
 
@@ -806,7 +833,7 @@ export default function App() {
   }, [activeSection, authStatus, unmatchedStatusFilter]);
 
   useEffect(() => {
-    if (!selectedLeadId && ["Leads", "Inventory"].includes(activeSection) && leadLibrary[0]) {
+    if (!selectedLeadId && ["Leads", "Assignments", "Inventory"].includes(activeSection) && leadLibrary[0]) {
       setSelectedLeadId(leadLibrary[0].id);
       return;
     }
@@ -1011,6 +1038,15 @@ export default function App() {
   const flattenedOrganizedLeads = organizedGroups.flatMap((group) => filteredOrganizedGroups[group]);
   const flattenedPipelineLeads = pipelineStages.flatMap((status) => visiblePipelineGroups[status] || []);
   const canBulkAutoAssign = ["admin", "manager"].includes(currentUser?.role);
+  const assignmentEligibleLeads = visibleLeadLibrary.filter((lead) => !["sold", "lost"].includes(lead.status));
+  const salesAssignmentUsers = users
+    .filter((user) => user.role === "sales")
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const assignmentUnassignedLeads = assignmentEligibleLeads.filter((lead) => !lead.assignedTo);
+  const assignmentRepLanes = salesAssignmentUsers.map((user) => ({
+    rep: user,
+    leads: assignmentEligibleLeads.filter((lead) => Number(lead.assignedTo) === Number(user.id)),
+  }));
   const visibleBulkAssignableLeadIds = [...new Set(
     [...visibleAttentionLeads, ...flattenedPipelineLeads]
       .filter((lead) => canBulkAutoAssign && !lead.assignedTo)
@@ -1054,6 +1090,12 @@ export default function App() {
     conversationFeed: visibleConversationFeed,
     inventoryItems: visibleInventoryItems,
   });
+  const salesUsers = users.filter((user) => user.role === "sales");
+  const routingOpenRepCount = salesUsers.filter((user) => user.is_active && user.is_available).length;
+  const routingPausedRepCount = salesUsers.filter((user) => !user.is_active || !user.is_available).length;
+  const appointmentCount = visibleLeadLibrary.filter((lead) => lead.status === "appointment").length;
+  const conversationCallCount = visibleConversationFeed.filter((item) => item.type === "call").length;
+  const conversationSmsCount = visibleConversationFeed.filter((item) => item.type === "sms").length;
 
   const selectedLead =
     selectedLeadDetails && selectedLeadDetails.id === selectedLeadId
@@ -1170,6 +1212,48 @@ export default function App() {
     } finally {
       setPipelineMovingLeadId(null);
       setDraggingLeadId(null);
+    }
+  }
+
+  async function handleAssignmentMove(leadId, assignedTo) {
+    const normalizedLeadId = Number(leadId);
+    const normalizedAssignedTo = Number(assignedTo);
+    const currentLead =
+      leadLibrary.find((lead) => Number(lead.id) === normalizedLeadId) ??
+      leads.find((lead) => Number(lead.id) === normalizedLeadId) ??
+      null;
+
+    if (!currentLead || !normalizedAssignedTo || Number(currentLead.assignedTo) === normalizedAssignedTo) {
+      return;
+    }
+
+    try {
+      setAssignmentMovingLeadId(normalizedLeadId);
+      const payload = await assignLead(normalizedLeadId, normalizedAssignedTo);
+      const nextLead = formatLead(payload.lead);
+
+      if (Number(selectedLeadId) === normalizedLeadId) {
+        setSelectedLeadDetails({
+          ...nextLead,
+          activities: (payload.activities || []).map(formatActivity),
+          timeline: (payload.timeline || []).map(formatTimelineItem),
+          tasks: payload.tasks || [],
+        });
+      }
+
+      await refreshWorklist();
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary({ preserveSelection: true });
+      }
+      if (conversationFeedLoaded) {
+        await loadConversationFeed({ preserveSelection: true });
+      }
+      setError("");
+    } catch (assignError) {
+      setError(assignError.message || "Unable to reassign lead ownership.");
+    } finally {
+      setAssignmentMovingLeadId(null);
+      setAssignmentDraggingLeadId(null);
     }
   }
 
@@ -1678,28 +1762,56 @@ export default function App() {
   const showTeam = activeSection === "Team" && (currentUser?.role === "admin" || currentUser?.role === "manager");
   const showDashboard = activeSection === "Dashboard";
   const showLeads = activeSection === "Leads";
+  const showAssignments = activeSection === "Assignments" && (currentUser?.role === "admin" || currentUser?.role === "manager");
   const showUnmatched = activeSection === "Unmatched";
   const showConversations = activeSection === "Conversations";
   const showInventory = activeSection === "Inventory";
-  const showAnalytics = activeSection === "Analytics";
-  const sectionTitle = {
-    Dashboard: "Overview",
-    Leads: "Lead pipeline",
-    Unmatched: "Unmatched communications",
-    Conversations: "Conversations",
-    Inventory: "Inventory focus",
-    Analytics: "Pipeline analytics",
-    Team: "Team management",
-  }[activeSection];
-  const sectionDescription = {
-    Dashboard: "Track the desk at a glance without mixing the overview with the actual lead work queue.",
-    Leads: "Work every lead from one place, including urgent follow-ups and the organized pipeline.",
-    Unmatched: "Capture inbound calls and SMS that did not match a lead, then resolve them into the CRM.",
-    Conversations: "See the latest inbound and outbound communication in one place and jump straight into the lead record.",
-    Inventory: "Manage real dealership inventory units, import CSV snapshots, and link leads to structured stock records.",
-    Analytics: "Track where leads sit, which sources are feeding the desk, and how much of the pipeline is actionable.",
-    Team: "Manage CRM access for the dealership team.",
-  }[activeSection];
+  const openSection = (section) => {
+    startTransition(() => {
+      setActiveSection(section);
+    });
+  };
+  const pageCopy = {
+    Dashboard: {
+      eyebrow: "Command center",
+      title: "Dealership desk",
+      summary: "Monitor the operation, jump into the right workspace fast, and keep the dashboard focused on direction instead of day-to-day clutter.",
+    },
+    Leads: {
+      eyebrow: "Lead desk",
+      title: "Pipeline and follow-up",
+      summary: "Work the customer pipeline, protect response times, and keep urgent follow-up separate from assignment admin.",
+    },
+    Assignments: {
+      eyebrow: "Ownership desk",
+      title: "Assign leads to reps",
+      summary: "Drag open leads to the right rep, clean up unassigned traffic, and manage who owns incoming opportunities.",
+    },
+    Inventory: {
+      eyebrow: "Stock workspace",
+      title: "Inventory operations",
+      summary: "Watch feed health, search units quickly, and see which vehicles are generating interest.",
+    },
+    Conversations: {
+      eyebrow: "Communication feed",
+      title: "Recent conversations",
+      summary: "Review the latest calls and SMS without mixing them into the rest of the CRM navigation.",
+    },
+    Unmatched: {
+      eyebrow: "Resolution queue",
+      title: "Unknown inbound traffic",
+      summary: "Resolve inbound calls and SMS that arrived without a matching lead before they get lost.",
+    },
+    Team: {
+      eyebrow: "Routing and access",
+      title: "Team management",
+      summary: "Control roster access, routing days, availability, and texting automation from one admin workspace.",
+    },
+  }[activeSection] || {
+    eyebrow: "Workspace",
+    title: "CRM",
+    summary: "Manage the desk with fewer distractions and clearer workflow boundaries.",
+  };
 
   return (
     <div className="min-h-screen bg-ink-950 bg-dashboard px-4 py-4 font-body text-slate-100 sm:px-6 lg:px-8">
@@ -1708,9 +1820,11 @@ export default function App() {
           <Sidebar
             activeSection={activeSection}
             onSelectSection={(section) => {
-              startTransition(() => {
-                setActiveSection(section);
-              });
+              openSection(section);
+            }}
+            toolCounts={{
+              Conversations: visibleConversationFeed.length,
+              Unmatched: unmatchedItems.filter((item) => item.status === "new").length,
             }}
             currentUser={
               currentUser
@@ -1728,22 +1842,14 @@ export default function App() {
         </div>
 
         <main className="rounded-[2rem] border border-white/10 bg-ink-900/70 p-4 shadow-card backdrop-blur sm:p-6">
-          <header className="flex flex-col gap-4 border-b border-white/10 pb-6 lg:flex-row lg:items-end lg:justify-between">
-            <div className="flex items-start gap-3">
-              <button
-                type="button"
-                className="mt-1 inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 xl:hidden"
-              >
-                <Menu className="h-5 w-5" />
-              </button>
-              <div>
-                <p className="text-xs uppercase tracking-[0.34em] text-slate-500">Automotive command center</p>
-                <h1 className="mt-2 font-display text-3xl font-semibold text-white sm:text-4xl">{sectionTitle}</h1>
-                <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">{sectionDescription}</p>
-                <p className="mt-3 text-xs uppercase tracking-[0.26em] text-slate-500">
-                  Signed in as {currentUser?.name} | {currentUser?.role}
-                </p>
-              </div>
+          <header className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.34em] text-slate-500">{pageCopy.eyebrow}</p>
+              <h1 className="mt-2 font-display text-3xl font-semibold text-white sm:text-4xl">{pageCopy.title}</h1>
+              <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-300">{pageCopy.summary}</p>
+              <p className="mt-3 text-xs uppercase tracking-[0.26em] text-slate-500">
+                Signed in as {currentUser?.name} | {currentUser?.role}
+              </p>
             </div>
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -1774,13 +1880,6 @@ export default function App() {
                   placeholder="Search customer, vehicle, source..."
                 />
               </label>
-              <button
-                type="button"
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
-              >
-                <SlidersHorizontal className="h-4 w-4" />
-                Filters
-              </button>
             </div>
           </header>
 
@@ -1788,29 +1887,6 @@ export default function App() {
             <div className="mt-4 rounded-2xl border border-ember-500/30 bg-ember-500/10 px-4 py-3 text-sm text-ember-300">
               {error}
             </div>
-          ) : null}
-
-          {!showTeam ? (
-            <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <MetricCard
-              eyebrow="Needs attention"
-              value={String(metrics.needs_attention_count).padStart(2, "0")}
-              detail="Leads that should be worked before anything else."
-              accent="from-lime-500/20 to-transparent"
-            />
-            <MetricCard
-              eyebrow="Overdue tasks"
-              value={String(metrics.overdue_task_count).padStart(2, "0")}
-              detail="Follow-ups already past due."
-              accent="from-ice-500/20 to-transparent"
-            />
-            <MetricCard
-              eyebrow="Unread alerts"
-              value={String(metrics.unread_notification_count).padStart(2, "0")}
-              detail="Assignments, overdue tasks, and flagged AI interactions."
-              accent="from-fuchsia-500/20 to-transparent"
-            />
-            </section>
           ) : null}
 
           {showTeam ? (
@@ -1838,108 +1914,185 @@ export default function App() {
               onSaveExecutionSettings={handleSaveExecutionSettings}
               onRunAutoSms={handleRunAutoSms}
             />
-          ) : showAnalytics ? (
-            <section className="mt-6 grid gap-4 xl:grid-cols-3">
-              <MetricCard
-                eyebrow="Total leads"
-                value={String(analytics.totalLeads).padStart(2, "0")}
-                detail="All accessible leads in the CRM."
-                accent="from-white/10 to-transparent"
-              />
-              <MetricCard
-                eyebrow="Organized leads"
-                value={String(analytics.organizedCount).padStart(2, "0")}
-                detail="Leads currently not demanding immediate attention."
-                accent="from-ice-500/20 to-transparent"
-              />
-              <MetricCard
-                eyebrow="Tracked conversations"
-                value={String(analytics.conversationsCount).padStart(2, "0")}
-                detail="Recent SMS and call records available for the desk."
-                accent="from-ember-500/20 to-transparent"
-              />
-
-              <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5 xl:col-span-2">
-                <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Status distribution</p>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {Object.entries(analytics.statusCounts).map(([status, count]) => (
-                    <div key={status} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                      <p className="text-xs uppercase tracking-[0.22em] text-slate-500">{pipelineLabel(status)}</p>
-                      <p className="mt-2 text-2xl font-semibold text-white">{count}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-                <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Source mix</p>
-                <div className="mt-4 space-y-3">
-                  {Object.entries(analytics.sourceCounts).map(([source, count]) => (
-                    <div key={source} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
-                      <span className="text-sm font-medium text-white">{source}</span>
-                      <span className="text-sm text-slate-300">{count}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </section>
           ) : (
             <section className={`mt-6 grid gap-6 ${showUnmatched ? "2xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]" : ""}`}>
               <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 sm:p-5">
                 {showDashboard ? (
-                  <div className="grid gap-4 xl:grid-cols-3">
-                    <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-5 xl:col-span-2">
-                      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Desk summary</p>
-                      <h2 className="mt-2 font-display text-2xl font-semibold text-white">Overview without the lead queue</h2>
-                      <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Needs attention</p>
-                          <p className="mt-2 text-3xl font-semibold text-white">{String(metrics.needs_attention_count).padStart(2, "0")}</p>
-                          <p className="mt-2 text-sm leading-6 text-slate-300">
-                            Work these from Leads so the overview page stays clean.
+                  <div className="grid gap-6">
+                    <div className="grid gap-6 2xl:grid-cols-[minmax(0,1.2fr)_360px]">
+                      <div className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-cyan-400/10 via-white/[0.04] to-amber-400/10 p-6">
+                        <div className="absolute inset-y-0 right-0 w-1/2 bg-[radial-gradient(circle_at_top_right,_rgba(255,255,255,0.18),_transparent_62%)]" />
+                        <div className="relative">
+                          <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Dealership command center</p>
+                          <h2 className="mt-3 max-w-2xl font-display text-3xl font-semibold text-white">
+                            Use the dashboard to direct the operation, not to work every single lead.
+                          </h2>
+                          <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">
+                            The desk is now split on purpose. Dashboard gives you command visibility, Leads is the working pipeline, and Assignments is the ownership board for managers.
                           </p>
+                          <div className="mt-6 flex flex-wrap gap-3">
+                            <button
+                              type="button"
+                              onClick={() => openSection("Leads")}
+                              className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-slate-100"
+                            >
+                              Open lead desk
+                            </button>
+                            {currentUser?.role === "admin" || currentUser?.role === "manager" ? (
+                              <button
+                                type="button"
+                                onClick={() => openSection("Assignments")}
+                                className="rounded-2xl border border-white/15 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+                              >
+                                Open assignments
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => openSection("Inventory")}
+                              className="rounded-2xl border border-white/15 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+                            >
+                              Open inventory
+                            </button>
+                          </div>
+
+                          <div className="mt-8 grid gap-3 md:grid-cols-3">
+                            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Needs attention</p>
+                              <p className="mt-2 text-3xl font-semibold text-white">{String(metrics.needs_attention_count).padStart(2, "0")}</p>
+                              <p className="mt-2 text-sm text-slate-300">Work these from the lead desk.</p>
+                            </div>
+                            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Overdue tasks</p>
+                              <p className="mt-2 text-3xl font-semibold text-white">{String(metrics.overdue_task_count).padStart(2, "0")}</p>
+                              <p className="mt-2 text-sm text-slate-300">Follow-ups waiting on a rep response.</p>
+                            </div>
+                            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Unread alerts</p>
+                              <p className="mt-2 text-3xl font-semibold text-white">{String(metrics.unread_notification_count).padStart(2, "0")}</p>
+                              <p className="mt-2 text-sm text-slate-300">Routing changes, escalations, and desk alerts.</p>
+                            </div>
+                          </div>
                         </div>
-                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Overdue tasks</p>
-                          <p className="mt-2 text-3xl font-semibold text-white">{String(metrics.overdue_task_count).padStart(2, "0")}</p>
-                          <p className="mt-2 text-sm leading-6 text-slate-300">
-                            Follow-ups that need a response from the desk today.
-                          </p>
-                        </div>
-                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Unread alerts</p>
-                          <p className="mt-2 text-3xl font-semibold text-white">{String(metrics.unread_notification_count).padStart(2, "0")}</p>
-                          <p className="mt-2 text-sm leading-6 text-slate-300">
-                            Notifications, escalations, and assignment changes.
-                          </p>
-                        </div>
+                      </div>
+
+                      <div className="grid gap-4">
+                        <MetricCard
+                          eyebrow="Tracked leads"
+                          value={analytics.totalLeads}
+                          detail="Visible leads already inside the CRM today."
+                          accent="from-cyan-500/20 to-transparent"
+                        />
+                        <MetricCard
+                          eyebrow="Unassigned"
+                          value={analytics.unassignedCount}
+                          detail="Leads still waiting for ownership."
+                          accent="from-amber-500/20 to-transparent"
+                        />
+                        <MetricCard
+                          eyebrow="Conversations"
+                          value={analytics.conversationsCount}
+                          detail="Recent calls and SMS tied back to lead history."
+                          accent="from-lime-500/20 to-transparent"
+                        />
                       </div>
                     </div>
 
-                    <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-5">
-                      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Quick navigation</p>
-                      <div className="mt-4 space-y-3">
-                        <button
-                          type="button"
-                          onClick={() => setActiveSection("Leads")}
-                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
-                        >
-                          Open Leads
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setActiveSection("Unmatched")}
-                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
-                        >
-                          Review Unmatched Communications
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setActiveSection("Inventory")}
-                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
-                        >
-                          Open Inventory
-                        </button>
+                    <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+                      <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+                        <div className="flex items-end justify-between gap-4 border-b border-white/10 pb-4">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Priority snapshot</p>
+                            <h3 className="mt-2 font-display text-2xl font-semibold text-white">Immediate desk pressure</h3>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => openSection("Leads")}
+                            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/10"
+                          >
+                            View all
+                          </button>
+                        </div>
+                        <div className="mt-4 grid gap-3">
+                          {visibleAttentionLeads.slice(0, 5).map((lead) => (
+                            <button
+                              key={lead.id}
+                              type="button"
+                              onClick={() => {
+                                openSection("Leads");
+                                openLeadModal(lead.id);
+                              }}
+                              className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] p-4 text-left transition hover:border-white/20 hover:bg-white/[0.06]"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <h4 className="truncate font-semibold text-white">{lead.customerName}</h4>
+                                    <span className="rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-200">
+                                      {lead.attentionReason}
+                                    </span>
+                                  </div>
+                                  <p className="mt-1 truncate text-sm text-slate-300">{lead.vehicleInterest}</p>
+                                </div>
+                                <span className="shrink-0 text-xs uppercase tracking-[0.18em] text-slate-500">{lead.lastActivity}</span>
+                              </div>
+                            </button>
+                          ))}
+                          {!visibleAttentionLeads.length ? (
+                            <div className="rounded-[1.5rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
+                              Nothing urgent is waiting right now.
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <div className="grid gap-4">
+                        <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Routing health</p>
+                          <div className="mt-4 grid gap-3">
+                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
+                              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Open reps</p>
+                              <p className="mt-2 text-xl font-semibold text-white">{routingOpenRepCount}</p>
+                            </div>
+                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
+                              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Paused reps</p>
+                              <p className="mt-2 text-xl font-semibold text-white">{routingPausedRepCount}</p>
+                            </div>
+                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
+                              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Unmatched queue</p>
+                              <p className="mt-2 text-xl font-semibold text-white">
+                                {unmatchedItems.filter((item) => item.status === "new").length}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Operational launchpad</p>
+                          <div className="mt-4 grid gap-3">
+                            <button
+                              type="button"
+                              onClick={() => openSection("Conversations")}
+                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
+                            >
+                              Open conversations
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openSection("Unmatched")}
+                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
+                            >
+                              Resolve unmatched traffic
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openSection("Inventory")}
+                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
+                            >
+                              Open stock workspace
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1947,152 +2100,344 @@ export default function App() {
 
                 {showLeads ? (
                   <>
-                    <div className="flex flex-col gap-4 border-b border-white/10 pb-4 lg:flex-row lg:items-end lg:justify-between">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Unified lead workspace</p>
-                        <h2 className="mt-2 font-display text-2xl font-semibold text-white">Lead library</h2>
-                        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
-                          Urgent follow-ups and the organized pipeline now live together here so managers work one lead queue instead of two.
-                        </p>
-                      </div>
-                      <label className="grid gap-2 lg:min-w-[220px]">
-                        <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Status filter</span>
-                        <select
-                          value={leadStatusFilter}
-                          onChange={(event) => setLeadStatusFilter(event.target.value)}
-                          className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
-                        >
-                          <option value="all" className="bg-ink-900">
-                            All stages
-                          </option>
-                          {pipelineStages.map((status) => (
-                            <option key={status} value={status} className="bg-ink-900">
-                              {pipelineLabel(status)}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                    <div className="grid gap-4 xl:grid-cols-4">
+                      <MetricCard
+                        eyebrow="Open pipeline"
+                        value={flattenedPipelineLeads.length}
+                        detail="Visible opportunities currently inside active stages."
+                        accent="from-cyan-500/20 to-transparent"
+                      />
+                      <MetricCard
+                        eyebrow="Needs attention"
+                        value={visibleAttentionLeads.length}
+                        detail="Urgent items that need the next action first."
+                        accent="from-amber-500/20 to-transparent"
+                      />
+                      <MetricCard
+                        eyebrow="Appointments"
+                        value={appointmentCount}
+                        detail="Leads already moved into the appointment stage."
+                        accent="from-lime-500/20 to-transparent"
+                      />
+                      <MetricCard
+                        eyebrow="Unassigned"
+                        value={analytics.unassignedCount}
+                        detail="Visible leads still waiting for ownership."
+                        accent="from-rose-500/20 to-transparent"
+                      />
                     </div>
-                    {canBulkAutoAssign ? (
-                      <div className="mt-4 flex flex-col gap-3 rounded-[1.5rem] border border-white/10 bg-white/[0.03] p-4 lg:flex-row lg:items-center lg:justify-between">
+
+                    <div className="mt-2 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+                      <div className="flex flex-col gap-4 border-b border-white/10 pb-4 xl:flex-row xl:items-end xl:justify-between">
                         <div>
-                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Bulk routing</p>
-                          <p className="mt-1 text-sm text-slate-300">
-                            Select unassigned leads, then auto-route them using the current contact ownership rules.
+                          <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Lead desk controls</p>
+                          <h2 className="mt-2 font-display text-2xl font-semibold text-white">Pipeline first, cleanup second</h2>
+                          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+                            The board is now the primary workspace. The priority queue is still here, but it no longer hides the actual pipeline underneath it.
                           </p>
                         </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
-                            {selectedAutoAssignLeadIds.length} selected
-                          </span>
-                          <button
-                            type="button"
-                            onClick={selectVisibleBulkAssignableLeads}
-                            disabled={!visibleBulkAssignableLeadIds.length || bulkAutoAssigning}
-                            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                        <label className="grid gap-2 xl:min-w-[220px]">
+                          <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Stage filter</span>
+                          <select
+                            value={leadStatusFilter}
+                            onChange={(event) => setLeadStatusFilter(event.target.value)}
+                            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
                           >
-                            Select visible unassigned
-                          </button>
-                          <button
-                            type="button"
-                            onClick={clearBulkLeadSelection}
-                            disabled={!selectedAutoAssignLeadIds.length || bulkAutoAssigning}
-                            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            Clear
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleBulkAutoAssign}
-                            disabled={!selectedAutoAssignLeadIds.length || bulkAutoAssigning}
-                            className="rounded-full border border-cyan-400/30 bg-cyan-400/15 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 transition hover:border-cyan-300/40 hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {bulkAutoAssigning ? "Auto-assigning..." : "Auto-assign selected"}
-                          </button>
-                        </div>
+                            <option value="all" className="bg-ink-900">
+                              All stages
+                            </option>
+                            {pipelineStages.map((status) => (
+                              <option key={status} value={status} className="bg-ink-900">
+                                {pipelineLabel(status)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
                       </div>
-                    ) : null}
-                    <div className="mt-4 grid gap-4">
-                      {libraryLoading ? (
-                        Array.from({ length: 4 }).map((_, index) => (
-                          <div key={index} className="h-44 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
-                        ))
-                      ) : (
-                        <>
-                          <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
-                            <div className="mb-4 flex items-center justify-between gap-3">
-                              <div>
-                                <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Priority queue</p>
-                                <h3 className="mt-1 font-display text-xl font-semibold text-white">Needs attention</h3>
-                              </div>
-                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
-                                {visibleAttentionLeads.length}
-                              </span>
-                            </div>
-                            <div className="grid gap-4">
-                              {visibleAttentionLeads.length ? (
-                                visibleAttentionLeads.map((lead) => (
-                                  <AttentionLeadCard
-                                    key={lead.id}
-                                    lead={lead}
-                                    selected={lead.id === selectedLead?.id}
-                                    canSelect={canBulkAutoAssign && !lead.assignedTo}
-                                    selectionChecked={selectedAutoAssignLeadIds.includes(Number(lead.id))}
-                                    onToggleSelect={toggleBulkLeadSelection}
-                                    onSelect={() => {
-                                      openLeadModal(lead.id);
-                                    }}
-                                  />
-                                ))
-                              ) : (
-                                <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                                  No leads require attention right now.
-                                </div>
-                              )}
-                            </div>
+
+                      {canBulkAutoAssign ? (
+                        <div className="mt-4 flex flex-col gap-3 rounded-[1.5rem] border border-white/10 bg-black/20 p-4 xl:flex-row xl:items-center xl:justify-between">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Bulk routing</p>
+                            <p className="mt-1 text-sm text-slate-300">
+                              Select unassigned leads from the board or queue, then auto-route them using contact ownership and current routing rules.
+                            </p>
                           </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
+                              {selectedAutoAssignLeadIds.length} selected
+                            </span>
+                            <button
+                              type="button"
+                              onClick={selectVisibleBulkAssignableLeads}
+                              disabled={!visibleBulkAssignableLeadIds.length || bulkAutoAssigning}
+                              className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Select visible unassigned
+                            </button>
+                            <button
+                              type="button"
+                              onClick={clearBulkLeadSelection}
+                              disabled={!selectedAutoAssignLeadIds.length || bulkAutoAssigning}
+                              className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Clear
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleBulkAutoAssign}
+                              disabled={!selectedAutoAssignLeadIds.length || bulkAutoAssigning}
+                              className="rounded-full border border-cyan-400/30 bg-cyan-400/15 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 transition hover:border-cyan-300/40 hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {bulkAutoAssigning ? "Auto-assigning..." : "Auto-assign selected"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
 
-                          {flattenedPipelineLeads.length ? (
-                            <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
-                              <div className="mb-4 flex flex-col gap-3 border-b border-white/10 pb-4 lg:flex-row lg:items-end lg:justify-between">
-                                <div>
-                                  <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Pipeline board</p>
-                                  <h3 className="mt-1 font-display text-xl font-semibold text-white">Drag leads through the desk</h3>
-                                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-                                    The full lead library is grouped by stage here. Drag a lead into a different lane to update the CRM status, or click a card to open the lead popup.
-                                  </p>
-                                </div>
-                                <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-300">
-                                  {flattenedPipelineLeads.length} visible leads
-                                </span>
-                              </div>
+                    <div className="mt-4 rounded-[1.75rem] border border-white/10 bg-white/[0.02] p-5">
+                      <div className="mb-4 flex flex-col gap-3 border-b border-white/10 pb-4 xl:flex-row xl:items-end xl:justify-between">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Pipeline board</p>
+                          <h3 className="mt-1 font-display text-2xl font-semibold text-white">Stage movement happens here</h3>
+                          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+                            Drag leads between stages to keep the pipeline clean, then open any card directly into the lead popup for detail work.
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-300">
+                          {flattenedPipelineLeads.length} visible leads
+                        </span>
+                      </div>
 
-                              <LeadPipelineBoard
-                                stages={pipelineStages.map((status) => ({
-                                  key: status,
-                                  label: pipelineLabel(status),
-                                }))}
-                                groups={visiblePipelineGroups}
-                                selectedLeadId={selectedLead?.id}
-                                draggingLeadId={draggingLeadId}
-                                movingLeadId={pipelineMovingLeadId}
-                                onSelectLead={(leadId) => {
-                                  openLeadModal(leadId);
+                      {libraryLoading ? (
+                        <div className="h-80 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
+                      ) : flattenedPipelineLeads.length ? (
+                        <LeadPipelineBoard
+                          stages={pipelineStages.map((status) => ({
+                            key: status,
+                            label: pipelineLabel(status),
+                          }))}
+                          groups={visiblePipelineGroups}
+                          selectedLeadId={selectedLead?.id}
+                          draggingLeadId={draggingLeadId}
+                          movingLeadId={pipelineMovingLeadId}
+                          onSelectLead={(leadId) => {
+                            openLeadModal(leadId);
+                          }}
+                          onMoveLead={handlePipelineMove}
+                          onDragStateChange={setDraggingLeadId}
+                          canSelectLead={(lead) => canBulkAutoAssign && !lead.assignedTo}
+                          selectedLeadIds={selectedAutoAssignLeadIds}
+                          onToggleLeadSelect={toggleBulkLeadSelection}
+                        />
+                      ) : (
+                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
+                          No leads match this search or stage filter.
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-4 grid gap-6 xl:grid-cols-[minmax(0,1.18fr)_320px]">
+                      <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.02] p-5">
+                        <div className="mb-4 flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Priority queue</p>
+                            <h3 className="mt-1 font-display text-xl font-semibold text-white">Needs attention</h3>
+                          </div>
+                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
+                            {visibleAttentionLeads.length}
+                          </span>
+                        </div>
+                        <div className="grid max-h-[980px] gap-4 overflow-y-auto pr-1">
+                          {visibleAttentionLeads.length ? (
+                            visibleAttentionLeads.map((lead) => (
+                              <AttentionLeadCard
+                                key={lead.id}
+                                lead={lead}
+                                selected={lead.id === selectedLead?.id}
+                                canSelect={canBulkAutoAssign && !lead.assignedTo}
+                                selectionChecked={selectedAutoAssignLeadIds.includes(Number(lead.id))}
+                                onToggleSelect={toggleBulkLeadSelection}
+                                onSelect={() => {
+                                  openLeadModal(lead.id);
                                 }}
-                                onMoveLead={handlePipelineMove}
-                                onDragStateChange={setDraggingLeadId}
-                                canSelectLead={(lead) => canBulkAutoAssign && !lead.assignedTo}
-                                selectedLeadIds={selectedAutoAssignLeadIds}
-                                onToggleLeadSelect={toggleBulkLeadSelection}
                               />
-                            </div>
+                            ))
                           ) : (
                             <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                              No leads match this search or stage filter.
+                              No leads require attention right now.
                             </div>
                           )}
-                        </>
-                      )}
+                        </div>
+                      </div>
+
+                      <div className="grid gap-4">
+                        <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Stage snapshot</p>
+                          <div className="mt-4 grid gap-3">
+                            {pipelineStages.map((status) => (
+                              <div key={status} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                                <span className="text-sm font-medium text-white">{pipelineLabel(status)}</span>
+                                <span className="rounded-full bg-white/5 px-3 py-1 text-xs font-semibold text-slate-300">
+                                  {(visiblePipelineGroups[status] || []).length}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Desk shortcuts</p>
+                          <div className="mt-4 grid gap-3">
+                            {currentUser?.role === "admin" || currentUser?.role === "manager" ? (
+                              <button
+                                type="button"
+                                onClick={() => openSection("Assignments")}
+                                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
+                              >
+                                Open assignment board
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => openSection("Conversations")}
+                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
+                            >
+                              Review conversations
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openSection("Inventory")}
+                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
+                            >
+                              Check inventory response
+                            </button>
+                          </div>
+                        </div>
+
+                        {selectedLead ? (
+                          <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Current focus</p>
+                            <h3 className="mt-2 font-display text-xl font-semibold text-white">{selectedLead.customerName}</h3>
+                            <p className="mt-2 text-sm leading-6 text-slate-300">{selectedLead.vehicleInterest}</p>
+                            <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-slate-300">{selectedLead.assignedRep}</span>
+                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-slate-300">{selectedLead.source}</span>
+                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-slate-300">{selectedLead.statusLabel}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => openLeadModal(selectedLead.id)}
+                              className="mt-4 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+                            >
+                              Open lead popup
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+
+                {showAssignments ? (
+                  <>
+                    <div className="grid gap-4 xl:grid-cols-4">
+                      <MetricCard
+                        eyebrow="Needs owner"
+                        value={assignmentUnassignedLeads.length}
+                        detail="Visible leads still waiting for a rep assignment."
+                        accent="from-amber-500/20 to-transparent"
+                      />
+                      <MetricCard
+                        eyebrow="Routing open reps"
+                        value={routingOpenRepCount}
+                        detail="Sales reps currently active and open for new lead routing."
+                        accent="from-lime-500/20 to-transparent"
+                      />
+                      <MetricCard
+                        eyebrow="Routing paused"
+                        value={routingPausedRepCount}
+                        detail="Reps paused or inactive for fresh lead assignment."
+                        accent="from-slate-500/20 to-transparent"
+                      />
+                      <MetricCard
+                        eyebrow="Owned active leads"
+                        value={assignmentEligibleLeads.length - assignmentUnassignedLeads.length}
+                        detail="Visible active leads already sitting in a rep lane."
+                        accent="from-cyan-500/20 to-transparent"
+                      />
+                    </div>
+
+                    <div className="mt-4 grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_340px]">
+                      <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.02] p-5">
+                        <div className="mb-4 flex flex-col gap-3 border-b border-white/10 pb-4 xl:flex-row xl:items-end xl:justify-between">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Lead assignment board</p>
+                            <h2 className="mt-1 font-display text-2xl font-semibold text-white">Drag ownership to the right rep</h2>
+                            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+                              This page is only for ownership cleanup and routing control. It stays separate from the lead desk so managers can assign without disrupting follow-up work.
+                            </p>
+                          </div>
+                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-300">
+                            {assignmentEligibleLeads.length} active leads
+                          </span>
+                        </div>
+
+                        <LeadAssignmentBoard
+                          unassignedLeads={assignmentUnassignedLeads}
+                          repLanes={assignmentRepLanes}
+                          selectedLeadId={selectedLead?.id}
+                          draggingLeadId={assignmentDraggingLeadId}
+                          movingLeadId={assignmentMovingLeadId}
+                          onOpenLead={openLeadModal}
+                          onAssignLead={handleAssignmentMove}
+                          onDragStateChange={setAssignmentDraggingLeadId}
+                        />
+                      </div>
+
+                      <div className="grid gap-4">
+                        <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Routing rules</p>
+                          <ul className="mt-4 space-y-3 text-sm leading-6 text-slate-300">
+                            <li>Existing contacts keep their assigned rep.</li>
+                            <li>New contacts route only to active, available reps.</li>
+                            <li>Day-off routing lives in Team for each rep.</li>
+                            <li>Manual drag assignment updates ownership history too.</li>
+                          </ul>
+                        </div>
+
+                        <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Sales roster</p>
+                          <div className="mt-4 grid gap-3">
+                            {salesUsers.length ? (
+                              salesUsers.map((user) => (
+                                <div key={user.id} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                      <p className="font-semibold text-white">{user.name}</p>
+                                      <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">
+                                        {user.is_available ? "Routing open" : "Routing paused"}
+                                      </p>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => openSection("Team")}
+                                      className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-200 transition hover:bg-white/10"
+                                    >
+                                      Edit in team
+                                    </button>
+                                  </div>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="rounded-[1.5rem] border border-dashed border-white/10 bg-white/[0.03] px-4 py-8 text-center text-sm text-slate-400">
+                                No sales reps found yet.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </>
                 ) : null}
