@@ -1938,14 +1938,14 @@ export default function App() {
         <main
           className={`${
             immersivePipelineShell
-              ? "crm-main-shell border border-white/5 bg-ink-950/55 p-0 shadow-[0_40px_120px_rgba(0,0,0,0.35)]"
+              ? "crm-main-shell bg-ink-950/35 p-0"
               : "crm-main-shell rounded-[2rem] border border-white/10 bg-ink-900/70 p-4 shadow-card sm:p-6"
           } backdrop-blur`}
         >
           <header
             className={`crm-header-shell flex flex-col gap-4 ${
               immersivePipelineShell
-                ? "border-b border-white/5 px-6 py-5 lg:flex-row lg:items-center lg:justify-between"
+                ? "px-6 py-5 lg:flex-row lg:items-center lg:justify-between"
                 : "border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between"
             }`}
           >

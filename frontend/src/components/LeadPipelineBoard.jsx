@@ -96,7 +96,7 @@ export function LeadPipelineBoard({
         className="grid min-w-[1220px] gap-5"
         style={{ gridTemplateColumns: `repeat(${Math.max(stages.length, 1)}, minmax(0, 1fr))` }}
       >
-        {stages.map((stage) => {
+        {stages.map((stage, index) => {
           const lane = groups[stage.key] || [];
           const isActiveDropTarget = draggingLeadId != null;
 
@@ -120,9 +120,9 @@ export function LeadPipelineBoard({
                 isActiveDropTarget
                   ? "bg-white/[0.03] shadow-[inset_0_0_0_1px_rgba(88,183,255,0.16)]"
                   : "bg-transparent"
-              }`}
+              } ${index === 0 ? "" : "border-l border-white/[0.07] pl-5"}`}
             >
-              <div className="flex items-center justify-between gap-3 px-1 pb-2">
+              <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-1 pb-3">
                 <div>
                   <h3 className="font-display text-[15px] font-semibold text-white">{stage.label}</h3>
                 </div>
