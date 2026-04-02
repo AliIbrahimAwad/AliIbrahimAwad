@@ -14,7 +14,7 @@ function PipelineLeadCard({
 }) {
   return (
     <div
-      className={`w-full min-w-0 overflow-hidden rounded-[1.4rem] border p-4 transition ${
+      className={`flex h-full w-full min-w-0 flex-col overflow-hidden rounded-[1.35rem] border p-3.5 transition ${
         selected
           ? "border-ice-400/40 bg-white/10 shadow-glow"
           : "border-white/10 bg-white/[0.045] hover:border-white/20 hover:bg-white/[0.07]"
@@ -31,19 +31,19 @@ function PipelineLeadCard({
             onDragStart?.(lead.id);
           }}
           onDragEnd={onDragEnd}
-          className="flex w-full min-w-0 flex-1 items-start gap-3 overflow-hidden text-left"
+          className="flex w-full min-w-0 flex-1 items-start gap-3 text-left"
         >
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-ember-500/90 to-ice-500/90 text-xs font-bold text-white">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-ember-500/90 to-ice-500/90 text-xs font-bold text-white">
             {initials(lead.customerName)}
           </div>
-          <div className="min-w-0 flex-1 overflow-hidden">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="truncate font-display text-base font-semibold text-white">{lead.customerName}</h3>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-start gap-2">
+              <h3 className="truncate font-display text-[15px] font-semibold text-white">{lead.customerName}</h3>
               <span className={`max-w-full truncate rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusTone(lead.status)}`}>
                 {lead.statusLabel}
               </span>
             </div>
-            <p className="mt-1 line-clamp-2 text-sm leading-6 text-slate-300">{lead.vehicleInterest}</p>
+            <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-slate-300">{lead.vehicleInterest}</p>
           </div>
           <GripVertical className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
         </button>
@@ -63,21 +63,23 @@ function PipelineLeadCard({
         ) : null}
       </div>
 
-      <div className="mt-4 flex min-w-0 flex-wrap gap-2 text-xs">
+      <div className="mt-2.5 flex min-w-0 flex-wrap gap-2 text-[11px]">
         {lead.stockNumber ? (
           <span className="max-w-full truncate rounded-full bg-white/5 px-2.5 py-1 text-slate-300">Stock {lead.stockNumber}</span>
         ) : null}
         <span className={`max-w-full truncate rounded-full px-2.5 py-1 font-semibold ${sourceTone(lead.source)}`}>{lead.source}</span>
       </div>
 
-      <div className="mt-4 flex min-w-0 items-center justify-between gap-3 text-xs uppercase tracking-[0.18em] text-slate-500">
+      <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 text-[10px] uppercase tracking-[0.18em] text-slate-500">
         <span className="truncate">{lead.assignedRep}</span>
         <span className="shrink-0">{lead.lastActivity}</span>
       </div>
 
-      <div className="mt-3 inline-flex max-w-full items-center gap-2 overflow-hidden rounded-full bg-white/5 px-3 py-1.5 text-xs text-slate-300">
+      <div className="mt-auto pt-3">
+        <div className="inline-flex max-w-full items-center gap-2 overflow-hidden rounded-full bg-white/5 px-3 py-1.5 text-[11px] text-slate-300">
         <Phone className="h-3.5 w-3.5 text-ice-300" />
         <span className="truncate">{lead.phone}</span>
+        </div>
       </div>
     </div>
   );

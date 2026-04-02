@@ -1,5 +1,5 @@
 import { startTransition, useDeferredValue, useEffect, useState } from "react";
-import { Search, X } from "lucide-react";
+import { MoonStar, Search, SunMedium, X } from "lucide-react";
 
 import { AttentionLeadCard } from "./components/AttentionLeadCard";
 import { InventoryPanel } from "./components/InventoryPanel";
@@ -325,6 +325,18 @@ function getFirstOrganizedLeadId(groups = {}) {
 }
 
 export default function App() {
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === "undefined") {
+      return "dark";
+    }
+
+    const storedTheme = window.localStorage.getItem("crm-theme");
+    if (storedTheme === "light" || storedTheme === "dark") {
+      return storedTheme;
+    }
+
+    return window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? "light" : "dark";
+  });
   const [authStatus, setAuthStatus] = useState("loading");
   const [currentUser, setCurrentUser] = useState(null);
   const [leads, setLeads] = useState([]);
@@ -481,6 +493,17 @@ export default function App() {
       window.removeEventListener("keydown", handleEscape);
     };
   }, [showLeadModal]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    document.body.classList.toggle("theme-light", theme === "light");
+    document.body.classList.toggle("theme-dark", theme === "dark");
+    document.documentElement.style.colorScheme = theme;
+    window.localStorage.setItem("crm-theme", theme);
+  }, [theme]);
 
   async function refreshWorklist({ preserveSelection = true } = {}) {
     const payload = await getDashboardWorklist();
@@ -1881,6 +1904,15 @@ export default function App() {
                 onToggle={() => setNotificationsOpen((current) => !current)}
                 onMarkRead={handleMarkNotificationRead}
               />
+              <button
+                type="button"
+                onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+                aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+                title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+                className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10"
+              >
+                {theme === "dark" ? <SunMedium className="h-4 w-4" /> : <MoonStar className="h-4 w-4" />}
+              </button>
               <button
                 type="button"
                 onClick={handleLogout}
