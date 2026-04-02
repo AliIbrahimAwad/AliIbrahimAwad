@@ -1,4 +1,4 @@
-import { GripVertical, Phone } from "lucide-react";
+import { GripVertical } from "lucide-react";
 
 import { initials, sourceTone, statusTone } from "../lib/format";
 
@@ -33,17 +33,19 @@ function PipelineLeadCard({
           onDragEnd={onDragEnd}
           className="flex w-full min-w-0 flex-1 items-start gap-3 text-left"
         >
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-ember-500/90 to-ice-500/90 text-xs font-bold text-white">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-ember-500/90 to-ice-500/90 text-xs font-bold text-white">
             {initials(lead.customerName)}
           </div>
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-start gap-2">
-              <h3 className="truncate font-display text-[15px] font-semibold text-white">{lead.customerName}</h3>
-              <span className={`max-w-full truncate rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusTone(lead.status)}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="truncate font-display text-base font-semibold text-white">{lead.customerName}</h3>
+                <p className="mt-1 line-clamp-2 text-sm leading-5 text-slate-300">{lead.vehicleInterest}</p>
+              </div>
+              <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusTone(lead.status)}`}>
                 {lead.statusLabel}
               </span>
             </div>
-            <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-slate-300">{lead.vehicleInterest}</p>
           </div>
           <GripVertical className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
         </button>
@@ -63,23 +65,14 @@ function PipelineLeadCard({
         ) : null}
       </div>
 
-      <div className="mt-2.5 flex min-w-0 flex-wrap gap-2 text-[11px]">
-        {lead.stockNumber ? (
-          <span className="max-w-full truncate rounded-full bg-white/5 px-2.5 py-1 text-slate-300">Stock {lead.stockNumber}</span>
-        ) : null}
-        <span className={`max-w-full truncate rounded-full px-2.5 py-1 font-semibold ${sourceTone(lead.source)}`}>{lead.source}</span>
-      </div>
-
-      <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 text-[10px] uppercase tracking-[0.18em] text-slate-500">
-        <span className="truncate">{lead.assignedRep}</span>
-        <span className="shrink-0">{lead.lastActivity}</span>
-      </div>
-
-      <div className="mt-auto pt-3">
-        <div className="inline-flex max-w-full items-center gap-2 overflow-hidden rounded-full bg-white/5 px-3 py-1.5 text-[11px] text-slate-300">
-        <Phone className="h-3.5 w-3.5 text-ice-300" />
-        <span className="truncate">{lead.phone}</span>
+      <div className="mt-3 flex min-w-0 items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap gap-2 text-xs">
+          {lead.stockNumber ? (
+            <span className="max-w-full truncate rounded-full bg-white/5 px-2.5 py-1 text-slate-300">Stock {lead.stockNumber}</span>
+          ) : null}
+          <span className={`max-w-full truncate rounded-full px-2.5 py-1 font-semibold ${sourceTone(lead.source)}`}>{lead.source}</span>
         </div>
+        <span className="shrink-0 text-[10px] uppercase tracking-[0.18em] text-slate-500">{lead.lastActivity}</span>
       </div>
     </div>
   );
