@@ -2,26 +2,37 @@ import { GripVertical, Phone } from "lucide-react";
 
 import { initials, sourceTone, statusTone } from "../lib/format";
 
-function PipelineLeadCard({ lead, selected, onSelect, onDragStart, onDragEnd }) {
+function PipelineLeadCard({
+  lead,
+  selected,
+  onSelect,
+  onDragStart,
+  onDragEnd,
+  canSelect = false,
+  selectionChecked = false,
+  onToggleSelect,
+}) {
   return (
-    <button
-      type="button"
-      draggable
-      onClick={onSelect}
-      onDragStart={(event) => {
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("text/plain", String(lead.id));
-        onDragStart?.(lead.id);
-      }}
-      onDragEnd={onDragEnd}
-      className={`w-full rounded-[1.4rem] border p-4 text-left transition ${
+    <div
+      className={`rounded-[1.4rem] border p-4 transition ${
         selected
           ? "border-ice-400/40 bg-white/10 shadow-glow"
           : "border-white/10 bg-white/[0.045] hover:border-white/20 hover:bg-white/[0.07]"
-      }`}
+      } ${selectionChecked ? "ring-1 ring-ice-300/50" : ""}`}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
+        <button
+          type="button"
+          draggable
+          onClick={onSelect}
+          onDragStart={(event) => {
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", String(lead.id));
+            onDragStart?.(lead.id);
+          }}
+          onDragEnd={onDragEnd}
+          className="flex min-w-0 flex-1 items-start gap-3 text-left"
+        >
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-ember-500/90 to-ice-500/90 text-xs font-bold text-white">
             {initials(lead.customerName)}
           </div>
@@ -34,8 +45,22 @@ function PipelineLeadCard({ lead, selected, onSelect, onDragStart, onDragEnd }) 
             </div>
             <p className="mt-1 line-clamp-2 text-sm leading-6 text-slate-300">{lead.vehicleInterest}</p>
           </div>
-        </div>
-        <GripVertical className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
+          <GripVertical className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
+        </button>
+        {canSelect ? (
+          <label
+            className="inline-flex shrink-0 cursor-pointer items-center gap-2 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-slate-200"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              checked={selectionChecked}
+              onChange={() => onToggleSelect?.(lead.id)}
+              className="h-3.5 w-3.5 rounded border-white/20 bg-transparent accent-cyan-400"
+            />
+            Select
+          </label>
+        ) : null}
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2 text-xs">
@@ -54,7 +79,7 @@ function PipelineLeadCard({ lead, selected, onSelect, onDragStart, onDragEnd }) 
         <Phone className="h-3.5 w-3.5 text-ice-300" />
         <span>{lead.phone}</span>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -67,6 +92,9 @@ export function LeadPipelineBoard({
   onSelectLead,
   onMoveLead,
   onDragStateChange,
+  canSelectLead,
+  selectedLeadIds = [],
+  onToggleLeadSelect,
 }) {
   return (
     <div className="overflow-x-auto pb-2">
@@ -117,6 +145,9 @@ export function LeadPipelineBoard({
                       onSelect={() => onSelectLead?.(lead.id)}
                       onDragStart={() => onDragStateChange?.(lead.id)}
                       onDragEnd={() => onDragStateChange?.(null)}
+                      canSelect={canSelectLead?.(lead)}
+                      selectionChecked={selectedLeadIds.includes(Number(lead.id))}
+                      onToggleSelect={onToggleLeadSelect}
                     />
                   ))
                 ) : (

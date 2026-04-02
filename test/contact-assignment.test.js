@@ -522,3 +522,55 @@ test("backfillUnassignedContactOwners assigns legacy unowned contacts and syncs 
     leads_updated: 3,
   });
 });
+
+test("bulk auto-assign links unassigned leads through contact ownership", async () => {
+  const callLog = [];
+  const result = await PostgresCrmDatabase.prototype.autoAssignApiLeads.call(
+    {
+      async getApiLead(id) {
+        return {
+          id,
+          dealership_id: 1,
+          contact_id: null,
+          assigned_to: null,
+          customer_name: "Bulk Shopper",
+          phone: "4165550101",
+          email: "bulk@example.com",
+        };
+      },
+      async findOrCreateContactFromLead() {
+        return {
+          contact: {
+            id: 200,
+            assigned_rep_id: 19,
+          },
+        };
+      },
+      async linkLeadToContact(leadId, contactId, dealershipId, assignedRepId) {
+        callLog.push({ leadId, contactId, dealershipId, assignedRepId });
+      },
+    },
+    [901]
+  );
+
+  assert.deepEqual(callLog, [
+    {
+      leadId: 901,
+      contactId: 200,
+      dealershipId: 1,
+      assignedRepId: 19,
+    },
+  ]);
+  assert.deepEqual(result, {
+    items: [
+      {
+        lead_id: 901,
+        contact_id: 200,
+        assigned_rep_id: 19,
+        status: "assigned",
+      },
+    ],
+    assigned_count: 1,
+    skipped_count: 0,
+  });
+});

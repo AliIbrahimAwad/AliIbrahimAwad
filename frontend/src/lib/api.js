@@ -62,6 +62,13 @@ export function assignLead(id, assignedTo) {
   });
 }
 
+export function autoAssignLeads(leadIds = []) {
+  return request("/api/leads/auto-assign", {
+    method: "POST",
+    body: JSON.stringify({ lead_ids: leadIds }),
+  });
+}
+
 export function updateLead(id, payload) {
   return request(`/api/leads/${id}`, {
     method: "PATCH",

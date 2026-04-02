@@ -4557,6 +4557,84 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
     return this.getLead(id, actor);
   }
 
+  async autoAssignApiLeads(leadIds = [], actor = null) {
+    const normalizedLeadIds = [...new Set((leadIds || []).map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))];
+    if (!normalizedLeadIds.length) {
+      throw new ValidationError("Select at least one lead.");
+    }
+
+    const results = [];
+    for (const leadId of normalizedLeadIds) {
+      const lead = await this.getApiLead(leadId, actor);
+      let contact = null;
+      let assignedRepId = lead.assigned_to == null ? null : Number(lead.assigned_to);
+
+      if (assignedRepId) {
+        results.push({
+          lead_id: leadId,
+          contact_id: lead.contact_id == null ? null : Number(lead.contact_id),
+          assigned_rep_id: assignedRepId,
+          status: "skipped_already_assigned",
+        });
+        continue;
+      }
+
+      if (lead.contact_id) {
+        contact = await this.getContact(Number(lead.contact_id), { dealership_id: lead.dealership_id });
+      } else {
+        const resolution = await this.findOrCreateContactFromLead(
+          {
+            dealership_id: lead.dealership_id,
+            customer_name: lead.customer_name,
+            phone: lead.phone,
+            email: lead.email,
+          },
+          actor,
+          { dealership_id: lead.dealership_id }
+        );
+        contact = resolution.contact;
+      }
+
+      if (contact?.assigned_rep_id == null) {
+        const assignment = await this.assignRepToNewContact({
+          dealership_id: lead.dealership_id,
+          user: actor,
+        });
+
+        if (!assignment.assigned_rep_id) {
+          results.push({
+            lead_id: leadId,
+            contact_id: contact?.id == null ? null : Number(contact.id),
+            assigned_rep_id: null,
+            status: "skipped_no_available_rep",
+          });
+          continue;
+        }
+
+        contact = await this.assignContact(contact.id, assignment.assigned_rep_id, actor, {
+          assignment_method: assignment.assignment_method,
+          needs_manual_review: assignment.needs_manual_review,
+        });
+      }
+
+      assignedRepId = Number(contact.assigned_rep_id || 0) || null;
+      await this.linkLeadToContact(lead.id, contact.id, Number(lead.dealership_id), assignedRepId);
+
+      results.push({
+        lead_id: leadId,
+        contact_id: Number(contact.id),
+        assigned_rep_id: assignedRepId,
+        status: assignedRepId ? "assigned" : "skipped_no_available_rep",
+      });
+    }
+
+    return {
+      items: results,
+      assigned_count: results.filter((item) => item.status === "assigned").length,
+      skipped_count: results.filter((item) => item.status !== "assigned").length,
+    };
+  }
+
   async updateLeadStatusIfNew(id, status = "contacted", user = null) {
     const lead = user
       ? await this.getLead(id, user)

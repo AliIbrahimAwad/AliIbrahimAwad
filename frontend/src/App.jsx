@@ -12,6 +12,7 @@ import { Sidebar } from "./components/Sidebar";
 import { TeamManagementPanel } from "./components/TeamManagementPanel";
 import { UnmatchedCommunicationPanel } from "./components/UnmatchedCommunicationPanel";
 import {
+  autoAssignLeads,
   assignUnmatchedCommunication,
   assignLead,
   completeTask,
@@ -344,6 +345,7 @@ export default function App() {
   const [notifications, setNotifications] = useState([]);
   const [metrics, setMetrics] = useState(emptyMetrics);
   const [selectedLeadId, setSelectedLeadId] = useState(null);
+  const [selectedAutoAssignLeadIds, setSelectedAutoAssignLeadIds] = useState([]);
   const [leadModalOpen, setLeadModalOpen] = useState(false);
   const [selectedLeadDetails, setSelectedLeadDetails] = useState(null);
   const [selectedUnmatchedId, setSelectedUnmatchedId] = useState(null);
@@ -370,6 +372,7 @@ export default function App() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [assignmentUpdating, setAssignmentUpdating] = useState(false);
+  const [bulkAutoAssigning, setBulkAutoAssigning] = useState(false);
   const [leadUpdating, setLeadUpdating] = useState(false);
   const [callLogging, setCallLogging] = useState(false);
     const [holdSubmitting, setHoldSubmitting] = useState(false);
@@ -1007,6 +1010,13 @@ export default function App() {
   );
   const flattenedOrganizedLeads = organizedGroups.flatMap((group) => filteredOrganizedGroups[group]);
   const flattenedPipelineLeads = pipelineStages.flatMap((status) => visiblePipelineGroups[status] || []);
+  const canBulkAutoAssign = ["admin", "manager"].includes(currentUser?.role);
+  const visibleBulkAssignableLeadIds = [...new Set(
+    [...visibleAttentionLeads, ...flattenedPipelineLeads]
+      .filter((lead) => canBulkAutoAssign && !lead.assignedTo)
+      .map((lead) => Number(lead.id))
+  )];
+  const bulkAssignableLeadIdsKey = visibleBulkAssignableLeadIds.join(",");
   const visibleConversationFeed = conversationFeed.filter((item) =>
     !search ||
     [
@@ -1060,6 +1070,37 @@ export default function App() {
     visibleUnmatchedItems.find((item) => item.id === selectedUnmatchedId) ??
     unmatchedItems.find((item) => item.id === selectedUnmatchedId) ??
     null;
+
+  useEffect(() => {
+    setSelectedAutoAssignLeadIds((current) => {
+      const next = current.filter((leadId) => visibleBulkAssignableLeadIds.includes(leadId));
+      if (next.length === current.length && next.every((leadId, index) => leadId === current[index])) {
+        return current;
+      }
+      return next;
+    });
+  }, [bulkAssignableLeadIdsKey]);
+
+  function toggleBulkLeadSelection(leadId) {
+    const normalizedLeadId = Number(leadId);
+    if (!Number.isInteger(normalizedLeadId) || normalizedLeadId <= 0) {
+      return;
+    }
+
+    setSelectedAutoAssignLeadIds((current) =>
+      current.includes(normalizedLeadId)
+        ? current.filter((candidate) => candidate !== normalizedLeadId)
+        : [...current, normalizedLeadId]
+    );
+  }
+
+  function selectVisibleBulkAssignableLeads() {
+    setSelectedAutoAssignLeadIds(visibleBulkAssignableLeadIds);
+  }
+
+  function clearBulkLeadSelection() {
+    setSelectedAutoAssignLeadIds([]);
+  }
 
   async function handleStatusChange(nextStatus) {
     if (!selectedLeadId) {
@@ -1162,6 +1203,39 @@ export default function App() {
     }
   }
 
+  async function handleBulkAutoAssign() {
+    if (!selectedAutoAssignLeadIds.length) {
+      return;
+    }
+
+    try {
+      setBulkAutoAssigning(true);
+      const payload = await autoAssignLeads(selectedAutoAssignLeadIds);
+      await refreshWorklist();
+      if (leadLibraryLoaded) {
+        await loadLeadLibrary({ preserveSelection: true });
+      }
+      if (conversationFeedLoaded) {
+        await loadConversationFeed({ preserveSelection: true });
+      }
+      if (selectedLeadId && selectedAutoAssignLeadIds.includes(Number(selectedLeadId))) {
+        const refreshedLead = await getLead(selectedLeadId);
+        setSelectedLeadDetails({
+          ...formatLead(refreshedLead.lead),
+          activities: (refreshedLead.activities || []).map(formatActivity),
+          timeline: (refreshedLead.timeline || []).map(formatTimelineItem),
+          tasks: refreshedLead.tasks || [],
+        });
+      }
+      setSelectedAutoAssignLeadIds([]);
+      setError("");
+    } catch (assignError) {
+      setError(assignError.message || "Unable to auto-assign selected leads.");
+    } finally {
+      setBulkAutoAssigning(false);
+    }
+  }
+
   async function handleLeadUpdate(input) {
     if (!selectedLeadId || !selectedLead) {
       return;
@@ -1221,6 +1295,7 @@ export default function App() {
       setCurrentUser(session.user);
       setAuthStatus("authenticated");
       setSelectedLeadId(null);
+      setSelectedAutoAssignLeadIds([]);
       setSelectedLeadDetails(null);
       setError("");
     } catch (loginError) {
@@ -1237,6 +1312,7 @@ export default function App() {
       setCurrentUser(null);
       setAuthStatus("unauthenticated");
       setSelectedLeadId(null);
+      setSelectedAutoAssignLeadIds([]);
       setSelectedLeadDetails(null);
       setActiveSection("Dashboard");
       setLeads([]);
@@ -1897,6 +1973,45 @@ export default function App() {
                         </select>
                       </label>
                     </div>
+                    {canBulkAutoAssign ? (
+                      <div className="mt-4 flex flex-col gap-3 rounded-[1.5rem] border border-white/10 bg-white/[0.03] p-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Bulk routing</p>
+                          <p className="mt-1 text-sm text-slate-300">
+                            Select unassigned leads, then auto-route them using the current contact ownership rules.
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
+                            {selectedAutoAssignLeadIds.length} selected
+                          </span>
+                          <button
+                            type="button"
+                            onClick={selectVisibleBulkAssignableLeads}
+                            disabled={!visibleBulkAssignableLeadIds.length || bulkAutoAssigning}
+                            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Select visible unassigned
+                          </button>
+                          <button
+                            type="button"
+                            onClick={clearBulkLeadSelection}
+                            disabled={!selectedAutoAssignLeadIds.length || bulkAutoAssigning}
+                            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Clear
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleBulkAutoAssign}
+                            disabled={!selectedAutoAssignLeadIds.length || bulkAutoAssigning}
+                            className="rounded-full border border-cyan-400/30 bg-cyan-400/15 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 transition hover:border-cyan-300/40 hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {bulkAutoAssigning ? "Auto-assigning..." : "Auto-assign selected"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="mt-4 grid gap-4">
                       {libraryLoading ? (
                         Array.from({ length: 4 }).map((_, index) => (
@@ -1921,6 +2036,9 @@ export default function App() {
                                     key={lead.id}
                                     lead={lead}
                                     selected={lead.id === selectedLead?.id}
+                                    canSelect={canBulkAutoAssign && !lead.assignedTo}
+                                    selectionChecked={selectedAutoAssignLeadIds.includes(Number(lead.id))}
+                                    onToggleSelect={toggleBulkLeadSelection}
                                     onSelect={() => {
                                       openLeadModal(lead.id);
                                     }}
@@ -1963,6 +2081,9 @@ export default function App() {
                                 }}
                                 onMoveLead={handlePipelineMove}
                                 onDragStateChange={setDraggingLeadId}
+                                canSelectLead={(lead) => canBulkAutoAssign && !lead.assignedTo}
+                                selectedLeadIds={selectedAutoAssignLeadIds}
+                                onToggleLeadSelect={toggleBulkLeadSelection}
                               />
                             </div>
                           ) : (

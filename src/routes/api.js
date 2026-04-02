@@ -466,6 +466,27 @@ function registerApiRoutes(app) {
     })
   );
 
+  app.post(
+    "/api/leads/auto-assign",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!canAssignLeads(req.currentUser)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const leadIds = Array.isArray(req.body?.lead_ids)
+        ? [...new Set(req.body.lead_ids.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))]
+        : [];
+      if (!leadIds.length) {
+        throw new ValidationError("Select at least one lead.");
+      }
+
+      const result = await req.app.locals.db.autoAssignApiLeads(leadIds, req.currentUser);
+      res.json(result);
+    })
+  );
+
   app.patch(
     "/api/contacts/:id/assign",
     requireAuth,

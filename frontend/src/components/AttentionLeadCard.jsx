@@ -2,19 +2,24 @@ import { AlertTriangle, ChevronRight, Clock3 } from "lucide-react";
 
 import { initials, sourceTone, statusTone } from "../lib/format";
 
-export function AttentionLeadCard({ lead, selected, onSelect }) {
+export function AttentionLeadCard({
+  lead,
+  selected,
+  onSelect,
+  canSelect = false,
+  selectionChecked = false,
+  onToggleSelect,
+}) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`group w-full rounded-[1.75rem] border p-5 text-left transition ${
+    <div
+      className={`rounded-[1.75rem] border p-5 transition ${
         selected
           ? "border-ember-400/50 bg-white/10 shadow-glow"
           : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]"
-      }`}
+      } ${selectionChecked ? "ring-1 ring-ice-300/50" : ""}`}
     >
       <div className="flex items-start justify-between gap-4">
-        <div className="flex min-w-0 items-start gap-4">
+        <button type="button" onClick={onSelect} className="group flex min-w-0 flex-1 items-start gap-4 text-left">
           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-ember-500/90 to-ice-500/90 text-sm font-bold text-white">
             {initials(lead.customerName)}
           </div>
@@ -30,8 +35,22 @@ export function AttentionLeadCard({ lead, selected, onSelect }) {
             </div>
             <p className="mt-1 text-sm text-slate-300">{lead.vehicleInterest}</p>
           </div>
-        </div>
-        <ChevronRight className="mt-1 h-5 w-5 shrink-0 text-slate-500 transition group-hover:text-white" />
+          <ChevronRight className="mt-1 h-5 w-5 shrink-0 text-slate-500 transition group-hover:text-white" />
+        </button>
+        {canSelect ? (
+          <label
+            className="inline-flex shrink-0 cursor-pointer items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-200"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              checked={selectionChecked}
+              onChange={() => onToggleSelect?.(lead.id)}
+              className="h-4 w-4 rounded border-white/20 bg-transparent accent-cyan-400"
+            />
+            Select
+          </label>
+        ) : null}
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
@@ -61,6 +80,6 @@ export function AttentionLeadCard({ lead, selected, onSelect }) {
           {lead.aiSummary || lead.messagePreview || "No summary available yet."}
         </p>
       </div>
-    </button>
+    </div>
   );
 }
