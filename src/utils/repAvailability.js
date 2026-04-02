@@ -125,20 +125,6 @@ function evaluateRepAvailability(rep = {}, at = new Date()) {
     return { eligible: false, reason: "outside_working_day", rep: normalized, local };
   }
 
-  const currentMinutes = local.hour * 60 + local.minute;
-  const startMinutes = timeStringToMinutes(normalized.working_hours_start, 0);
-  const endMinutes = timeStringToMinutes(normalized.working_hours_end, 24 * 60);
-  const withinHours =
-    startMinutes === endMinutes
-      ? true
-      : endMinutes > startMinutes
-        ? currentMinutes >= startMinutes && currentMinutes < endMinutes
-        : currentMinutes >= startMinutes || currentMinutes < endMinutes;
-
-  if (!withinHours) {
-    return { eligible: false, reason: "outside_working_hours", rep: normalized, local };
-  }
-
   return {
     eligible: true,
     reason: "eligible",

@@ -1505,9 +1505,13 @@ export default function App() {
   }
 
   async function handleToggleAvailability(targetUser, nextValue) {
+    return handleUpdateUserAvailability(targetUser, { is_available: nextValue });
+  }
+
+  async function handleUpdateUserAvailability(targetUser, payload) {
     try {
       setAvailabilityUpdatingId(targetUser.id);
-      const response = await updateUserAvailability(targetUser.id, { is_available: nextValue });
+      const response = await updateUserAvailability(targetUser.id, payload);
       const updated = response?.item || null;
       if (!updated) {
         return;
@@ -1750,6 +1754,11 @@ export default function App() {
               onSubmit={handleCreateUser}
               onDelete={handleDeleteUser}
               onToggleAvailability={handleToggleAvailability}
+              onUpdateWorkingDays={(user, workingDays) =>
+                handleUpdateUserAvailability(user, {
+                  working_days: workingDays,
+                })
+              }
               onSaveExecutionSettings={handleSaveExecutionSettings}
               onRunAutoSms={handleRunAutoSms}
             />

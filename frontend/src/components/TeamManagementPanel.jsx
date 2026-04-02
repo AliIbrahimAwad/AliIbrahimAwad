@@ -1,6 +1,16 @@
-import { Trash2, UserPlus } from "lucide-react";
+import { useState } from "react";
+import { Trash2, UserPlus, X } from "lucide-react";
 
 const roles = ["admin", "manager", "sales"];
+const dayOptions = [
+  { value: "mon", label: "Mon" },
+  { value: "tue", label: "Tue" },
+  { value: "wed", label: "Wed" },
+  { value: "thu", label: "Thu" },
+  { value: "fri", label: "Fri" },
+  { value: "sat", label: "Sat" },
+  { value: "sun", label: "Sun" },
+];
 
 function formatRole(role) {
   return String(role || "")
@@ -18,6 +28,7 @@ export function TeamManagementPanel({
   onSubmit,
   onDelete,
   onToggleAvailability,
+  onUpdateWorkingDays,
   executionSettings,
   executionSettingsLoading = false,
   executionSettingsSaving = false,
@@ -29,8 +40,10 @@ export function TeamManagementPanel({
   deletingUserId = null,
   availabilityUpdatingId = null,
 }) {
+  const [selectedScheduleUser, setSelectedScheduleUser] = useState(null);
   const canManageRoster = currentUser?.role === "admin";
   const canManageAutomation = currentUser?.role === "admin" || currentUser?.role === "manager";
+  const canManageRouting = currentUser?.role === "admin" || currentUser?.role === "manager";
 
   return (
     <section className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
@@ -246,6 +259,20 @@ export function TeamManagementPanel({
                         </span>
                       ) : null}
                     </div>
+                    {user.role === "sales" && canManageRouting ? (
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
+                          Routing days: {(user.working_days || []).map((day) => day.slice(0, 3)).join(", ") || "None"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedScheduleUser(user)}
+                          className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
+                        >
+                          Edit days off
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="flex flex-wrap gap-2">
@@ -282,6 +309,72 @@ export function TeamManagementPanel({
           )}
         </div>
       </div>
+
+      {selectedScheduleUser ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
+          <div
+            className="absolute inset-0"
+            onClick={() => setSelectedScheduleUser(null)}
+          />
+          <div className="relative z-10 w-full max-w-lg rounded-[2rem] border border-white/10 bg-ink-900 p-6 shadow-card">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Routing schedule</p>
+                <h3 className="mt-1 font-display text-2xl font-semibold text-white">{selectedScheduleUser.name}</h3>
+                <p className="mt-2 text-sm text-slate-300">
+                  Pick the days this rep should receive new leads. Leave a day off to keep routing away from them.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedScheduleUser(null)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-white transition hover:bg-white/10"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {dayOptions.map((day) => {
+                const active = (selectedScheduleUser.working_days || []).includes(day.value);
+                return (
+                  <button
+                    key={day.value}
+                    type="button"
+                    onClick={() => {
+                      const currentDays = Array.isArray(selectedScheduleUser.working_days)
+                        ? selectedScheduleUser.working_days
+                        : [];
+                      const nextDays = active
+                        ? currentDays.filter((entry) => entry !== day.value)
+                        : [...currentDays, day.value];
+                      setSelectedScheduleUser((current) => ({
+                        ...current,
+                        working_days: nextDays,
+                      }));
+                      onUpdateWorkingDays?.(selectedScheduleUser, nextDays);
+                    }}
+                    disabled={availabilityUpdatingId === selectedScheduleUser.id}
+                    className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${
+                      active
+                        ? "bg-ice-500/15 text-ice-200 ring-1 ring-ice-400/30"
+                        : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white"
+                    } disabled:cursor-wait disabled:opacity-60`}
+                  >
+                    {day.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-300">
+              {availabilityUpdatingId === selectedScheduleUser.id
+                ? "Saving routing days..."
+                : `Active routing days: ${(selectedScheduleUser.working_days || []).map((day) => day.slice(0, 3)).join(", ") || "None"}`}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

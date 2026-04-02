@@ -4,8 +4,8 @@ const assert = require("node:assert/strict");
 const { PostgresCrmDatabase } = require("../src/data/postgres");
 const { evaluateRepAvailability } = require("../src/utils/repAvailability");
 
-test("rep availability respects manual toggle and working hours", () => {
-  const duringShift = new Date("2026-03-30T14:00:00.000Z");
+test("rep availability respects active, manual availability, and working days", () => {
+  const anyTime = new Date("2026-03-30T14:00:00.000Z");
 
   assert.equal(
     evaluateRepAvailability(
@@ -17,7 +17,7 @@ test("rep availability respects manual toggle and working hours", () => {
         working_hours_end: "17:00",
         timezone: "America/Toronto",
       },
-      duringShift
+      anyTime
     ).eligible,
     true
   );
@@ -32,7 +32,7 @@ test("rep availability respects manual toggle and working hours", () => {
         working_hours_end: "17:00",
         timezone: "America/Toronto",
       },
-      duringShift
+      anyTime
     ).reason,
     "manual_off"
   );
@@ -47,9 +47,24 @@ test("rep availability respects manual toggle and working hours", () => {
         working_hours_end: "17:00",
         timezone: "America/Toronto",
       },
-      duringShift
+      anyTime
     ).reason,
     "outside_working_day"
+  );
+
+  assert.equal(
+    evaluateRepAvailability(
+      {
+        is_active: false,
+        is_available: true,
+        working_days: ["mon", "tue"],
+        working_hours_start: "09:00",
+        working_hours_end: "17:00",
+        timezone: "America/Toronto",
+      },
+      anyTime
+    ).reason,
+    "inactive"
   );
 });
 
