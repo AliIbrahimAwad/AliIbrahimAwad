@@ -749,7 +749,7 @@ export default function App() {
 
     async function loadSectionData() {
       try {
-        if (["Leads", "Assignments", "Analytics", "Unmatched"].includes(activeSection) && !leadLibraryLoaded) {
+        if (["Leads", "Pipeline", "Assignments", "Analytics", "Unmatched"].includes(activeSection) && !leadLibraryLoaded) {
           await loadLeadLibrary();
         }
 
@@ -833,7 +833,7 @@ export default function App() {
   }, [activeSection, authStatus, unmatchedStatusFilter]);
 
   useEffect(() => {
-    if (!selectedLeadId && ["Leads", "Assignments", "Inventory"].includes(activeSection) && leadLibrary[0]) {
+    if (!selectedLeadId && ["Leads", "Pipeline", "Assignments", "Inventory"].includes(activeSection) && leadLibrary[0]) {
       setSelectedLeadId(leadLibrary[0].id);
       return;
     }
@@ -1762,6 +1762,7 @@ export default function App() {
   const showTeam = activeSection === "Team" && (currentUser?.role === "admin" || currentUser?.role === "manager");
   const showDashboard = activeSection === "Dashboard";
   const showLeads = activeSection === "Leads";
+  const showPipeline = activeSection === "Pipeline";
   const showAssignments = activeSection === "Assignments" && (currentUser?.role === "admin" || currentUser?.role === "manager");
   const showUnmatched = activeSection === "Unmatched";
   const showConversations = activeSection === "Conversations";
@@ -1778,9 +1779,14 @@ export default function App() {
       summary: "Monitor the operation, jump into the right workspace fast, and keep the dashboard focused on direction instead of day-to-day clutter.",
     },
     Leads: {
-      eyebrow: "Lead desk",
-      title: "Pipeline and follow-up",
-      summary: "Work the customer pipeline, protect response times, and keep urgent follow-up separate from assignment admin.",
+      eyebrow: "Follow-up desk",
+      title: "Lead queue",
+      summary: "Work urgent follow-up, review who needs action next, and keep assignment admin and stage movement on their own pages.",
+    },
+    Pipeline: {
+      eyebrow: "Pipeline workspace",
+      title: "Drag the active pipeline",
+      summary: "Move leads between stages from a dedicated board built for reps and managers to work visually.",
     },
     Assignments: {
       eyebrow: "Ownership desk",
@@ -2102,16 +2108,16 @@ export default function App() {
                   <>
                     <div className="grid gap-4 xl:grid-cols-4">
                       <MetricCard
-                        eyebrow="Open pipeline"
-                        value={flattenedPipelineLeads.length}
-                        detail="Visible opportunities currently inside active stages."
-                        accent="from-cyan-500/20 to-transparent"
-                      />
-                      <MetricCard
                         eyebrow="Needs attention"
                         value={visibleAttentionLeads.length}
                         detail="Urgent items that need the next action first."
                         accent="from-amber-500/20 to-transparent"
+                      />
+                      <MetricCard
+                        eyebrow="Open tasks"
+                        value={visibleAttentionLeads.reduce((sum, lead) => sum + Number(lead.openTasks?.length || 0), 0)}
+                        detail="Open follow-up tasks currently attached to the visible queue."
+                        accent="from-cyan-500/20 to-transparent"
                       />
                       <MetricCard
                         eyebrow="Appointments"
@@ -2131,9 +2137,9 @@ export default function App() {
                       <div className="flex flex-col gap-4 border-b border-white/10 pb-4 xl:flex-row xl:items-end xl:justify-between">
                         <div>
                           <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Lead desk controls</p>
-                          <h2 className="mt-2 font-display text-2xl font-semibold text-white">Pipeline first, cleanup second</h2>
+                          <h2 className="mt-2 font-display text-2xl font-semibold text-white">Follow-up first, pipeline separate</h2>
                           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-                            The board is now the primary workspace. The priority queue is still here, but it no longer hides the actual pipeline underneath it.
+                            This page is now for follow-up pressure, routing cleanup, and quick access to the right customer. Stage movement has its own dedicated pipeline workspace.
                           </p>
                         </div>
                         <label className="grid gap-2 xl:min-w-[220px]">
@@ -2160,7 +2166,7 @@ export default function App() {
                           <div>
                             <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Bulk routing</p>
                             <p className="mt-1 text-sm text-slate-300">
-                              Select unassigned leads from the board or queue, then auto-route them using contact ownership and current routing rules.
+                              Select unassigned leads from the queue, then auto-route them using contact ownership and current routing rules.
                             </p>
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
@@ -2194,48 +2200,6 @@ export default function App() {
                           </div>
                         </div>
                       ) : null}
-                    </div>
-
-                    <div className="mt-4 rounded-[1.75rem] border border-white/10 bg-white/[0.02] p-5">
-                      <div className="mb-4 flex flex-col gap-3 border-b border-white/10 pb-4 xl:flex-row xl:items-end xl:justify-between">
-                        <div>
-                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Pipeline board</p>
-                          <h3 className="mt-1 font-display text-2xl font-semibold text-white">Stage movement happens here</h3>
-                          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-                            Drag leads between stages to keep the pipeline clean, then open any card directly into the lead popup for detail work.
-                          </p>
-                        </div>
-                        <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-300">
-                          {flattenedPipelineLeads.length} visible leads
-                        </span>
-                      </div>
-
-                      {libraryLoading ? (
-                        <div className="h-80 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
-                      ) : flattenedPipelineLeads.length ? (
-                        <LeadPipelineBoard
-                          stages={pipelineStages.map((status) => ({
-                            key: status,
-                            label: pipelineLabel(status),
-                          }))}
-                          groups={visiblePipelineGroups}
-                          selectedLeadId={selectedLead?.id}
-                          draggingLeadId={draggingLeadId}
-                          movingLeadId={pipelineMovingLeadId}
-                          onSelectLead={(leadId) => {
-                            openLeadModal(leadId);
-                          }}
-                          onMoveLead={handlePipelineMove}
-                          onDragStateChange={setDraggingLeadId}
-                          canSelectLead={(lead) => canBulkAutoAssign && !lead.assignedTo}
-                          selectedLeadIds={selectedAutoAssignLeadIds}
-                          onToggleLeadSelect={toggleBulkLeadSelection}
-                        />
-                      ) : (
-                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                          No leads match this search or stage filter.
-                        </div>
-                      )}
                     </div>
 
                     <div className="mt-4 grid gap-6 xl:grid-cols-[minmax(0,1.18fr)_320px]">
@@ -2274,7 +2238,7 @@ export default function App() {
 
                       <div className="grid gap-4">
                         <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Stage snapshot</p>
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Pipeline snapshot</p>
                           <div className="mt-4 grid gap-3">
                             {pipelineStages.map((status) => (
                               <div key={status} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
@@ -2290,6 +2254,13 @@ export default function App() {
                         <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
                           <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Desk shortcuts</p>
                           <div className="mt-4 grid gap-3">
+                            <button
+                              type="button"
+                              onClick={() => openSection("Pipeline")}
+                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
+                            >
+                              Open full pipeline board
+                            </button>
                             {currentUser?.role === "admin" || currentUser?.role === "manager" ? (
                               <button
                                 type="button"
@@ -2335,6 +2306,100 @@ export default function App() {
                             </button>
                           </div>
                         ) : null}
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+
+                {showPipeline ? (
+                  <>
+                    <div className="grid gap-4 xl:grid-cols-4">
+                      <MetricCard
+                        eyebrow="Visible pipeline"
+                        value={flattenedPipelineLeads.length}
+                        detail="All active leads currently shown on the board."
+                        accent="from-cyan-500/20 to-transparent"
+                      />
+                      <MetricCard
+                        eyebrow="New"
+                        value={(visiblePipelineGroups.new || []).length}
+                        detail="Fresh opportunities waiting for first movement."
+                        accent="from-amber-500/20 to-transparent"
+                      />
+                      <MetricCard
+                        eyebrow="Appointments"
+                        value={(visiblePipelineGroups.appointment || []).length}
+                        detail="Leads that have already reached the appointment stage."
+                        accent="from-lime-500/20 to-transparent"
+                      />
+                      <MetricCard
+                        eyebrow="Negotiation"
+                        value={(visiblePipelineGroups.negotiation || []).length}
+                        detail="Leads currently inside active deal negotiation."
+                        accent="from-violet-500/20 to-transparent"
+                      />
+                    </div>
+
+                    <div className="mt-2 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+                      <div className="flex flex-col gap-4 border-b border-white/10 pb-4 xl:flex-row xl:items-end xl:justify-between">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Pipeline controls</p>
+                          <h2 className="mt-2 font-display text-2xl font-semibold text-white">Full-stage pipeline board</h2>
+                          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+                            This workspace is dedicated to dragging leads between stages. Reps and managers can both move cards here, while detailed follow-up stays on the lead desk.
+                          </p>
+                        </div>
+                        <div className="flex flex-col gap-3 xl:items-end">
+                          <label className="grid gap-2 xl:min-w-[220px]">
+                            <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Stage filter</span>
+                            <select
+                              value={leadStatusFilter}
+                              onChange={(event) => setLeadStatusFilter(event.target.value)}
+                              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+                            >
+                              <option value="all" className="bg-ink-900">
+                                All stages
+                              </option>
+                              {pipelineStages.map((status) => (
+                                <option key={status} value={status} className="bg-ink-900">
+                                  {pipelineLabel(status)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-300">
+                            {flattenedPipelineLeads.length} visible leads
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-5">
+                        {libraryLoading ? (
+                          <div className="h-[70vh] animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
+                        ) : flattenedPipelineLeads.length ? (
+                          <LeadPipelineBoard
+                            stages={pipelineStages.map((status) => ({
+                              key: status,
+                              label: pipelineLabel(status),
+                            }))}
+                            groups={visiblePipelineGroups}
+                            selectedLeadId={selectedLead?.id}
+                            draggingLeadId={draggingLeadId}
+                            movingLeadId={pipelineMovingLeadId}
+                            onSelectLead={(leadId) => {
+                              openLeadModal(leadId);
+                            }}
+                            onMoveLead={handlePipelineMove}
+                            onDragStateChange={setDraggingLeadId}
+                            canSelectLead={(lead) => canBulkAutoAssign && !lead.assignedTo}
+                            selectedLeadIds={selectedAutoAssignLeadIds}
+                            onToggleLeadSelect={toggleBulkLeadSelection}
+                          />
+                        ) : (
+                          <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-20 text-center text-slate-400">
+                            No leads match this search or stage filter.
+                          </div>
+                        )}
                       </div>
                     </div>
                   </>

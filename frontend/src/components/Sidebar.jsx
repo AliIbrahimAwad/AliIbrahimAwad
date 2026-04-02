@@ -2,6 +2,7 @@ import {
   AlertCircle,
   CarFront,
   ClipboardList,
+  KanbanSquare,
   LayoutDashboard,
   MessageSquareMore,
   Shuffle,
@@ -12,6 +13,7 @@ import {
 const primarySections = [
   { label: "Dashboard", icon: LayoutDashboard },
   { label: "Leads", icon: ClipboardList },
+  { label: "Pipeline", icon: KanbanSquare },
   { label: "Assignments", icon: Shuffle },
   { label: "Inventory", icon: CarFront },
   { label: "Team", icon: Users },
