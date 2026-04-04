@@ -325,6 +325,26 @@ function normalizeInventoryStatus(value) {
   return "inactive";
 }
 
+function normalizeInventoryVerifiedFlag(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (["yes", "y", "true", "1", "on", "active", "available", "published", "live", "online", "advertised"].includes(normalized)) {
+    return true;
+  }
+
+  if (["no", "n", "false", "0", "off", "inactive", "unpublished", "hidden"].includes(normalized)) {
+    return false;
+  }
+
+  return null;
+}
+
 function buildVehicleDisplay(input = {}) {
   return stringOrNull(
     [input.year, input.make, input.model, input.trim]
@@ -584,6 +604,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
         interior_color TEXT,
         date_in_stock TEXT,
         photos_json TEXT,
+        verified BOOLEAN,
         status TEXT NOT NULL DEFAULT 'active',
         is_active BOOLEAN NOT NULL DEFAULT TRUE,
         source TEXT,
@@ -727,6 +748,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       ALTER TABLE inventory ADD COLUMN IF NOT EXISTS fuel_type TEXT;
       ALTER TABLE inventory ADD COLUMN IF NOT EXISTS date_in_stock TEXT;
       ALTER TABLE inventory ADD COLUMN IF NOT EXISTS photos_json TEXT;
+      ALTER TABLE inventory ADD COLUMN IF NOT EXISTS verified BOOLEAN;
       ALTER TABLE inventory ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
       ALTER TABLE inventory ADD COLUMN IF NOT EXISTS first_seen_at TEXT;
       ALTER TABLE inventory_import_runs ADD COLUMN IF NOT EXISTS rows_processed INTEGER NOT NULL DEFAULT 0;
@@ -1215,6 +1237,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       interior_color: row.interior_color || null,
       date_in_stock: row.date_in_stock || null,
       photos_json: row.photos_json || null,
+      verified: typeof row.verified === "boolean" ? row.verified : row.verified == null ? null : Boolean(row.verified),
       status: row.status || "active",
       is_active: row.is_active !== false && row.is_active !== "f" && row.is_active !== 0,
       source: row.source || null,
@@ -3457,6 +3480,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       stringOrNull(input.source_file),
       stringOrNull(input.date_in_stock),
       stringOrNull(input.photos_json),
+      normalizeInventoryVerifiedFlag(input.verified),
       input.last_seen_at || now,
       input.first_seen_at || now,
     ];
@@ -3488,6 +3512,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
             source_file = ?,
             date_in_stock = ?,
             photos_json = ?,
+            verified = ?,
             last_seen_at = ?,
             first_seen_at = COALESCE(first_seen_at, ?),
             updated_at = ?
@@ -3529,11 +3554,12 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
           source_file,
           date_in_stock,
           photos_json,
+          verified,
           last_seen_at,
           first_seen_at,
           created_at,
           updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           RETURNING *
         `,
         [dealershipId, ...payload, now, now]
