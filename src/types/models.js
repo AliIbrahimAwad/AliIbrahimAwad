@@ -53,6 +53,7 @@ const LEAD_ACTIVITY_TYPES = [
   "sms",
   "note",
   "lead_created",
+  "lead_updated",
   "status_changed",
   "note_added",
   "call_logged",
