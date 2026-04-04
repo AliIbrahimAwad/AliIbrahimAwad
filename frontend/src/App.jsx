@@ -1788,7 +1788,7 @@ export default function App() {
   if (authStatus === "loading") {
     return (
       <div className="crm-app-shell min-h-screen bg-ink-950 bg-dashboard px-4 py-6 font-body text-slate-100 sm:px-6 lg:px-8">
-        <div className="crm-main-shell mx-auto flex min-h-[calc(100vh-3rem)] max-w-[1200px] items-center justify-center rounded-[2.25rem] border border-white/10 bg-ink-900/80 shadow-card backdrop-blur">
+        <div className="crm-main-shell mx-auto flex min-h-[calc(100vh-3rem)] items-center justify-center rounded-[2.25rem] bg-ink-900/70 backdrop-blur">
           <div className="space-y-4 text-center">
             <div className="mx-auto h-14 w-14 animate-pulse rounded-2xl bg-gradient-to-br from-ember-500 to-ice-500" />
             <p className="text-sm uppercase tracking-[0.32em] text-slate-500">Loading CRM session</p>
@@ -1938,15 +1938,15 @@ export default function App() {
         <main
           className={`${
             immersivePipelineShell
-              ? "crm-main-shell bg-ink-950/35 p-0"
-              : "crm-main-shell rounded-[2rem] border border-white/10 bg-ink-900/70 p-4 shadow-card sm:p-6"
+              ? "crm-main-shell bg-ink-950/20 p-0"
+              : "crm-main-shell rounded-[2rem] bg-ink-900/58 p-5 sm:p-6"
           } backdrop-blur`}
         >
           <header
             className={`crm-header-shell flex flex-col gap-4 ${
               immersivePipelineShell
                 ? "px-6 py-5 lg:flex-row lg:items-center lg:justify-between"
-                : "border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between"
+                : "pb-2 lg:flex-row lg:items-start lg:justify-between"
             }`}
           >
             <div>
@@ -1993,7 +1993,7 @@ export default function App() {
               >
                 Logout
               </button>
-              <label className="crm-search-shell flex min-w-[260px] items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-slate-300 focus-within:border-ice-400/40 focus-within:bg-white/10">
+              <label className="crm-search-shell flex min-w-[260px] items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.03] px-4 py-3 text-slate-300 focus-within:border-ice-400/30 focus-within:bg-white/[0.06]">
                 <Search className="h-4 w-4 text-slate-500" />
                 <input
                   value={query}
@@ -2042,7 +2042,7 @@ export default function App() {
             />
           ) : (
             <section className={`mt-6 grid gap-6 ${showUnmatched ? "2xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]" : ""}`}>
-              <div className="crm-workspace-panel rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 sm:p-5">
+              <div className="crm-workspace-panel rounded-[2rem] bg-white/[0.02] p-4 sm:p-5">
                 {showDashboard ? (
                   <div className="grid gap-6">
                     <div className="grid gap-6 2xl:grid-cols-[minmax(0,1.2fr)_360px]">
@@ -2226,63 +2226,86 @@ export default function App() {
 
                 {showLeads ? (
                   <>
-                    <div className="grid gap-4 xl:grid-cols-4">
-                      <MetricCard
-                        eyebrow="Needs attention"
-                        value={visibleAttentionLeads.length}
-                        detail="Urgent items that need the next action first."
-                        accent="from-amber-500/20 to-transparent"
-                      />
-                      <MetricCard
-                        eyebrow="Open tasks"
-                        value={visibleAttentionLeads.reduce((sum, lead) => sum + Number(lead.openTasks?.length || 0), 0)}
-                        detail="Open follow-up tasks currently attached to the visible queue."
-                        accent="from-cyan-500/20 to-transparent"
-                      />
-                      <MetricCard
-                        eyebrow="Appointments"
-                        value={appointmentCount}
-                        detail="Leads already moved into the appointment stage."
-                        accent="from-lime-500/20 to-transparent"
-                      />
-                      <MetricCard
-                        eyebrow="Unassigned"
-                        value={analytics.unassignedCount}
-                        detail="Visible leads still waiting for ownership."
-                        accent="from-rose-500/20 to-transparent"
-                      />
-                    </div>
-
-                    <div className="mt-2 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-                      <div className="flex flex-col gap-4 border-b border-white/10 pb-4 xl:flex-row xl:items-end xl:justify-between">
+                    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
+                      <div className="rounded-[1.75rem] bg-white/[0.025] p-5">
                         <div>
-                          <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Lead desk controls</p>
-                          <h2 className="mt-2 font-display text-2xl font-semibold text-white">Follow-up first, pipeline separate</h2>
+                          <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Lead desk</p>
+                          <h2 className="mt-2 font-display text-2xl font-semibold text-white">Work the next best follow-up</h2>
                           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-                            This page is now for follow-up pressure, routing cleanup, and quick access to the right customer. Stage movement has its own dedicated pipeline workspace.
+                            Reps should be able to scan this page in seconds: who needs attention, why they need it, and where to go next.
                           </p>
                         </div>
-                        <label className="grid gap-2 xl:min-w-[220px]">
-                          <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Stage filter</span>
-                          <select
-                            value={leadStatusFilter}
-                            onChange={(event) => setLeadStatusFilter(event.target.value)}
-                            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
-                          >
-                            <option value="all" className="bg-ink-900">
-                              All stages
-                            </option>
-                            {pipelineStages.map((status) => (
-                              <option key={status} value={status} className="bg-ink-900">
-                                {pipelineLabel(status)}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
+                        <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                          <div className="rounded-[1.35rem] bg-white/[0.03] px-4 py-4">
+                            <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Needs attention</p>
+                            <p className="mt-2 text-3xl font-semibold text-white">{visibleAttentionLeads.length}</p>
+                            <p className="mt-1 text-sm text-slate-400">Priority follow-up queue</p>
+                          </div>
+                          <div className="rounded-[1.35rem] bg-white/[0.03] px-4 py-4">
+                            <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Open tasks</p>
+                            <p className="mt-2 text-3xl font-semibold text-white">
+                              {visibleAttentionLeads.reduce((sum, lead) => sum + Number(lead.openTasks?.length || 0), 0)}
+                            </p>
+                            <p className="mt-1 text-sm text-slate-400">Tasks attached to visible queue</p>
+                          </div>
+                          <div className="rounded-[1.35rem] bg-white/[0.03] px-4 py-4">
+                            <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Appointments</p>
+                            <p className="mt-2 text-3xl font-semibold text-white">{appointmentCount}</p>
+                            <p className="mt-1 text-sm text-slate-400">Leads already moved forward</p>
+                          </div>
+                        </div>
                       </div>
 
-                      {canBulkAutoAssign ? (
-                        <div className="mt-4 flex flex-col gap-3 rounded-[1.5rem] border border-white/10 bg-black/20 p-4 xl:flex-row xl:items-center xl:justify-between">
+                      <div className="rounded-[1.75rem] bg-white/[0.025] p-5">
+                        <div className="flex flex-col gap-4">
+                          <label className="grid gap-2">
+                            <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Stage filter</span>
+                            <select
+                              value={leadStatusFilter}
+                              onChange={(event) => setLeadStatusFilter(event.target.value)}
+                              className="rounded-2xl border border-white/[0.06] bg-white/[0.04] px-4 py-3 text-sm text-white outline-none"
+                            >
+                              <option value="all" className="bg-ink-900">
+                                All stages
+                              </option>
+                              {pipelineStages.map((status) => (
+                                <option key={status} value={status} className="bg-ink-900">
+                                  {pipelineLabel(status)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <div className="grid gap-3">
+                            <button
+                              type="button"
+                              onClick={() => openSection("Pipeline")}
+                              className="rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold text-ink-950 transition hover:bg-slate-100"
+                            >
+                              Open pipeline board
+                            </button>
+                            {currentUser?.role === "admin" || currentUser?.role === "manager" ? (
+                              <button
+                                type="button"
+                                onClick={() => openSection("Assignments")}
+                                className="rounded-2xl bg-white/[0.05] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.09]"
+                              >
+                                Open assignment board
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => openSection("Conversations")}
+                              className="rounded-2xl bg-white/[0.05] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.09]"
+                            >
+                              Review conversations
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {canBulkAutoAssign ? (
+                      <div className="mt-4 flex flex-col gap-3 rounded-[1.5rem] bg-white/[0.025] p-4 xl:flex-row xl:items-center xl:justify-between">
                           <div>
                             <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Bulk routing</p>
                             <p className="mt-1 text-sm text-slate-300">
@@ -2318,16 +2341,16 @@ export default function App() {
                               {bulkAutoAssigning ? "Auto-assigning..." : "Auto-assign selected"}
                             </button>
                           </div>
-                        </div>
-                      ) : null}
-                    </div>
+                      </div>
+                    ) : null}
 
                     <div className="mt-4 grid gap-6 xl:grid-cols-[minmax(0,1.18fr)_320px]">
-                      <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.02] p-5">
-                        <div className="mb-4 flex items-center justify-between gap-3">
+                      <div className="rounded-[1.75rem] bg-white/[0.02] p-5">
+                        <div className="mb-4 flex items-end justify-between gap-3">
                           <div>
                             <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Priority queue</p>
                             <h3 className="mt-1 font-display text-xl font-semibold text-white">Needs attention</h3>
+                            <p className="mt-1 text-sm text-slate-400">The fastest path to keeping reps on track.</p>
                           </div>
                           <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
                             {visibleAttentionLeads.length}
@@ -2357,11 +2380,11 @@ export default function App() {
                       </div>
 
                       <div className="grid gap-4">
-                        <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+                        <div className="rounded-[1.75rem] bg-white/[0.025] p-5">
                           <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Pipeline snapshot</p>
                           <div className="mt-4 grid gap-3">
                             {pipelineStages.map((status) => (
-                              <div key={status} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                              <div key={status} className="flex items-center justify-between rounded-2xl bg-white/[0.03] px-4 py-3">
                                 <span className="text-sm font-medium text-white">{pipelineLabel(status)}</span>
                                 <span className="rounded-full bg-white/5 px-3 py-1 text-xs font-semibold text-slate-300">
                                   {(visiblePipelineGroups[status] || []).length}
@@ -2371,44 +2394,8 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Desk shortcuts</p>
-                          <div className="mt-4 grid gap-3">
-                            <button
-                              type="button"
-                              onClick={() => openSection("Pipeline")}
-                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
-                            >
-                              Open full pipeline board
-                            </button>
-                            {currentUser?.role === "admin" || currentUser?.role === "manager" ? (
-                              <button
-                                type="button"
-                                onClick={() => openSection("Assignments")}
-                                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
-                              >
-                                Open assignment board
-                              </button>
-                            ) : null}
-                            <button
-                              type="button"
-                              onClick={() => openSection("Conversations")}
-                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
-                            >
-                              Review conversations
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => openSection("Inventory")}
-                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
-                            >
-                              Check inventory response
-                            </button>
-                          </div>
-                        </div>
-
                         {selectedLead ? (
-                          <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+                          <div className="rounded-[1.75rem] bg-white/[0.025] p-5">
                             <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Current focus</p>
                             <h3 className="mt-2 font-display text-xl font-semibold text-white">{selectedLead.customerName}</h3>
                             <p className="mt-2 text-sm leading-6 text-slate-300">{selectedLead.vehicleInterest}</p>

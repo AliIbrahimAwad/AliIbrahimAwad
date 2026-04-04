@@ -49,21 +49,19 @@ body.theme-light {
 }
 
 body:not(.theme-light) .crm-main-shell {
-  border-color: rgba(255, 255, 255, 0.03) !important;
   background:
-    linear-gradient(180deg, rgba(12, 16, 23, 0.82), rgba(11, 15, 21, 0.72)) !important;
-  box-shadow: 0 26px 72px rgba(0, 0, 0, 0.22) !important;
+    linear-gradient(180deg, rgba(12, 16, 23, 0.72), rgba(11, 15, 21, 0.62)) !important;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.16) !important;
 }
 
 body:not(.theme-light) .crm-header-shell {
-  border-color: rgba(255, 255, 255, 0.04) !important;
+  border-color: transparent !important;
 }
 
 body:not(.theme-light) .crm-sidebar {
-  border-color: rgba(255, 255, 255, 0.04) !important;
   background:
     linear-gradient(180deg, rgba(10, 14, 20, 0.96), rgba(9, 12, 18, 0.92)) !important;
-  box-shadow: 0 24px 55px rgba(0, 0, 0, 0.2) !important;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.16) !important;
 }
 
 body:not(.theme-light) .crm-sidebar-brand,
@@ -79,7 +77,7 @@ body:not(.theme-light) .crm-notification-item,
 body:not(.theme-light) .crm-search-shell,
 body:not(.theme-light) .crm-icon-button,
 body:not(.theme-light) .crm-secondary-button {
-  border-color: rgba(255, 255, 255, 0.035) !important;
+  border-color: rgba(255, 255, 255, 0.03) !important;
   background-color: rgba(255, 255, 255, 0.025) !important;
   box-shadow: none !important;
 }
@@ -90,7 +88,6 @@ body:not(.theme-light) .crm-sidebar-nav-item.bg-white {
 }
 
 body:not(.theme-light) .crm-pipeline-panel {
-  border-color: rgba(255, 255, 255, 0.03) !important;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0.01)) !important;
 }
@@ -100,7 +97,7 @@ body:not(.theme-light) .crm-pipeline-lane {
 }
 
 body:not(.theme-light) .crm-pipeline-card {
-  border-color: rgba(255, 255, 255, 0.04) !important;
+  border-color: rgba(255, 255, 255, 0.035) !important;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.02)) !important;
   box-shadow: none !important;

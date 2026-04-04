@@ -62,13 +62,13 @@ export function Sidebar({
   function renderExpandedPanel(panelClassName = "") {
     return (
       <div
-        className={`crm-sidebar relative overflow-hidden rounded-[2rem] border border-white/10 bg-ink-950/90 p-5 shadow-card backdrop-blur xl:min-h-[calc(100vh-2rem)] ${panelClassName}`}
+        className={`crm-sidebar relative overflow-hidden rounded-[2rem] bg-ink-950/88 p-5 backdrop-blur xl:min-h-[calc(100vh-2rem)] ${panelClassName}`}
       >
-        <div className="pointer-events-none absolute inset-x-4 top-0 h-48 rounded-b-[3rem] bg-gradient-to-b from-cyan-400/10 via-white/5 to-transparent" />
+        <div className="pointer-events-none absolute inset-x-4 top-0 h-40 rounded-b-[3rem] bg-gradient-to-b from-cyan-400/10 via-white/[0.03] to-transparent" />
 
-        <div className="crm-sidebar-brand relative rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-4">
+        <div className="crm-sidebar-brand relative px-1 pb-2">
           <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-ember-500 to-ice-500 text-sm font-bold text-white shadow-glow">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-ember-500 to-ice-500 text-sm font-bold text-white">
               AC
             </div>
             <div>
@@ -76,9 +76,9 @@ export function Sidebar({
               <p className="text-xs uppercase tracking-[0.28em] text-slate-400">Sales Command</p>
             </div>
           </div>
-          <div className="crm-sidebar-workspace mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
-            <p className="text-[11px] uppercase tracking-[0.26em] text-slate-500">Current workspace</p>
-            <p className="mt-1 text-sm font-medium text-white">{currentWorkspace}</p>
+          <div className="crm-sidebar-workspace mt-4 inline-flex items-center gap-2 rounded-full bg-white/[0.04] px-3 py-2 text-sm text-slate-300">
+            <span className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Workspace</span>
+            <span className="font-medium text-white">{currentWorkspace}</span>
           </div>
         </div>
 
@@ -96,8 +96,8 @@ export function Sidebar({
                 onClick={() => onSelectSection?.(label)}
                 className={`crm-sidebar-nav-item flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left transition ${
                   active
-                    ? "bg-white text-ink-950 shadow-glow"
-                    : "border border-transparent text-slate-300 hover:border-white/10 hover:bg-white/5 hover:text-white"
+                    ? "bg-white text-ink-950"
+                    : "border border-transparent text-slate-300 hover:bg-white/[0.05] hover:text-white"
                 }`}
               >
                 <span className="flex items-center gap-3">
@@ -125,8 +125,8 @@ export function Sidebar({
                 onClick={() => onSelectSection?.(label)}
                 className={`crm-sidebar-tool-item flex items-center justify-between rounded-2xl border px-4 py-3 text-left transition ${
                   active
-                    ? "border-cyan-400/30 bg-cyan-400/10 text-white"
-                    : "border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.07] hover:text-white"
+                    ? "border-cyan-400/20 bg-cyan-400/[0.08] text-white"
+                    : "border-white/[0.06] bg-white/[0.025] text-slate-300 hover:bg-white/[0.05] hover:text-white"
                 }`}
               >
                 <span className="flex items-center gap-3">
@@ -142,7 +142,7 @@ export function Sidebar({
         </div>
 
         {currentUser?.role === "sales" ? (
-          <div className="crm-sidebar-routing relative mt-8 rounded-[1.75rem] border border-white/10 bg-white/5 p-4">
+          <div className="crm-sidebar-routing relative mt-8 rounded-[1.5rem] bg-white/[0.03] p-4">
             <p className="text-xs uppercase tracking-[0.28em] text-slate-400">New contact routing</p>
             <p className="mt-2 text-sm font-semibold text-white">
               {currentUser?.is_available ? "Available for new contacts" : "Paused for new contacts"}
@@ -154,7 +154,7 @@ export function Sidebar({
               type="button"
               onClick={() => currentUser?.onToggleAvailability?.(!currentUser?.is_available)}
               disabled={currentUser?.availabilityUpdating}
-              className="mt-4 inline-flex w-full items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+              className="mt-4 inline-flex w-full items-center justify-center rounded-2xl bg-white/[0.06] px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.1] disabled:cursor-wait disabled:opacity-60"
             >
               {currentUser?.availabilityUpdating
                 ? "Saving..."
@@ -165,8 +165,8 @@ export function Sidebar({
           </div>
         ) : null}
 
-        <div className="crm-sidebar-footer relative mt-8 flex items-center gap-3 border-t border-white/10 pt-6">
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 font-semibold text-white">
+        <div className="crm-sidebar-footer relative mt-8 flex items-center gap-3 pt-4">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/[0.06] font-semibold text-white">
             {userInitials}
           </div>
           <div className="min-w-0 flex-1">
@@ -187,7 +187,7 @@ export function Sidebar({
 
   return (
     <aside className="relative">
-      <div className="crm-sidebar relative flex min-h-[calc(100vh-2rem)] w-[84px] flex-col items-center rounded-[2rem] border border-white/10 bg-ink-950/90 px-3 py-4 shadow-card backdrop-blur">
+      <div className="crm-sidebar relative flex min-h-[calc(100vh-2rem)] w-[84px] flex-col items-center rounded-[2rem] bg-ink-950/90 px-3 py-4 backdrop-blur">
         <button
           type="button"
           aria-label="Open main menu"
@@ -244,7 +244,7 @@ export function Sidebar({
           })}
         </div>
 
-        <div className="mt-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/5 text-sm font-semibold text-white">
+        <div className="mt-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/[0.06] text-sm font-semibold text-white">
           {userInitials}
         </div>
       </div>
