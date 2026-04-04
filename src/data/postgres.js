@@ -751,6 +751,26 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       ALTER TABLE inventory ADD COLUMN IF NOT EXISTS verified BOOLEAN;
       ALTER TABLE inventory ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
       ALTER TABLE inventory ADD COLUMN IF NOT EXISTS first_seen_at TEXT;
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_name = 'inventory'
+            AND column_name = 'verified'
+            AND data_type <> 'boolean'
+        ) THEN
+          ALTER TABLE inventory
+          ALTER COLUMN verified TYPE BOOLEAN
+          USING CASE
+            WHEN verified IS NULL OR BTRIM(verified::text) = '' THEN NULL
+            WHEN LOWER(BTRIM(verified::text)) IN ('yes','y','true','1','on','active','available','published','live','online','advertised','t') THEN TRUE
+            WHEN LOWER(BTRIM(verified::text)) IN ('no','n','false','0','off','inactive','unpublished','hidden','f') THEN FALSE
+            ELSE NULL
+          END;
+        END IF;
+      END
+      $$;
       ALTER TABLE inventory_import_runs ADD COLUMN IF NOT EXISTS rows_processed INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE inventory_import_runs ADD COLUMN IF NOT EXISTS failed_count INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE inventory_import_runs ADD COLUMN IF NOT EXISTS metadata_json TEXT;

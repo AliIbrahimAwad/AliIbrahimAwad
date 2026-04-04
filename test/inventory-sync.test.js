@@ -128,6 +128,19 @@ test("inventory row mapping captures verified field aliases", () => {
   assert.equal(isVerifiedInventoryRow(""), false);
 });
 
+test("inventory row mapping captures compact ISVERIFIED header aliases", () => {
+  const mapped = mapInventoryRow(
+    {
+      stock_number: "D1001",
+      isverified: "true",
+    },
+    { sourceName: "ftp", fileName: "inventory.csv" }
+  );
+
+  assert.equal(mapped.verified, "true");
+  assert.equal(isVerifiedInventoryRow(mapped.verified), true);
+});
+
 test("inventory import treats a feed with no usable verified values as prefiltered", async () => {
   const upserts = [];
   const db = {

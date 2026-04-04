@@ -30,7 +30,16 @@ const INVENTORY_HEADER_ALIASES = {
   exterior_color: ["exterior_color", "extcolour", "ext_color", "exterior colour", "exterior color", "colour", "color"],
   interior_color: ["interior_color", "intcolour", "int_color", "interior colour", "interior color"],
   status: ["status", "inventory_status", "availability"],
-  verified: ["verified", "is_verified", "verified_", "online", "is_online", "advertised", "is_advertised"],
+  verified: [
+    "verified",
+    "isverified",
+    "is_verified",
+    "verified_",
+    "online",
+    "is_online",
+    "advertised",
+    "is_advertised",
+  ],
   date_in_stock: ["date_in_stock", "instockdate", "date_added", "date_in", "dateinstock"],
   photos_json: ["photos", "photo_urls", "photo_urls_json", "image_urls", "images", "image_list"],
 };
