@@ -34,6 +34,7 @@ const INVENTORY_HEADER_ALIASES = {
     "verified",
     "isverified",
     "is_verified",
+    "isverfied",
     "verified_",
     "online",
     "is_online",
