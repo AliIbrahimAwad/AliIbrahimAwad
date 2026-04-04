@@ -761,6 +761,9 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
             AND data_type <> 'boolean'
         ) THEN
           ALTER TABLE inventory
+          ALTER COLUMN verified DROP DEFAULT;
+
+          ALTER TABLE inventory
           ALTER COLUMN verified TYPE BOOLEAN
           USING CASE
             WHEN verified IS NULL OR BTRIM(verified::text) = '' THEN NULL
