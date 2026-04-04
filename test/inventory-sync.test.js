@@ -2,7 +2,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { parseInventoryFeed } = require("../services/inventoryFeedParser");
-const { importInventoryRows, isVerifiedInventoryRow, mapInventoryRow } = require("../services/inventoryImport");
+const {
+  determineVerifiedImportMode,
+  importInventoryRows,
+  isVerifiedInventoryRow,
+  mapInventoryRow,
+} = require("../services/inventoryImport");
 const { InventorySyncScheduler } = require("../services/inventorySyncScheduler");
 
 test("inventory feed parser normalizes CSV rows", () => {
@@ -121,6 +126,74 @@ test("inventory row mapping captures verified field aliases", () => {
   assert.equal(isVerifiedInventoryRow(mapped.verified), true);
   assert.equal(isVerifiedInventoryRow("NO"), false);
   assert.equal(isVerifiedInventoryRow(""), false);
+});
+
+test("inventory import treats a feed with no usable verified values as prefiltered", async () => {
+  const upserts = [];
+  const db = {
+    currentDealershipId() {
+      return 1;
+    },
+    async createInventoryImportRun() {
+      return { id: 3 };
+    },
+    async updateInventoryImportRun(_id, payload) {
+      return payload;
+    },
+    async upsertInventoryRecord(input) {
+      upserts.push(input.stock_number);
+      return {
+        action: "inserted",
+        inventory: { id: 88 },
+      };
+    },
+    async createInventoryImportError() {
+      throw new Error("Rows in a prefiltered feed should not create import errors.");
+    },
+  };
+
+  const result = await importInventoryRows({
+    db,
+    rows: [
+      { rowNumber: 2, raw: { stock_number: "GOOD1", vin: "VIN1", verified: "" } },
+      { rowNumber: 3, raw: { stock_number: "GOOD2", vin: "VIN2" } },
+      { rowNumber: 4, raw: { stock_number: "GOOD3", vin: "VIN3", verified: "featured" } },
+    ],
+    sourceName: "ftp",
+    sourceType: "ftp_sync",
+  });
+
+  assert.deepEqual(upserts, ["GOOD1", "GOOD2", "GOOD3"]);
+  assert.equal(result.run.status, "success");
+  assert.equal(result.run.rows_processed, 3);
+  assert.equal(result.run.rows_skipped, 0);
+  assert.deepEqual(result.run.metadata_json, {
+    verified_import_mode: "treat_feed_as_prefiltered",
+    verified_value_summary: {
+      populated: 1,
+      verified: 0,
+      unverified: 0,
+      unknown: 1,
+    },
+  });
+});
+
+test("verified import mode enforces filtering when feed contains explicit yes/no values", () => {
+  const result = determineVerifiedImportMode([
+    { rowNumber: 2, raw: { stock_number: "GOOD1", verified: "YES" } },
+    { rowNumber: 3, raw: { stock_number: "SKIP1", verified: "NO" } },
+    { rowNumber: 4, raw: { stock_number: "GOOD2", verified: "" } },
+  ]);
+
+  assert.deepEqual(result, {
+    mode: "enforce_verified_only",
+    summary: {
+      populated: 2,
+      verified: 1,
+      unverified: 1,
+      unknown: 0,
+    },
+  });
 });
 
 test("inventory scheduler picks the first retry slot when today's primary failed", async () => {

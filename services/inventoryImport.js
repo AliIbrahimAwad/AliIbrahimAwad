@@ -53,7 +53,49 @@ function normalizePositiveInteger(value) {
 
 function isVerifiedInventoryRow(value) {
   const normalized = String(value || "").trim().toLowerCase();
-  return ["yes", "y", "true", "1"].includes(normalized);
+  return ["yes", "y", "true", "1", "on", "active", "available", "published", "live", "online", "advertised"].includes(
+    normalized
+  );
+}
+
+function isExplicitlyUnverifiedInventoryRow(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["no", "n", "false", "0", "off", "inactive", "unpublished", "hidden"].includes(normalized);
+}
+
+function determineVerifiedImportMode(rows = []) {
+  const summary = {
+    populated: 0,
+    verified: 0,
+    unverified: 0,
+    unknown: 0,
+  };
+
+  for (const entry of rows) {
+    const mapped = mapInventoryRow(entry.raw || {});
+    const value = String(mapped.verified || "").trim();
+    if (!value) {
+      continue;
+    }
+
+    summary.populated += 1;
+    if (isVerifiedInventoryRow(value)) {
+      summary.verified += 1;
+      continue;
+    }
+
+    if (isExplicitlyUnverifiedInventoryRow(value)) {
+      summary.unverified += 1;
+      continue;
+    }
+
+    summary.unknown += 1;
+  }
+
+  return {
+    mode: summary.verified > 0 || summary.unverified > 0 ? "enforce_verified_only" : "treat_feed_as_prefiltered",
+    summary,
+  };
 }
 
 function mapInventoryRow(row, context = {}) {
@@ -134,6 +176,7 @@ async function importInventoryRows({
     failed_count: 0,
   };
   const seenInventoryIds = new Set();
+  const verifiedImport = determineVerifiedImportMode(rows);
 
   try {
     for (const entry of rows) {
@@ -143,7 +186,10 @@ async function importInventoryRows({
           fileName,
         });
 
-        if (!isVerifiedInventoryRow(mapped.verified)) {
+        if (
+          verifiedImport.mode === "enforce_verified_only" &&
+          !isVerifiedInventoryRow(mapped.verified)
+        ) {
           summary.rows_skipped += 1;
           continue;
         }
@@ -217,6 +263,11 @@ async function importInventoryRows({
         dealership_id: dealershipId,
         status: finalStatus,
         ...summary,
+        metadata_json: {
+          ...(metadata || {}),
+          verified_import_mode: verifiedImport.mode,
+          verified_value_summary: verifiedImport.summary,
+        },
         completed_at: new Date().toISOString(),
       },
       user
@@ -276,6 +327,7 @@ async function importInventoryCsv({
 module.exports = {
   importInventoryCsv,
   importInventoryRows,
+  determineVerifiedImportMode,
   isVerifiedInventoryRow,
   mapInventoryRow,
   parseInventoryFeed,
