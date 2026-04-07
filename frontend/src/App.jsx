@@ -6,7 +6,6 @@ import { LeadAssignmentBoard } from "./components/LeadAssignmentBoard";
 import { LeadDetailsPanel } from "./components/LeadDetailsPanel";
 import { LeadPipelineBoard } from "./components/LeadPipelineBoard";
 import { LoginPage } from "./components/LoginPage";
-import { MetricCard } from "./components/MetricCard";
 import { NotificationTray } from "./components/NotificationTray";
 import { Sidebar } from "./components/Sidebar";
 import { TeamManagementPanel } from "./components/TeamManagementPanel";
@@ -201,6 +200,18 @@ function getConversationChipTone(item) {
   }
 
   return item.direction === "inbound" ? "green" : "neutral";
+}
+
+function getUnmatchedChipTone(item) {
+  if (item.status === "dismissed") {
+    return "neutral";
+  }
+
+  if (item.status === "resolved") {
+    return "green";
+  }
+
+  return item.type === "call" ? "red" : "amber";
 }
 
 function formatLead(lead) {
@@ -1278,6 +1289,9 @@ export default function App() {
   const hotLeadRows = visibleAttentionLeads.slice(0, 6);
   const appointmentPreview = visibleLeadTable.filter((lead) => lead.status === "appointment").slice(0, 4);
   const recentConversationPreview = visibleConversationFeed.slice(0, 5);
+  const unresolvedUnmatchedCount = unmatchedItems.filter((item) => item.status === "new").length;
+  const resolvedUnmatchedCount = unmatchedItems.filter((item) => item.status === "resolved").length;
+  const dismissedUnmatchedCount = unmatchedItems.filter((item) => item.status === "dismissed").length;
   const repPerformance = salesUsers
     .map((user) => {
       const assignedLeadCount = visibleLeadTable.filter((lead) => Number(lead.assignedTo) === Number(user.id)).length;
@@ -2760,46 +2774,37 @@ export default function App() {
 
                 {showAssignments ? (
                   <>
-                    <div className="grid gap-4 xl:grid-cols-4">
-                      <MetricCard
-                        eyebrow="Needs owner"
-                        value={assignmentUnassignedLeads.length}
-                        detail="Visible leads still waiting for a rep assignment."
-                        accent="from-amber-500/20 to-transparent"
-                      />
-                      <MetricCard
-                        eyebrow="Routing open reps"
-                        value={routingOpenRepCount}
-                        detail="Sales reps currently active and open for new lead routing."
-                        accent="from-lime-500/20 to-transparent"
-                      />
-                      <MetricCard
-                        eyebrow="Routing paused"
-                        value={routingPausedRepCount}
-                        detail="Reps paused or inactive for fresh lead assignment."
-                        accent="from-slate-500/20 to-transparent"
-                      />
-                      <MetricCard
-                        eyebrow="Owned active leads"
-                        value={assignmentEligibleLeads.length - assignmentUnassignedLeads.length}
-                        detail="Visible active leads already sitting in a rep lane."
-                        accent="from-cyan-500/20 to-transparent"
-                      />
+                    <div className="crm-stats-grid">
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{assignmentUnassignedLeads.length}</p>
+                        <p className="crm-stat-title">Needs owner</p>
+                        <p className="crm-stat-note">Visible leads still waiting for rep assignment</p>
+                      </div>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{routingOpenRepCount}</p>
+                        <p className="crm-stat-title">Routing open</p>
+                        <p className="crm-stat-note">Sales reps open for new lead routing</p>
+                      </div>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{routingPausedRepCount}</p>
+                        <p className="crm-stat-title">Routing paused</p>
+                        <p className="crm-stat-note">Reps paused or inactive for fresh assignment</p>
+                      </div>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{assignmentEligibleLeads.length - assignmentUnassignedLeads.length}</p>
+                        <p className="crm-stat-title">Owned active leads</p>
+                        <p className="crm-stat-note">Leads already sitting in a rep lane</p>
+                      </div>
                     </div>
 
                     <div className="mt-4 grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_340px]">
-                      <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.02] p-5">
-                        <div className="mb-4 flex flex-col gap-3 border-b border-white/10 pb-4 xl:flex-row xl:items-end xl:justify-between">
+                      <div className="crm-panel-card">
+                        <div className="crm-panel-header">
                           <div>
-                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Lead assignment board</p>
-                            <h2 className="mt-1 font-display text-2xl font-semibold text-white">Drag ownership to the right rep</h2>
-                            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-                              This page is only for ownership cleanup and routing control. It stays separate from the lead desk so managers can assign without disrupting follow-up work.
-                            </p>
+                            <h3>Assignment board</h3>
+                            <p>Drag ownership to the right rep without leaving the live CRM data model.</p>
                           </div>
-                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-300">
-                            {assignmentEligibleLeads.length} active leads
-                          </span>
+                          <span className="crm-chip blue">{assignmentEligibleLeads.length} active leads</span>
                         </div>
 
                         <LeadAssignmentBoard
@@ -2815,33 +2820,49 @@ export default function App() {
                       </div>
 
                       <div className="grid gap-4">
-                        <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Routing rules</p>
-                          <ul className="mt-4 space-y-3 text-sm leading-6 text-slate-300">
-                            <li>Existing contacts keep their assigned rep.</li>
-                            <li>New contacts route only to active, available reps.</li>
-                            <li>Day-off routing lives in Team for each rep.</li>
-                            <li>Manual drag assignment updates ownership history too.</li>
-                          </ul>
+                        <div className="crm-panel-card">
+                          <div className="crm-panel-header">
+                            <div>
+                              <h3>Routing rules</h3>
+                              <p>Guardrails that still apply while managers drag and rebalance ownership.</p>
+                            </div>
+                          </div>
+                          <div className="crm-list-stack">
+                            {[
+                              "Existing contacts keep their assigned rep.",
+                              "New contacts route only to active, available reps.",
+                              "Day-off routing lives in Team for each rep.",
+                              "Manual drag assignment updates ownership history too.",
+                            ].map((rule) => (
+                              <div key={rule} className="crm-list-item static">
+                                <div className="crm-list-item-meta no-margin">{rule}</div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
 
-                        <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Sales roster</p>
-                          <div className="mt-4 grid gap-3">
+                        <div className="crm-panel-card">
+                          <div className="crm-panel-header">
+                            <div>
+                              <h3>Sales roster</h3>
+                              <p>Fast jump into rep availability and day-off configuration.</p>
+                            </div>
+                          </div>
+                          <div className="crm-list-stack">
                             {salesUsers.length ? (
                               salesUsers.map((user) => (
-                                <div key={user.id} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
-                                  <div className="flex items-center justify-between gap-3">
-                                    <div>
-                                      <p className="font-semibold text-white">{user.name}</p>
-                                      <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">
-                                        {user.is_available ? "Routing open" : "Routing paused"}
-                                      </p>
-                                    </div>
+                                <div key={user.id} className="crm-list-item static">
+                                  <div className="crm-list-item-row">
+                                    <strong>{user.name}</strong>
+                                    <span className={`crm-chip ${user.is_available ? "green" : "amber"}`}>
+                                      {user.is_available ? "Routing open" : "Routing paused"}
+                                    </span>
+                                  </div>
+                                  <div className="crm-row-actions top-space">
                                     <button
                                       type="button"
                                       onClick={() => openSection("Team")}
-                                      className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-200 transition hover:bg-white/10"
+                                      className="crm-table-button"
                                     >
                                       Edit in team
                                     </button>
@@ -2849,9 +2870,7 @@ export default function App() {
                                 </div>
                               ))
                             ) : (
-                              <div className="rounded-[1.5rem] border border-dashed border-white/10 bg-white/[0.03] px-4 py-8 text-center text-sm text-slate-400">
-                                No sales reps found yet.
-                              </div>
+                              <div className="crm-empty-state compact">No sales reps found yet.</div>
                             )}
                           </div>
                         </div>
@@ -2862,77 +2881,109 @@ export default function App() {
 
                 {showUnmatched ? (
                   <>
-                    <div className="flex flex-col gap-4 border-b border-white/10 pb-4 lg:flex-row lg:items-end lg:justify-between">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Inbox for unknown numbers</p>
-                        <h2 className="mt-2 font-display text-2xl font-semibold text-white">Unmatched communications</h2>
-                        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
-                          Inbound calls and SMS that did not match a lead stay here until a user attaches them, creates a lead, or dismisses them.
-                        </p>
+                    <div className="crm-stats-grid">
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{unresolvedUnmatchedCount}</p>
+                        <p className="crm-stat-title">New</p>
+                        <p className="crm-stat-note">Inbound traffic still waiting for review</p>
                       </div>
-                      <label className="grid gap-2 lg:min-w-[220px]">
-                        <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Status filter</span>
-                        <select
-                          value={unmatchedStatusFilter}
-                          onChange={(event) => setUnmatchedStatusFilter(event.target.value)}
-                          className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
-                        >
-                          <option value="new" className="bg-ink-900">
-                            New only
-                          </option>
-                          <option value="resolved" className="bg-ink-900">
-                            Resolved
-                          </option>
-                          <option value="dismissed" className="bg-ink-900">
-                            Dismissed
-                          </option>
-                          <option value="all" className="bg-ink-900">
-                            All statuses
-                          </option>
-                        </select>
-                      </label>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{resolvedUnmatchedCount}</p>
+                        <p className="crm-stat-title">Resolved</p>
+                        <p className="crm-stat-note">Items already attached or converted</p>
+                      </div>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{dismissedUnmatchedCount}</p>
+                        <p className="crm-stat-title">Dismissed</p>
+                        <p className="crm-stat-note">Items intentionally cleared from the queue</p>
+                      </div>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{missedCallRecoveryCount}</p>
+                        <p className="crm-stat-title">Missed call recovery</p>
+                        <p className="crm-stat-note">Call items needing fast callback review</p>
+                      </div>
                     </div>
-                    <div className="mt-4 grid gap-4">
-                      {unmatchedLoading ? (
-                        Array.from({ length: 4 }).map((_, index) => (
-                          <div key={index} className="h-36 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
-                        ))
-                      ) : visibleUnmatchedItems.length ? (
-                        visibleUnmatchedItems.map((item) => (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => setSelectedUnmatchedId(item.id)}
-                            className={`w-full rounded-[1.75rem] border p-5 text-left transition ${
-                              item.id === selectedUnmatched?.id
-                                ? "border-ice-400/40 bg-white/10 shadow-glow"
-                                : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]"
-                            }`}
-                          >
-                            <div className="flex items-start justify-between gap-4">
-                              <div>
-                                <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
-                                  {item.type === "call" ? "Call" : "SMS"} | {item.receivedAtLabel}
-                                </p>
-                                <h3 className="mt-2 font-display text-lg font-semibold text-white">{item.phone}</h3>
-                                <p className="mt-1 text-sm text-slate-300">{item.preview}</p>
-                              </div>
-                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-300">
-                                {item.status}
-                              </span>
-                            </div>
-                            <div className="mt-4 flex flex-wrap gap-2 text-xs uppercase tracking-[0.2em] text-slate-500">
-                              <span>{item.direction}</span>
-                              {item.providerExtensionId ? <span>Ext {item.providerExtensionId}</span> : null}
-                              {item.callDuration != null ? <span>{item.callDuration}s</span> : null}
-                              {item.resolvedLeadName ? <span>{item.resolvedLeadName}</span> : null}
-                            </div>
-                          </button>
-                        ))
-                      ) : (
-                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                          No unmatched communications match this view.
+
+                    <div className="crm-panel-card mt-4">
+                      <div className="crm-panel-header">
+                        <div>
+                          <h3>Unknown inbox</h3>
+                          <p>Inbound calls and SMS stay here until a user attaches them, creates a lead, or dismisses them.</p>
                         </div>
+                        <label className="crm-inline-filter">
+                          <span>Status filter</span>
+                          <select
+                            value={unmatchedStatusFilter}
+                            onChange={(event) => setUnmatchedStatusFilter(event.target.value)}
+                            className="crm-select-input"
+                          >
+                            <option value="new" className="bg-ink-900">
+                              New only
+                            </option>
+                            <option value="resolved" className="bg-ink-900">
+                              Resolved
+                            </option>
+                            <option value="dismissed" className="bg-ink-900">
+                              Dismissed
+                            </option>
+                            <option value="all" className="bg-ink-900">
+                              All statuses
+                            </option>
+                          </select>
+                        </label>
+                      </div>
+
+                      {unmatchedLoading ? (
+                        <div className="crm-loading-state">Loading unmatched communications...</div>
+                      ) : visibleUnmatchedItems.length ? (
+                        <div className="crm-table-wrap">
+                          <table className="crm-data-table">
+                            <thead>
+                              <tr>
+                                <th>Type</th>
+                                <th>Phone</th>
+                                <th>Preview</th>
+                                <th>Status</th>
+                                <th>Received</th>
+                                <th>Context</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {visibleUnmatchedItems.map((item) => (
+                                <tr
+                                  key={item.id}
+                                  onClick={() => setSelectedUnmatchedId(item.id)}
+                                  className={item.id === selectedUnmatched?.id ? "crm-selected-row" : ""}
+                                >
+                                  <td>
+                                    <span className={`crm-chip ${getUnmatchedChipTone(item)}`}>
+                                      {item.type === "call" ? "Call" : "SMS"}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <div className="crm-row-primary">{item.phone}</div>
+                                  </td>
+                                  <td>
+                                    <div className="crm-row-primary">{item.preview}</div>
+                                  </td>
+                                  <td>
+                                    <span className="crm-chip">{item.status}</span>
+                                  </td>
+                                  <td>{item.receivedAtLabel}</td>
+                                  <td>
+                                    <div className="crm-row-secondary">
+                                      {[item.direction, item.providerExtensionId ? `Ext ${item.providerExtensionId}` : null, item.callDuration != null ? `${item.callDuration}s` : null, item.resolvedLeadName]
+                                        .filter(Boolean)
+                                        .join(" | ")}
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="crm-empty-state">No unmatched communications match this view.</div>
                       )}
                     </div>
                   </>
@@ -2940,54 +2991,97 @@ export default function App() {
 
                 {showConversations ? (
                   <>
-                    <div className="border-b border-white/10 pb-4">
-                      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Live communication feed</p>
-                      <h2 className="mt-2 font-display text-2xl font-semibold text-white">Recent conversations</h2>
+                    <div className="crm-stats-grid">
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{visibleConversationFeed.length}</p>
+                        <p className="crm-stat-title">Recent touches</p>
+                        <p className="crm-stat-note">Visible calls and SMS tied to the CRM</p>
+                      </div>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{conversationCallCount}</p>
+                        <p className="crm-stat-title">Calls</p>
+                        <p className="crm-stat-note">RingCentral call records in the current view</p>
+                      </div>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{conversationSmsCount}</p>
+                        <p className="crm-stat-title">SMS</p>
+                        <p className="crm-stat-note">Text conversations captured in the current view</p>
+                      </div>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{visibleConversationFeed.filter((item) => item.recordingAvailable).length}</p>
+                        <p className="crm-stat-title">Recordings</p>
+                        <p className="crm-stat-note">Calls with saved recordings available</p>
+                      </div>
                     </div>
-                    <div className="mt-4 grid gap-4">
-                      {conversationLoading ? (
-                        Array.from({ length: 4 }).map((_, index) => (
-                          <div key={index} className="h-36 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
-                        ))
-                      ) : visibleConversationFeed.length ? (
-                        visibleConversationFeed.map((item) => (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => {
-                              openLeadModal(item.leadId);
-                            }}
-                            className={`w-full rounded-[1.75rem] border p-5 text-left transition ${
-                              Number(item.leadId) === Number(selectedLead?.id)
-                                ? "border-ice-400/40 bg-white/10 shadow-glow"
-                                : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]"
-                            }`}
-                          >
-                            <div className="flex items-start justify-between gap-4">
-                              <div>
-                                <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
-                                  {item.type === "call" ? "Call" : "SMS"} | {item.happenedAtLabel}
-                                </p>
-                                <h3 className="mt-2 font-display text-lg font-semibold text-white">{item.leadName}</h3>
-                                <p className="mt-1 text-sm text-slate-300">{item.vehicleInterest}</p>
-                              </div>
-                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
-                                {item.leadStatusLabel}
-                              </span>
-                            </div>
-                            <p className="mt-4 line-clamp-2 text-sm leading-6 text-slate-300">{item.preview}</p>
-                            <div className="mt-4 flex flex-wrap gap-2 text-xs uppercase tracking-[0.2em] text-slate-500">
-                              <span>{item.direction}</span>
-                              <span>{item.assignedRep}</span>
-                              {item.durationSeconds ? <span>{item.durationSeconds}s</span> : null}
-                              {item.recordingAvailable ? <span>recording</span> : null}
-                            </div>
-                          </button>
-                        ))
-                      ) : (
-                        <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                          No recent conversations matched this search.
+
+                    <div className="crm-panel-card mt-4">
+                      <div className="crm-panel-header">
+                        <div>
+                          <h3>Calls & SMS feed</h3>
+                          <p>Live communication log across all visible leads with direct jump back into the lead popup.</p>
                         </div>
+                      </div>
+
+                      {conversationLoading ? (
+                        <div className="crm-loading-state">Loading conversation feed...</div>
+                      ) : visibleConversationFeed.length ? (
+                        <div className="crm-table-wrap">
+                          <table className="crm-data-table">
+                            <thead>
+                              <tr>
+                                <th>Type</th>
+                                <th>Customer</th>
+                                <th>Vehicle</th>
+                                <th>Preview</th>
+                                <th>Status</th>
+                                <th>Rep</th>
+                                <th>When</th>
+                                <th>Meta</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {visibleConversationFeed.map((item) => (
+                                <tr
+                                  key={item.id}
+                                  onClick={() => {
+                                    if (item.leadId) {
+                                      openLeadModal(item.leadId);
+                                    }
+                                  }}
+                                  className={Number(item.leadId) === Number(selectedLead?.id) ? "crm-selected-row" : ""}
+                                >
+                                  <td>
+                                    <span className={`crm-chip ${getConversationChipTone(item)}`}>
+                                      {item.type === "call" ? "Call" : "SMS"}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <div className="crm-row-primary">{item.leadName || "Unknown lead"}</div>
+                                    <div className="crm-row-secondary">{item.externalNumber || "No number"}</div>
+                                  </td>
+                                  <td>{item.vehicleInterest}</td>
+                                  <td>
+                                    <div className="crm-row-primary">{item.preview}</div>
+                                  </td>
+                                  <td>
+                                    <span className="crm-chip">{item.leadStatusLabel}</span>
+                                  </td>
+                                  <td>{item.assignedRep}</td>
+                                  <td>{item.happenedAtLabel}</td>
+                                  <td>
+                                    <div className="crm-row-secondary">
+                                      {[item.direction, item.durationSeconds ? `${item.durationSeconds}s` : null, item.recordingAvailable ? "recording" : null]
+                                        .filter(Boolean)
+                                        .join(" | ")}
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="crm-empty-state">No recent conversations matched this search.</div>
                       )}
                     </div>
                   </>
@@ -3054,19 +3148,19 @@ export default function App() {
       </div>
 
       {showLeadModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/82 px-4 py-6 backdrop-blur-sm">
+        <div className="crm-modal-overlay">
           <button
             type="button"
             aria-label="Close lead details"
             className="absolute inset-0"
             onClick={() => setLeadModalOpen(false)}
           />
-          <div className="relative z-10 max-h-[92vh] w-full max-w-5xl overflow-y-auto">
+          <div className="relative z-10 max-h-[92vh] w-full max-w-[1280px] overflow-y-auto">
             <div className="mb-3 flex justify-end">
               <button
                 type="button"
                 onClick={() => setLeadModalOpen(false)}
-                className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-ink-900/90 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+                className="crm-secondary-button inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold"
               >
                 <X className="h-4 w-4" />
                 Close

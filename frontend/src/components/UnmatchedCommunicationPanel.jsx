@@ -36,19 +36,21 @@ export function UnmatchedCommunicationPanel({
 }) {
   const [leadId, setLeadId] = useState("");
   const [customerName, setCustomerName] = useState("");
+  const [stockNumber, setStockNumber] = useState("");
 
   useEffect(() => {
     setLeadId("");
     setCustomerName("");
+    setStockNumber("");
   }, [item?.id]);
 
   if (loading) {
-    return <div className="h-[520px] animate-pulse rounded-[2rem] border border-white/10 bg-white/[0.04]" />;
+    return <div className="crm-loading-state tall">Loading side panel...</div>;
   }
 
   if (!item) {
     return (
-      <div className="rounded-[2rem] border border-dashed border-white/10 bg-white/[0.03] p-8 text-center text-slate-400">
+      <div className="crm-empty-state side-panel">
         Select an unmatched communication to review it.
       </div>
     );
@@ -63,83 +65,91 @@ export function UnmatchedCommunicationPanel({
         : "Inbound call";
 
   return (
-    <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-5">
-      <div className="border-b border-white/10 pb-5">
-        <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Unmatched communication</p>
-        <h2 className="mt-2 font-display text-2xl font-semibold text-white">
-          {item.type === "sms" ? "Inbound SMS" : "Inbound call"}
-        </h2>
-        <p className="mt-2 text-sm text-slate-300">{formatPhoneNumber(phone)}</p>
-        <div className="mt-3 flex flex-wrap gap-2 text-xs uppercase tracking-[0.18em] text-slate-500">
-          <span>{item.status}</span>
-          <span>{formatRelative(item.received_at)}</span>
-          {item.provider_extension_id ? <span>Ext {item.provider_extension_id}</span> : null}
+    <div className="crm-side-panel">
+      <div className="crm-panel-header">
+        <div>
+          <h3>{item.type === "sms" ? "Inbound SMS" : "Inbound call"}</h3>
+          <p>Unknown communication waiting for manual review or lead creation.</p>
+        </div>
+        <span className="crm-chip">{item.status}</span>
+      </div>
+
+      <div className="crm-focus-card">
+        <div className="crm-focus-label">From</div>
+        <h4>{formatPhoneNumber(phone)}</h4>
+        <p>{preview}</p>
+        <div className="crm-focus-meta">
+          <span className="crm-chip">{formatRelative(item.received_at)}</span>
+          {item.provider_extension_id ? <span className="crm-chip">Ext {item.provider_extension_id}</span> : null}
         </div>
       </div>
 
-      <div className="mt-5 space-y-5">
-        <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
-          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Preview</p>
-          <p className="mt-3 text-sm leading-6 text-slate-200">{preview}</p>
+      <div className="crm-side-section">
+        <div className="crm-side-section-header">
+          <h4>Attach to existing lead</h4>
+          <p>Use when this phone number belongs to a known customer already in the CRM.</p>
         </div>
-
-        <label className="grid gap-2">
-          <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Attach to existing lead</span>
-          <select
-            value={leadId}
-            onChange={(event) => setLeadId(event.target.value)}
-            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
-          >
-            <option value="" className="bg-ink-900">
-              Select a lead
+        <select
+          value={leadId}
+          onChange={(event) => setLeadId(event.target.value)}
+          className="crm-select-input"
+        >
+          <option value="" className="bg-ink-900">
+            Select a lead
+          </option>
+          {leads.map((lead) => (
+            <option key={lead.id} value={lead.id} className="bg-ink-900">
+              #{lead.id} {lead.customerName} | {pipelineLabel(lead.status)}
             </option>
-            {leads.map((lead) => (
-              <option key={lead.id} value={lead.id} className="bg-ink-900">
-                #{lead.id} {lead.customerName} | {pipelineLabel(lead.status)}
-              </option>
-            ))}
-          </select>
-        </label>
-
+          ))}
+        </select>
         <button
           type="button"
           disabled={!leadId || assigning}
           onClick={() => onAssign?.(Number(leadId))}
-          className="inline-flex w-full items-center justify-center rounded-2xl bg-ice-500 px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-ice-400 disabled:cursor-not-allowed disabled:opacity-50"
+          className="crm-primary-block-button"
         >
           {assigning ? "Attaching..." : "Attach to lead"}
         </button>
+      </div>
 
-        <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.02] p-4">
-          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Create new lead</p>
-          <label className="mt-3 grid gap-2">
-            <span className="text-xs uppercase tracking-[0.18em] text-slate-500">Customer name (optional)</span>
-            <input
-              value={customerName}
-              onChange={(event) => setCustomerName(event.target.value)}
-              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
-              placeholder="Leave blank if unknown"
-            />
-          </label>
-          <button
-            type="button"
-            disabled={creating}
-            onClick={() => onCreateLead?.({ customer_name: customerName })}
-            className="mt-4 inline-flex w-full items-center justify-center rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {creating ? "Creating..." : "Create lead"}
-          </button>
+      <div className="crm-side-section">
+        <div className="crm-side-section-header">
+          <h4>Create new lead</h4>
+          <p>Use when this communication belongs to a new customer not in the CRM yet.</p>
         </div>
-
+        <div className="crm-form-stack">
+          <input
+            value={customerName}
+            onChange={(event) => setCustomerName(event.target.value)}
+            className="crm-text-input"
+            placeholder="Customer name"
+          />
+          <input
+            value={stockNumber}
+            onChange={(event) => setStockNumber(event.target.value)}
+            className="crm-text-input"
+            placeholder="Stock number (optional)"
+          />
+        </div>
         <button
           type="button"
-          disabled={dismissing}
-          onClick={() => onDismiss?.()}
-          className="inline-flex w-full items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={creating}
+          onClick={() => onCreateLead?.({ customer_name: customerName, stock_number: stockNumber })}
+          className="crm-primary-block-button success"
         >
-          {dismissing ? "Dismissing..." : "Dismiss"}
+          {creating ? "Creating..." : "Create lead"}
         </button>
       </div>
+
+      <button
+        type="button"
+        disabled={dismissing}
+        onClick={() => onDismiss?.()}
+        className="crm-secondary-block-button"
+      >
+        {dismissing ? "Dismissing..." : "Dismiss"}
+      </button>
     </div>
   );
 }

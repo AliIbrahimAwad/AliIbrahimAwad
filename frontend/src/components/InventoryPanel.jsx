@@ -42,34 +42,55 @@ export function InventoryPanel({
 
   return (
     <>
-      <div className="flex flex-col gap-4 border-b border-white/10 pb-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Structured inventory</p>
-          <h2 className="mt-2 font-display text-2xl font-semibold text-white">Inventory foundation</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
-            The FTP feed is the source of truth, with manual upload kept only as a fallback when the feed needs help.
-          </p>
+      <div className="crm-stats-grid">
+        <div className="crm-stat-card">
+          <p className="crm-stat-value">{items.length}</p>
+          <p className="crm-stat-title">Visible units</p>
+          <p className="crm-stat-note">Inventory rows matching the current search filters</p>
         </div>
+        <div className="crm-stat-card">
+          <p className="crm-stat-value">{lastRun?.rowsInserted || 0}</p>
+          <p className="crm-stat-title">Last import new</p>
+          <p className="crm-stat-note">Rows inserted in the most recent sync/import run</p>
+        </div>
+        <div className="crm-stat-card">
+          <p className="crm-stat-value">{lastRun?.rowsUpdated || 0}</p>
+          <p className="crm-stat-title">Last import updated</p>
+          <p className="crm-stat-note">Rows refreshed in the latest inventory run</p>
+        </div>
+        <div className="crm-stat-card">
+          <p className="crm-stat-value">{importErrors.length}</p>
+          <p className="crm-stat-title">Row issues</p>
+          <p className="crm-stat-note">Recent inventory rows with validation or import problems</p>
+        </div>
+      </div>
 
+      <div className="crm-panel-card mt-4">
+        <div className="crm-panel-header">
+          <div>
+            <h3>Inventory foundation</h3>
+            <p>The FTP feed is the source of truth, with manual upload kept only as fallback when the feed needs help.</p>
+          </div>
+        </div>
         {syncStatus ? (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Last success</p>
-              <p className="mt-2 text-sm font-medium text-white">
+          <div className="crm-stats-grid compact">
+            <div className="crm-stat-card compact">
+              <p className="crm-stat-title">Last success</p>
+              <p className="crm-stat-note strong">
                 {syncStatus.last_success_at ? new Date(syncStatus.last_success_at).toLocaleString() : "No success yet"}
               </p>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Latest status</p>
-              <p className="mt-2 text-sm font-medium text-white">{syncStatus.latest_status || "Idle"}</p>
+            <div className="crm-stat-card compact">
+              <p className="crm-stat-title">Latest status</p>
+              <p className="crm-stat-note strong">{syncStatus.latest_status || "Idle"}</p>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Source file</p>
-              <p className="mt-2 text-sm font-medium text-white">{lastRun?.file_name || "Not available"}</p>
+            <div className="crm-stat-card compact">
+              <p className="crm-stat-title">Source file</p>
+              <p className="crm-stat-note strong">{lastRun?.file_name || "Not available"}</p>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Next scheduled sync</p>
-              <p className="mt-2 text-sm font-medium text-white">
+            <div className="crm-stat-card compact">
+              <p className="crm-stat-title">Next scheduled sync</p>
+              <p className="crm-stat-note strong">
                 {syncStatus.next_scheduled_sync_at
                   ? new Date(syncStatus.next_scheduled_sync_at).toLocaleString()
                   : "Scheduler disabled"}
@@ -78,49 +99,54 @@ export function InventoryPanel({
           </div>
         ) : null}
 
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="crm-filter-grid top-space">
           <input
             value={filters.status || ""}
             onChange={(event) => onFilterChange?.("status", event.target.value)}
             placeholder="Status"
-            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
+            className="crm-text-input"
           />
           <input
             value={filters.make || ""}
             onChange={(event) => onFilterChange?.("make", event.target.value)}
             placeholder="Make"
-            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
+            className="crm-text-input"
           />
           <input
             value={filters.model || ""}
             onChange={(event) => onFilterChange?.("model", event.target.value)}
             placeholder="Model"
-            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
+            className="crm-text-input"
           />
           <input
             value={filters.stockNumber || ""}
             onChange={(event) => onFilterChange?.("stockNumber", event.target.value)}
             placeholder="Stock number"
-            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
+            className="crm-text-input"
           />
           <input
             value={filters.vin || ""}
             onChange={(event) => onFilterChange?.("vin", event.target.value)}
             placeholder="VIN"
-            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
+            className="crm-text-input"
           />
         </div>
-
       </div>
 
       {canImport ? (
-        <div className="mt-4 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+        <div className="crm-panel-card mt-4">
+          <div className="crm-panel-header">
+            <div>
+              <h3>Sync and import controls</h3>
+              <p>FTP sync is primary. Manual CSV upload stays available for recovery workflows.</p>
+            </div>
+          </div>
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
-            <div className="grid gap-3">
+            <div className="crm-form-stack">
               {syncStatus ? (
-                <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200">
-                  <p className="font-medium text-white">FTP sync health</p>
-                  <p className="mt-1 text-slate-300">
+                <div className="crm-list-item static">
+                  <p className="crm-row-primary">FTP sync health</p>
+                  <p className="crm-list-item-meta">
                     {syncStatus.configured
                       ? `${syncStatus.remote_directory || "/"}${syncStatus.file_pattern ? ` | ${syncStatus.file_pattern}` : ""}`
                       : "FTP credentials are not configured yet."}
@@ -131,9 +157,9 @@ export function InventoryPanel({
                 value={importSourceName}
                 onChange={(event) => onImportSourceNameChange?.(event.target.value)}
                 placeholder="Source name (e.g. Dealer feed)"
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
+                className="crm-text-input"
               />
-              <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200">
+              <label className="crm-toggle-row">
                 <input
                   type="checkbox"
                   checked={importMarkMissingInactive}
@@ -147,11 +173,11 @@ export function InventoryPanel({
                 type="button"
                 onClick={() => onSyncNow?.()}
                 disabled={syncSubmitting || syncStatus?.is_running}
-                className="inline-flex items-center justify-center rounded-2xl bg-amber-300 px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+                className="crm-primary-block-button amber"
               >
                 {syncSubmitting || syncStatus?.is_running ? "Syncing..." : "Sync now"}
               </button>
-              <label className="inline-flex cursor-pointer items-center justify-center rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-slate-100">
+              <label className="crm-primary-block-button light cursor-pointer">
                 {importSubmitting ? "Importing..." : "Upload CSV"}
                 <input
                   type="file"
@@ -172,105 +198,85 @@ export function InventoryPanel({
         </div>
       ) : null}
 
-      <div className="mt-4 grid gap-4">
+      <div className="crm-panel-card mt-4">
+        <div className="crm-panel-header">
+          <div>
+            <h3>Inventory units</h3>
+            <p>Searchable stock workspace with linked-lead expansion and latest feed context.</p>
+          </div>
+        </div>
         {loading ? (
-          Array.from({ length: 4 }).map((_, index) => (
-            <div key={index} className="h-32 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
-          ))
+          <div className="crm-loading-state">Loading inventory...</div>
         ) : items.length ? (
           items.map((item) => (
-            <div key={item.id} className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
-                    {item.stockNumber || item.vin || `Unit ${item.id}`}
-                  </p>
-                  <h3 className="mt-2 font-display text-lg font-semibold text-white">{formatInventoryTitle(item)}</h3>
-                </div>
-                <div className="flex flex-col items-end gap-2">
-                  <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-300">
-                    {item.status}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const nextExpanded = expandedInventoryId === item.id ? null : item.id;
-                      setExpandedInventoryId(nextExpanded);
-                      if (nextExpanded && !inventoryLeadLookup[item.id]?.loaded) {
-                        onLoadInventoryLeads?.(item.id);
-                      }
-                    }}
-                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/10"
-                  >
-                    {item.leadCount} lead{item.leadCount === 1 ? "" : "s"}
-                  </button>
-                </div>
+            <div key={item.id} className="crm-list-item static inventory-row">
+              <div className="crm-list-item-row">
+                <strong>{formatInventoryTitle(item)}</strong>
+                <span className="crm-chip">{item.status}</span>
               </div>
-              <div className="mt-4 flex flex-wrap gap-2 text-sm text-slate-300">
-                {item.condition ? <span>{item.condition}</span> : null}
-                {item.bodyStyle ? <span>{item.bodyStyle}</span> : null}
-                <span>{formatPrice(item.price)}</span>
-                {item.mileage != null ? <span>{item.mileage.toLocaleString()} km</span> : null}
+              <div className="crm-list-item-meta">
+                {item.stockNumber || item.vin || `Unit ${item.id}`} | {formatPrice(item.price)} {item.mileage != null ? `| ${item.mileage.toLocaleString()} km` : ""}
               </div>
-              <div className="mt-4 flex flex-wrap gap-2 text-xs uppercase tracking-[0.2em] text-slate-500">
-                {item.exteriorColor ? <span>{item.exteriorColor}</span> : null}
-                {item.interiorColor ? <span>{item.interiorColor}</span> : null}
-                {item.lastSeenAt ? <span>Seen {new Date(item.lastSeenAt).toLocaleString()}</span> : null}
+              <div className="crm-list-item-meta">
+                {[item.condition, item.bodyStyle, item.exteriorColor, item.interiorColor, item.lastSeenAt ? `Seen ${new Date(item.lastSeenAt).toLocaleString()}` : null]
+                  .filter(Boolean)
+                  .join(" | ")}
+              </div>
+              <div className="crm-row-actions top-space">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextExpanded = expandedInventoryId === item.id ? null : item.id;
+                    setExpandedInventoryId(nextExpanded);
+                    if (nextExpanded && !inventoryLeadLookup[item.id]?.loaded) {
+                      onLoadInventoryLeads?.(item.id);
+                    }
+                  }}
+                  className="crm-table-button"
+                >
+                  {item.leadCount} lead{item.leadCount === 1 ? "" : "s"}
+                </button>
               </div>
               {expandedInventoryId === item.id ? (
-                <div className="mt-5 rounded-[1.5rem] border border-white/10 bg-ink-950/30 p-4">
-                  <div className="flex items-center justify-between gap-3">
+                <div className="crm-expanded-block">
+                  <div className="crm-panel-header">
                     <div>
-                      <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Linked leads</p>
-                      <p className="mt-1 text-sm text-slate-300">
-                        See every visible lead tied to this inventory unit.
-                      </p>
+                      <h3>Linked leads</h3>
+                      <p>Visible leads currently tied to this unit.</p>
                     </div>
                     <button
                       type="button"
                       onClick={() => onLoadInventoryLeads?.(item.id, { force: true })}
-                      className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/10"
+                      className="crm-table-button"
                     >
                       Refresh
                     </button>
                   </div>
-                  <div className="mt-4 space-y-3">
+                  <div className="crm-list-stack">
                     {inventoryLeadLookup[item.id]?.loading ? (
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-5 text-sm text-slate-400">
-                        Loading linked leads...
-                      </div>
+                      <div className="crm-loading-state compact">Loading linked leads...</div>
                     ) : inventoryLeadLookup[item.id]?.error ? (
-                      <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-5 text-sm text-rose-100">
-                        {inventoryLeadLookup[item.id].error}
-                      </div>
+                      <div className="crm-error-state">{inventoryLeadLookup[item.id].error}</div>
                     ) : inventoryLeadLookup[item.id]?.items?.length ? (
                       inventoryLeadLookup[item.id].items.map((lead) => (
                         <button
                           key={lead.id}
                           type="button"
                           onClick={() => onOpenLead?.(lead.id)}
-                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4 text-left transition hover:border-white/20 hover:bg-white/[0.06]"
+                          className="crm-list-item"
                         >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-semibold text-white">{lead.customerName}</p>
-                              <p className="mt-1 text-sm text-slate-300">{lead.vehicleInterest}</p>
-                            </div>
-                            <span className="rounded-full bg-white/5 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-300">
-                              {lead.statusLabel}
-                            </span>
+                          <div className="crm-list-item-row">
+                            <strong>{lead.customerName}</strong>
+                            <span className="crm-chip">{lead.statusLabel}</span>
                           </div>
-                          <div className="mt-3 flex flex-wrap gap-2 text-xs uppercase tracking-[0.18em] text-slate-500">
-                            {lead.source ? <span>{lead.source}</span> : null}
-                            {lead.assignedRep ? <span>{lead.assignedRep}</span> : null}
-                            {lead.createdAtLabel ? <span>{lead.createdAtLabel}</span> : null}
+                          <div className="crm-list-item-meta">{lead.vehicleInterest}</div>
+                          <div className="crm-list-item-meta">
+                            {[lead.source, lead.assignedRep, lead.createdAtLabel].filter(Boolean).join(" | ")}
                           </div>
                         </button>
                       ))
                     ) : (
-                      <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm text-slate-400">
-                        No visible leads are linked to this unit yet.
-                      </div>
+                      <div className="crm-empty-state compact">No visible leads are linked to this unit yet.</div>
                     )}
                   </div>
                 </div>
@@ -278,65 +284,63 @@ export function InventoryPanel({
             </div>
           ))
         ) : (
-          <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
+          <div className="crm-empty-state">
             No inventory units match this filter yet.
           </div>
         )}
       </div>
 
-      <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-        <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Recent import runs</p>
-        <div className="mt-4 space-y-3">
+      <div className="crm-panel-card mt-6">
+        <div className="crm-panel-header">
+          <div>
+            <h3>Recent import runs</h3>
+            <p>Latest sync/upload history with inserted, updated, skipped, and errored rows.</p>
+          </div>
+        </div>
+        <div className="crm-list-stack">
           {importRuns.length ? (
             importRuns.map((run) => (
-              <div key={run.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-semibold text-white">{run.fileName || run.sourceName || `Run ${run.id}`}</p>
-                    <p className="mt-1 text-xs uppercase tracking-[0.22em] text-slate-500">
-                      {run.status} | {run.startedAt ? new Date(run.startedAt).toLocaleString() : "Started"}
-                    </p>
-                  </div>
-                  <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
-                    {run.rowsInserted} new / {run.rowsUpdated} updated
-                  </span>
+              <div key={run.id} className="crm-list-item static">
+                <div className="crm-list-item-row">
+                  <strong>{run.fileName || run.sourceName || `Run ${run.id}`}</strong>
+                  <span className="crm-chip">{run.rowsInserted} new / {run.rowsUpdated} updated</span>
                 </div>
-                <div className="mt-3 flex flex-wrap gap-2 text-xs uppercase tracking-[0.18em] text-slate-500">
-                  <span>{run.sourceType || "manual_upload"}</span>
-                  <span>{run.rowsSkipped} skipped</span>
-                  <span>{run.failedCount ?? run.rowsSkipped} failed</span>
-                  <span>{run.rowsDeactivated} inactive</span>
-                  <span>{run.errorCount} errors</span>
+                <div className="crm-list-item-meta">
+                  {run.status} | {run.startedAt ? new Date(run.startedAt).toLocaleString() : "Started"}
+                </div>
+                <div className="crm-list-item-meta">
+                  {[run.sourceType || "manual_upload", `${run.rowsSkipped} skipped`, `${run.failedCount ?? run.rowsSkipped} failed`, `${run.rowsDeactivated} inactive`, `${run.errorCount} errors`].join(" | ")}
                 </div>
               </div>
             ))
           ) : (
-            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-6 text-sm text-slate-400">
+            <div className="crm-empty-state compact">
               No inventory imports have been run yet.
             </div>
           )}
         </div>
       </div>
 
-      <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-        <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Recent row issues</p>
-        <div className="mt-4 space-y-3">
+      <div className="crm-panel-card mt-6">
+        <div className="crm-panel-header">
+          <div>
+            <h3>Recent row issues</h3>
+            <p>Rows that failed validation or import mapping and need cleanup.</p>
+          </div>
+        </div>
+        <div className="crm-list-stack">
           {importErrors.length ? (
             importErrors.map((issue) => (
-              <div key={issue.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-semibold text-white">{issue.raw_identifier || issue.stock_number || issue.vin || `Row ${issue.row_number || issue.id}`}</p>
-                    <p className="mt-1 text-sm text-slate-300">{issue.error_message}</p>
-                  </div>
-                  <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
-                    {issue.file_name || issue.source_type || "inventory"}
-                  </span>
+              <div key={issue.id} className="crm-list-item static">
+                <div className="crm-list-item-row">
+                  <strong>{issue.raw_identifier || issue.stock_number || issue.vin || `Row ${issue.row_number || issue.id}`}</strong>
+                  <span className="crm-chip amber">{issue.file_name || issue.source_type || "inventory"}</span>
                 </div>
+                <div className="crm-list-item-meta">{issue.error_message}</div>
               </div>
             ))
           ) : (
-            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-6 text-sm text-slate-400">
+            <div className="crm-empty-state compact">
               No recent inventory sync issues.
             </div>
           )}

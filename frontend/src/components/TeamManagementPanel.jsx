@@ -47,13 +47,13 @@ export function TeamManagementPanel({
 
   return (
     <section className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-      <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-5">
+      <div className="crm-panel-card">
         <div className="flex items-center gap-3">
-          <div className="rounded-2xl bg-white/10 p-3 text-white">
+          <div className="crm-icon-pill">
             <UserPlus className="h-5 w-5" />
           </div>
           <div>
-            <p className="text-xs uppercase tracking-[0.28em] text-slate-500">
+            <p className="crm-header-eyebrow">
               {canManageRoster ? "Admin controls" : "Availability rules"}
             </p>
             <h2 className="mt-1 font-display text-2xl font-semibold text-white">
@@ -63,45 +63,45 @@ export function TeamManagementPanel({
         </div>
 
         {canManageRoster ? (
-          <div className="mt-6 grid gap-4">
-            <label className="grid gap-2">
-              <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Full name</span>
+          <div className="crm-form-stack top-space">
+            <label className="crm-inline-form">
+              <span>Full name</span>
               <input
                 value={form.name}
                 onChange={(event) => onFormChange("name", event.target.value)}
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
+                className="crm-text-input"
                 placeholder="CRM Sales Rep"
               />
             </label>
 
-            <label className="grid gap-2">
-              <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Email</span>
+            <label className="crm-inline-form">
+              <span>Email</span>
               <input
                 value={form.email}
                 onChange={(event) => onFormChange("email", event.target.value)}
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
+                className="crm-text-input"
                 placeholder="rep@loolooauto.ca"
               />
             </label>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <label className="grid gap-2">
-                <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Password</span>
+              <label className="crm-inline-form">
+                <span>Password</span>
                 <input
                   type="password"
                   value={form.password}
                   onChange={(event) => onFormChange("password", event.target.value)}
-                  className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
+                  className="crm-text-input"
                   placeholder="At least 6 characters"
                 />
               </label>
 
-              <label className="grid gap-2">
-                <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Role</span>
+              <label className="crm-inline-form">
+                <span>Role</span>
                 <select
                   value={form.role}
                   onChange={(event) => onFormChange("role", event.target.value)}
-                  className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+                  className="crm-select-input"
                 >
                   {roles.map((role) => (
                     <option key={role} value={role} className="bg-ink-900">
@@ -116,7 +116,7 @@ export function TeamManagementPanel({
               type="button"
               onClick={onSubmit}
               disabled={submitting}
-              className="mt-2 inline-flex items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-slate-100 disabled:cursor-wait disabled:opacity-70"
+              className="crm-primary-block-button light"
             >
               <UserPlus className="h-4 w-4" />
               {submitting ? "Creating..." : "Add user"}
@@ -124,26 +124,28 @@ export function TeamManagementPanel({
           </div>
         ) : (
           <>
-            <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-4 text-sm leading-6 text-slate-300">
+            <div className="crm-list-item static top-space">
               Managers can review who is available for fresh contact routing here. Sales reps can also pause their own
               routing from the sidebar without losing ownership of existing contacts.
             </div>
 
             {canManageAutomation ? (
-              <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-4">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Texting automation</p>
-                  <h3 className="mt-1 font-display text-xl font-semibold text-white">AI texting controls</h3>
+              <div className="crm-panel-subsection">
+                <div className="crm-panel-header">
+                  <div>
+                    <h3>AI texting controls</h3>
+                    <p>Automation settings for SMS suggestions and first-response auto texts.</p>
+                  </div>
                 </div>
 
                 {executionSettingsLoading ? (
-                  <div className="mt-4 h-36 animate-pulse rounded-2xl border border-white/10 bg-white/[0.04]" />
+                  <div className="crm-loading-state compact">Loading automation settings...</div>
                 ) : (
-                  <div className="mt-4 grid gap-4">
-                    <label className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                  <div className="crm-form-stack">
+                    <label className="crm-toggle-row">
                       <span>
-                        <span className="block text-sm font-semibold text-white">AI SMS suggestions</span>
-                        <span className="block text-xs text-slate-400">Allow reps to generate AI draft replies in the lead modal.</span>
+                        <span className="crm-row-primary">AI SMS suggestions</span>
+                        <span className="crm-list-item-meta">Allow reps to generate AI draft replies in the lead modal.</span>
                       </span>
                       <input
                         type="checkbox"
@@ -155,14 +157,13 @@ export function TeamManagementPanel({
                           })
                         }
                         disabled={executionSettingsSaving}
-                        className="h-5 w-5 rounded border-white/10 bg-white/5"
                       />
                     </label>
 
-                    <label className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                    <label className="crm-toggle-row">
                       <span>
-                        <span className="block text-sm font-semibold text-white">Automatic first follow-up texts</span>
-                        <span className="block text-xs text-slate-400">Send one automatic first-response SMS to clean fresh leads.</span>
+                        <span className="crm-row-primary">Automatic first follow-up texts</span>
+                        <span className="crm-list-item-meta">Send one automatic first-response SMS to clean fresh leads.</span>
                       </span>
                       <input
                         type="checkbox"
@@ -174,12 +175,11 @@ export function TeamManagementPanel({
                           })
                         }
                         disabled={executionSettingsSaving}
-                        className="h-5 w-5 rounded border-white/10 bg-white/5"
                       />
                     </label>
 
-                    <label className="grid gap-2">
-                      <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Delay before first auto-text</span>
+                    <label className="crm-inline-form">
+                      <span>Delay before first auto-text</span>
                       <div className="flex gap-3">
                         <input
                           type="number"
@@ -192,13 +192,13 @@ export function TeamManagementPanel({
                             })
                           }
                           disabled={executionSettingsSaving}
-                          className="w-32 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+                          className="crm-text-input w-32"
                         />
                         <button
                           type="button"
                           onClick={() => onRunAutoSms?.()}
                           disabled={autoSmsRunning || executionSettingsSaving}
-                          className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                          className="crm-table-button"
                         >
                           {autoSmsRunning ? "Running..." : "Run auto-texts now"}
                         </button>
@@ -212,62 +212,56 @@ export function TeamManagementPanel({
         )}
       </div>
 
-      <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-5">
-        <div className="flex items-center justify-between gap-4 border-b border-white/10 pb-4">
+      <div className="crm-panel-card">
+        <div className="crm-panel-header">
           <div>
-            <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Team roster</p>
-            <h2 className="mt-1 font-display text-2xl font-semibold text-white">Users</h2>
+            <h3>Users</h3>
+            <p>Roster, role, routing availability, and day-off scheduling.</p>
           </div>
-          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-300">
+          <span className="crm-chip">
             {users.length} active
           </span>
         </div>
 
-        <div className="mt-4 grid gap-3">
+        <div className="crm-list-stack">
           {loading ? (
-            <div className="h-48 animate-pulse rounded-[1.75rem] border border-white/10 bg-white/[0.04]" />
+            <div className="crm-loading-state">Loading team roster...</div>
           ) : (
             users.map((user) => {
               const isSelf = Number(currentUser?.id) === Number(user.id);
 
               return (
-                <div
-                  key={user.id}
-                  className="flex flex-col gap-3 rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-4 sm:flex-row sm:items-center sm:justify-between"
-                >
+                <div key={user.id} className="crm-list-item static">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p className="font-display text-lg font-semibold text-white">{user.name}</p>
-                    <p className="mt-1 text-sm text-slate-300">{user.email}</p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-slate-200">
+                    <p className="crm-row-primary">{user.name}</p>
+                    <p className="crm-list-item-meta">{user.email}</p>
+                    <div className="crm-row-actions top-space">
+                      <span className="crm-chip">
                         {formatRole(user.role)}
                       </span>
                       {user.role === "sales" ? (
                         <span
-                          className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                            user.is_available
-                              ? "bg-lime-500/15 text-lime-300"
-                              : "bg-ember-500/15 text-ember-300"
-                          }`}
+                          className={`crm-chip ${user.is_available ? "green" : "amber"}`}
                         >
                           {user.is_available ? "Available" : "Paused"}
                         </span>
                       ) : null}
                       {isSelf ? (
-                        <span className="rounded-full bg-ice-500/15 px-3 py-1 text-xs font-semibold text-ice-300">
+                        <span className="crm-chip blue">
                           Current session
                         </span>
                       ) : null}
                     </div>
                     {user.role === "sales" && canManageRouting ? (
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <span className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
+                      <div className="crm-row-actions top-space">
+                        <span className="crm-list-item-meta">
                           Routing days: {(user.working_days || []).map((day) => day.slice(0, 3)).join(", ") || "None"}
                         </span>
                         <button
                           type="button"
                           onClick={() => setSelectedScheduleUser(user)}
-                          className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
+                          className="crm-table-button"
                         >
                           Edit days off
                         </button>
@@ -281,7 +275,7 @@ export function TeamManagementPanel({
                         type="button"
                         onClick={() => onToggleAvailability?.(user, !user.is_available)}
                         disabled={availabilityUpdatingId === user.id}
-                        className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                        className="crm-table-button"
                       >
                         {availabilityUpdatingId === user.id
                           ? "Saving..."
@@ -296,12 +290,13 @@ export function TeamManagementPanel({
                         type="button"
                         onClick={() => onDelete(user)}
                         disabled={isSelf || deletingUserId === user.id}
-                        className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="crm-table-button"
                       >
                         <Trash2 className="h-4 w-4" />
                         {deletingUserId === user.id ? "Deleting..." : "Delete"}
                       </button>
                     ) : null}
+                  </div>
                   </div>
                 </div>
               );
@@ -311,15 +306,15 @@ export function TeamManagementPanel({
       </div>
 
       {selectedScheduleUser ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
+        <div className="crm-modal-overlay">
           <div
             className="absolute inset-0"
             onClick={() => setSelectedScheduleUser(null)}
           />
-          <div className="relative z-10 w-full max-w-lg rounded-[2rem] border border-white/10 bg-ink-900 p-6 shadow-card">
+          <div className="crm-modal-card narrow">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Routing schedule</p>
+                <p className="crm-header-eyebrow">Routing schedule</p>
                 <h3 className="mt-1 font-display text-2xl font-semibold text-white">{selectedScheduleUser.name}</h3>
                 <p className="mt-2 text-sm text-slate-300">
                   Pick the days this rep should receive new leads. Leave a day off to keep routing away from them.
@@ -328,7 +323,7 @@ export function TeamManagementPanel({
               <button
                 type="button"
                 onClick={() => setSelectedScheduleUser(null)}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-white transition hover:bg-white/10"
+                className="crm-icon-button inline-flex h-10 w-10 items-center justify-center"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -355,11 +350,7 @@ export function TeamManagementPanel({
                       onUpdateWorkingDays?.(selectedScheduleUser, nextDays);
                     }}
                     disabled={availabilityUpdatingId === selectedScheduleUser.id}
-                    className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${
-                      active
-                        ? "bg-ice-500/15 text-ice-200 ring-1 ring-ice-400/30"
-                        : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white"
-                    } disabled:cursor-wait disabled:opacity-60`}
+                    className={`crm-chip-button ${active ? "active" : ""} disabled:cursor-wait disabled:opacity-60`}
                   >
                     {day.label}
                   </button>
@@ -367,7 +358,7 @@ export function TeamManagementPanel({
               })}
             </div>
 
-            <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-300">
+            <div className="crm-list-item static top-space">
               {availabilityUpdatingId === selectedScheduleUser.id
                 ? "Saving routing days..."
                 : `Active routing days: ${(selectedScheduleUser.working_days || []).map((day) => day.slice(0, 3)).join(", ") || "None"}`}

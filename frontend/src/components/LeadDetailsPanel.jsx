@@ -17,9 +17,9 @@ const pipelineStatuses = ["new", "contacted", "appointment", "negotiation", "sol
 
 function InfoBlock({ label, value }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">{label}</p>
-      <p className="mt-2 text-sm font-medium text-slate-100">{value || "Not available"}</p>
+    <div className="crm-detail-block">
+      <p className="crm-focus-label">{label}</p>
+      <p className="crm-row-primary top-space-tight">{value || "Not available"}</p>
     </div>
   );
 }
@@ -113,7 +113,7 @@ export function LeadDetailsPanel({
 
   if (loading) {
     return (
-      <aside className="rounded-[2rem] border border-white/10 bg-ink-900/85 p-6 shadow-card backdrop-blur">
+      <aside className="crm-modal-card">
         <div className="animate-pulse space-y-4">
           <div className="h-4 w-28 rounded-full bg-white/10" />
           <div className="h-8 w-56 rounded-full bg-white/10" />
@@ -129,7 +129,7 @@ export function LeadDetailsPanel({
 
   if (!lead) {
     return (
-      <aside className="rounded-[2rem] border border-dashed border-white/10 bg-white/[0.03] p-6 text-slate-400">
+      <aside className="crm-modal-card">
         Select a lead to view the full customer story.
       </aside>
     );
@@ -150,10 +150,10 @@ export function LeadDetailsPanel({
       .join(" ") || lead.vehicleInterest;
 
   return (
-    <aside className="rounded-[2rem] border border-white/10 bg-ink-900/85 p-6 shadow-card backdrop-blur">
+    <aside className="crm-modal-card">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-slate-500">{lead.sourceDetail || lead.source}</p>
+          <p className="crm-header-eyebrow">{lead.sourceDetail || lead.source}</p>
           <h2 className="mt-2 font-display text-2xl font-semibold text-white">{lead.customerName}</h2>
           <p className="mt-1 text-sm text-slate-300">{vehicleLabel}</p>
         </div>
@@ -175,10 +175,10 @@ export function LeadDetailsPanel({
               type="button"
               onClick={() => onStatusChange?.(status)}
               disabled={statusUpdating || status === lead.status}
-              className={`rounded-full px-3 py-2 text-xs font-semibold transition ${
+              className={`crm-chip-button ${status === lead.status ? "active" : ""} ${
                 status === lead.status
-                  ? "bg-white text-ink-950"
-                  : "border border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white"
+                  ? ""
+                  : ""
               } ${statusUpdating ? "cursor-wait opacity-70" : ""}`}
             >
               {pipelineLabel(status)}
@@ -188,15 +188,15 @@ export function LeadDetailsPanel({
       ) : null}
 
       {canAssign ? (
-        <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-5">
+        <div className="crm-panel-subsection">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-            <label className="grid flex-1 gap-2">
-              <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Assign lead</span>
+            <label className="crm-inline-form flex-1">
+              <span>Assign lead</span>
               <select
                 value={assignmentValue}
                 onChange={(event) => setAssignmentValue(event.target.value)}
                 disabled={assigneesLoading || assignmentUpdating}
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none disabled:cursor-wait disabled:opacity-70"
+                className="crm-select-input disabled:cursor-wait disabled:opacity-70"
               >
                 <option value="" className="bg-ink-900">
                   Select salesperson
@@ -217,7 +217,7 @@ export function LeadDetailsPanel({
                 !assignmentValue ||
                 Number(assignmentValue) === Number(lead.assignedTo)
               }
-              className="inline-flex items-center justify-center rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              className="crm-primary-block-button light"
             >
               {assignmentUpdating ? "Assigning..." : "Assign lead"}
             </button>
@@ -225,10 +225,10 @@ export function LeadDetailsPanel({
         </div>
       ) : null}
 
-      <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-5">
+      <div className="crm-panel-subsection">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold text-white">Lead details</p>
+            <p className="crm-row-primary">Lead details</p>
             <p className="mt-1 text-xs text-slate-400">
               Fix missing info when the provider sends partial data. If both name fields are empty, the CRM stores
               <span className="font-semibold text-slate-200"> NN Lead</span>.
@@ -237,26 +237,26 @@ export function LeadDetailsPanel({
           <button
             type="button"
             onClick={() => setEditingLead((value) => !value)}
-            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+            className="crm-table-button"
           >
             {editingLead ? "Close" : "Edit details"}
           </button>
         </div>
 
         {editingLead ? (
-          <div className="mt-4 grid gap-3">
+          <div className="crm-form-stack top-space">
             <div className="grid gap-3 sm:grid-cols-2">
               <input
                 value={leadForm.firstName}
                 onChange={(event) => setLeadForm((current) => ({ ...current, firstName: event.target.value }))}
                 placeholder="First name"
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+                className="crm-text-input"
               />
               <input
                 value={leadForm.lastName}
                 onChange={(event) => setLeadForm((current) => ({ ...current, lastName: event.target.value }))}
                 placeholder="Last name"
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+                className="crm-text-input"
               />
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -264,27 +264,27 @@ export function LeadDetailsPanel({
                 value={leadForm.phone}
                 onChange={(event) => setLeadForm((current) => ({ ...current, phone: event.target.value }))}
                 placeholder="Phone number"
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+                className="crm-text-input"
               />
               <input
                 value={leadForm.email}
                 onChange={(event) => setLeadForm((current) => ({ ...current, email: event.target.value }))}
                 placeholder="Email"
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+                className="crm-text-input"
               />
             </div>
             <input
               value={leadForm.stockNumber}
               onChange={(event) => setLeadForm((current) => ({ ...current, stockNumber: event.target.value }))}
               placeholder="Stock number"
-              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+              className="crm-text-input"
             />
             <textarea
               value={leadForm.message}
               onChange={(event) => setLeadForm((current) => ({ ...current, message: event.target.value }))}
               placeholder="Customer message"
               rows={4}
-              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none"
+              className="crm-text-area"
             />
             <div className="flex justify-end">
               <button
@@ -308,7 +308,7 @@ export function LeadDetailsPanel({
                   }
                 }}
                 disabled={leadUpdating}
-                className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-slate-100 disabled:cursor-wait disabled:opacity-60"
+                className="crm-primary-block-button light"
               >
                 {leadUpdating ? "Saving..." : "Save details"}
               </button>
@@ -317,7 +317,7 @@ export function LeadDetailsPanel({
         ) : null}
       </div>
 
-      <div className={`mt-6 grid gap-3 ${isSalesUser ? "sm:grid-cols-2" : "sm:grid-cols-2"}`}>
+      <div className="crm-detail-grid">
         <InfoBlock label="Phone" value={lead.phone} />
         <InfoBlock label="Email" value={lead.email} />
         <InfoBlock label="Stock Number" value={lead.stockNumber} />
@@ -331,7 +331,7 @@ export function LeadDetailsPanel({
         <InfoBlock label="Source" value={lead.sourceDetail || lead.source} />
       </div>
 
-      <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+      <div className="crm-panel-subsection">
         <div className="flex items-center gap-2 text-sm font-semibold text-white">
           <CarFront className="h-4 w-4 text-ice-300" />
           Linked inventory
@@ -347,7 +347,7 @@ export function LeadDetailsPanel({
         </p>
       </div>
 
-      <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-gradient-to-br from-white/8 to-white/[0.03] p-5">
+      <div className="crm-panel-subsection accent">
         <div className="flex items-center gap-2 text-sm font-semibold text-white">
           <Sparkles className="h-4 w-4 text-ember-400" />
           Lead message
@@ -356,7 +356,7 @@ export function LeadDetailsPanel({
       </div>
 
       {!isSalesUser ? (
-        <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+        <div className="crm-panel-subsection">
           <div className="flex items-center gap-2 text-sm font-semibold text-white">
             <CheckCircle2 className="h-4 w-4 text-lime-400" />
             Tasks
@@ -364,15 +364,15 @@ export function LeadDetailsPanel({
         <div className="mt-4 space-y-3">
           {lead.tasks?.length ? (
             lead.tasks.map((task) => (
-              <div key={task.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <div key={task.id} className="crm-list-item static">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-semibold text-white">{task.title}</p>
-                      <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
+                      <span className="crm-chip">
                         {task.status}
                       </span>
-                      <span className="rounded-full bg-white/8 px-3 py-1.5 text-xs font-medium text-slate-200">
+                      <span className="crm-chip">
                         {task.source}
                       </span>
                     </div>
@@ -385,7 +385,7 @@ export function LeadDetailsPanel({
                       type="button"
                       onClick={() => onCompleteTask?.(task.id)}
                       disabled={taskCompletingId === task.id}
-                      className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                      className="crm-table-button"
                     >
                       {taskCompletingId === task.id ? "Completing..." : "Complete"}
                     </button>
@@ -394,7 +394,7 @@ export function LeadDetailsPanel({
               </div>
             ))
           ) : (
-            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-6 text-sm text-slate-400">
+            <div className="crm-empty-state compact">
               No open tasks for this lead.
             </div>
           )}
@@ -404,7 +404,7 @@ export function LeadDetailsPanel({
 
       {!isSalesUser ? (
         <div className="mt-6 grid gap-3 sm:grid-cols-2">
-          <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-5">
+          <div className="crm-detail-block">
             <div className="flex items-center gap-2 text-sm font-semibold text-white">
               <CalendarDays className="h-4 w-4 text-ice-300" />
               Lead snapshot
@@ -414,7 +414,7 @@ export function LeadDetailsPanel({
               {lead.source.toLowerCase()}.
             </p>
           </div>
-          <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-5">
+          <div className="crm-detail-block">
             <div className="flex items-center gap-2 text-sm font-semibold text-white">
               <ShieldCheck className="h-4 w-4 text-lime-400" />
               Activity count
@@ -551,11 +551,7 @@ export function LeadDetailsPanel({
             }
           }}
           disabled={!hasCallablePhone || callLogging}
-          className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
-            hasCallablePhone
-              ? "bg-white text-ink-950 hover:bg-slate-100 disabled:cursor-wait disabled:opacity-70"
-              : "cursor-not-allowed bg-white/10 text-slate-500"
-          }`}
+          className={`crm-primary-block-button light ${!hasCallablePhone ? "disabled" : ""}`}
         >
           <PhoneCall className="h-4 w-4" />
           {callLogging ? "Starting..." : "Call Lead"}
@@ -567,7 +563,7 @@ export function LeadDetailsPanel({
             setActionNotice("SMS composer ready.");
           }}
           disabled={!hasCallablePhone}
-          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+          className="crm-secondary-block-button"
         >
           <MessageSquareText className="h-4 w-4" />
           Compose SMS
@@ -576,15 +572,15 @@ export function LeadDetailsPanel({
           <button
             type="button"
             onClick={async () => {
-              try {
-                await onHoldVehicle?.();
-                setActionNotice("Hold request task created for this lead.");
+            try {
+              await onHoldVehicle?.();
+              setActionNotice("Hold request task created for this lead.");
               } catch (_error) {
                 // The parent surfaces API errors, so we only avoid clearing the current UI state here.
               }
             }}
             disabled={holdSubmitting}
-            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+            className="crm-secondary-block-button"
           >
             <CarFront className="h-4 w-4" />
             {holdSubmitting ? "Creating..." : "Hold Vehicle"}
@@ -593,13 +589,13 @@ export function LeadDetailsPanel({
       </div>
 
       {actionNotice ? (
-        <div className="mt-4 rounded-2xl border border-ice-400/25 bg-ice-400/10 px-4 py-3 text-sm text-ice-100">
+        <div className="crm-info-banner">
           {actionNotice}
         </div>
       ) : null}
 
       {smsComposerOpen ? (
-        <div className="mt-4 rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+        <div className="crm-panel-subsection">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-white">
               <Send className="h-4 w-4 text-ice-300" />
@@ -609,7 +605,7 @@ export function LeadDetailsPanel({
               <select
                 value={smsGoal}
                 onChange={(event) => setSmsGoal(event.target.value)}
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white outline-none"
+                className="crm-select-input compact"
               >
                 <option value="follow_up" className="bg-ink-900">
                   Follow-up
@@ -644,7 +640,7 @@ export function LeadDetailsPanel({
                   }
                 }}
                 disabled={smsSuggestionLoading || !hasCallablePhone}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-2 text-sm font-semibold text-amber-100 transition hover:bg-amber-300/15 disabled:cursor-wait disabled:opacity-60"
+                className="crm-table-button amber"
               >
                 <Sparkles className="h-4 w-4" />
                 {smsSuggestionLoading ? "Generating..." : "AI Draft"}
@@ -657,11 +653,11 @@ export function LeadDetailsPanel({
             onChange={(event) => setSmsDraft(event.target.value)}
             rows={4}
             placeholder="Write a quick follow-up..."
-            className="mt-4 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500"
+            className="crm-text-area top-space"
           />
           {smsSuggestionInfo ? (
-            <div className="mt-3 rounded-2xl border border-amber-300/15 bg-amber-300/5 px-4 py-3 text-sm text-amber-100">
-              <p className="font-semibold text-white">AI suggestion</p>
+            <div className="crm-note-card amber">
+              <p className="crm-row-primary">AI suggestion</p>
               <p className="mt-1 text-xs uppercase tracking-[0.22em] text-amber-200/80">
                 {smsSuggestionInfo.source === "openai" ? "OpenAI draft" : "Template draft"} | Goal {smsSuggestionInfo.goal}
               </p>
@@ -681,7 +677,7 @@ export function LeadDetailsPanel({
                   setSmsSuggestionInfo(null);
                   setActionNotice("");
                 }}
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+                className="crm-table-button"
               >
                 Cancel
               </button>
@@ -703,7 +699,7 @@ export function LeadDetailsPanel({
                   }
                 }}
                 disabled={smsSending || !smsDraft.trim()}
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-ink-950 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                className="crm-table-button primary"
               >
                 {smsSending ? "Sending..." : "Send message"}
               </button>
