@@ -1,7 +1,6 @@
 import { startTransition, useDeferredValue, useEffect, useState } from "react";
 import { Menu, MoonStar, Search, SunMedium, X } from "lucide-react";
 
-import { AttentionLeadCard } from "./components/AttentionLeadCard";
 import { InventoryPanel } from "./components/InventoryPanel";
 import { LeadAssignmentBoard } from "./components/LeadAssignmentBoard";
 import { LeadDetailsPanel } from "./components/LeadDetailsPanel";
@@ -83,6 +82,125 @@ function formatRelative(dateString) {
 
   const diffDays = Math.round(diffHours / 24);
   return `${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
+}
+
+function parseMoneyAmount(value) {
+  if (value == null || value === "") {
+    return 0;
+  }
+
+  const normalized = Number(String(value).replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(normalized) ? normalized : 0;
+}
+
+function formatCurrencyCompact(value) {
+  const amount = parseMoneyAmount(value);
+  if (amount <= 0) {
+    return "$0";
+  }
+
+  return new Intl.NumberFormat("en-CA", {
+    style: "currency",
+    currency: "CAD",
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(amount);
+}
+
+function formatDurationShort(seconds) {
+  const totalSeconds = Number(seconds || 0);
+  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) {
+    return "Quick touch";
+  }
+
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+
+  const minutes = Math.round(totalSeconds / 60);
+  return `${minutes} min`;
+}
+
+function buildVehicleLabel(lead) {
+  const inventoryLabel = [
+    lead.vehicleYear,
+    lead.vehicleMake,
+    lead.vehicleModel,
+    lead.vehicleTrim,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  if (inventoryLabel) {
+    return inventoryLabel;
+  }
+
+  return lead.vehicleInterest || "Vehicle inquiry";
+}
+
+function getLeadChipTone(lead) {
+  if (lead.attentionReason) {
+    return "red";
+  }
+
+  switch (lead.status) {
+    case "appointment":
+      return "green";
+    case "negotiation":
+      return "blue";
+    case "sold":
+      return "green";
+    case "lost":
+      return "red";
+    case "contacted":
+      return "amber";
+    default:
+      return "neutral";
+  }
+}
+
+function getLeadNextAction(lead) {
+  const firstTask = lead.openTasks?.[0];
+  if (typeof firstTask === "string" && firstTask.trim()) {
+    return firstTask.trim();
+  }
+
+  if (firstTask?.title) {
+    return firstTask.title;
+  }
+
+  if (firstTask?.content) {
+    return firstTask.content;
+  }
+
+  if (lead.attentionReason) {
+    return lead.attentionReason;
+  }
+
+  switch (lead.status) {
+    case "new":
+      return "Call back now";
+    case "contacted":
+      return "Send follow-up";
+    case "appointment":
+      return "Confirm appointment";
+    case "negotiation":
+      return "Work the deal";
+    case "sold":
+      return "Close delivery";
+    case "lost":
+      return "Archive or retry";
+    default:
+      return "Open lead";
+  }
+}
+
+function getConversationChipTone(item) {
+  if (item.type === "call") {
+    return item.direction === "inbound" ? "red" : "blue";
+  }
+
+  return item.direction === "inbound" ? "green" : "neutral";
 }
 
 function formatLead(lead) {
@@ -1139,6 +1257,46 @@ export default function App() {
   const appointmentCount = visibleLeadLibrary.filter((lead) => lead.status === "appointment").length;
   const conversationCallCount = visibleConversationFeed.filter((item) => item.type === "call").length;
   const conversationSmsCount = visibleConversationFeed.filter((item) => item.type === "sms").length;
+  const visibleLeadTable = visibleLeadLibrary.filter(
+    (lead) => leadStatusFilter === "all" || lead.status === leadStatusFilter
+  );
+  const missedCallRecoveryCount = unmatchedItems.filter(
+    (item) => item.status === "new" && item.type === "call"
+  ).length;
+  const sectionCounts = {
+    Dashboard: metrics.needs_attention_count || 0,
+    Leads: visibleLeadTable.length,
+    Pipeline: flattenedPipelineLeads.length,
+    Assignments: assignmentUnassignedLeads.length,
+    Inventory: visibleInventoryItems.length,
+    Team: salesUsers.length,
+    Conversations: visibleConversationFeed.length,
+    Unmatched: unmatchedItems.filter((item) => item.status === "new").length,
+  };
+  const openGrossPotential = visibleLeadTable.reduce((sum, lead) => sum + parseMoneyAmount(lead.vehiclePrice), 0);
+  const visibleOpenTaskCount = visibleLeadTable.reduce((sum, lead) => sum + Number(lead.openTasks?.length || 0), 0);
+  const hotLeadRows = visibleAttentionLeads.slice(0, 6);
+  const appointmentPreview = visibleLeadTable.filter((lead) => lead.status === "appointment").slice(0, 4);
+  const recentConversationPreview = visibleConversationFeed.slice(0, 5);
+  const repPerformance = salesUsers
+    .map((user) => {
+      const assignedLeadCount = visibleLeadTable.filter((lead) => Number(lead.assignedTo) === Number(user.id)).length;
+      const contactCount = visibleConversationFeed.filter(
+        (item) => item.assignedRep === user.name || item.actorName === user.name
+      ).length;
+      const ownedAppointments = visibleLeadTable.filter(
+        (lead) => Number(lead.assignedTo) === Number(user.id) && lead.status === "appointment"
+      ).length;
+
+      return {
+        ...user,
+        assignedLeadCount,
+        contactCount,
+        ownedAppointments,
+      };
+    })
+    .sort((left, right) => right.contactCount - left.contactCount || right.assignedLeadCount - left.assignedLeadCount)
+    .slice(0, 4);
 
   const selectedLead =
     selectedLeadDetails && selectedLeadDetails.id === selectedLeadId
@@ -1820,44 +1978,44 @@ export default function App() {
   };
   const pageCopy = {
     Dashboard: {
-      eyebrow: "Command center",
-      title: "Dealership desk",
-      summary: "Monitor the operation, jump into the right workspace fast, and keep the dashboard focused on direction instead of day-to-day clutter.",
+      eyebrow: "Manager command center",
+      title: "Dashboard",
+      summary: "High-volume lead desk, appointments, rep pressure, and missed-opportunity recovery in one command view.",
     },
     Leads: {
-      eyebrow: "Follow-up desk",
-      title: "Lead queue",
-      summary: "Work urgent follow-up, review who needs action next, and keep assignment admin and stage movement on their own pages.",
+      eyebrow: "Lead command center",
+      title: "Leads",
+      summary: "Dense operational lead view with source, ownership, urgency, and next-action control.",
     },
     Pipeline: {
       eyebrow: "Pipeline workspace",
-      title: "Drag the active pipeline",
-      summary: "Move leads between stages from a dedicated board built for reps and managers to work visually.",
+      title: "Pipeline",
+      summary: "Move active opportunities visually without leaving the live CRM data model.",
     },
     Assignments: {
       eyebrow: "Ownership desk",
-      title: "Assign leads to reps",
-      summary: "Drag open leads to the right rep, clean up unassigned traffic, and manage who owns incoming opportunities.",
+      title: "Assignments",
+      summary: "Managers can route open opportunities, rebalance workload, and preserve contact ownership logic.",
     },
     Inventory: {
-      eyebrow: "Stock workspace",
-      title: "Inventory operations",
-      summary: "Watch feed health, search units quickly, and see which vehicles are generating interest.",
+      eyebrow: "Inventory foundation",
+      title: "Inventory Match",
+      summary: "Watch feed health, search stock quickly, and see which vehicles are creating demand.",
     },
     Conversations: {
       eyebrow: "Communication feed",
-      title: "Recent conversations",
-      summary: "Review the latest calls and SMS without mixing them into the rest of the CRM navigation.",
+      title: "Calls & SMS",
+      summary: "Review the latest customer conversations without mixing them into the lead queue.",
     },
     Unmatched: {
-      eyebrow: "Resolution queue",
-      title: "Unknown inbound traffic",
-      summary: "Resolve inbound calls and SMS that arrived without a matching lead before they get lost.",
+      eyebrow: "Unknown inbound traffic",
+      title: "Unmatched",
+      summary: "Resolve inbound calls and SMS that arrived without a matched lead before they get lost.",
     },
     Team: {
       eyebrow: "Routing and access",
-      title: "Team management",
-      summary: "Control roster access, routing days, availability, and texting automation from one admin workspace.",
+      title: "Team",
+      summary: "Control roster access, routing availability, and automation settings from one admin workspace.",
     },
   }[activeSection] || {
     eyebrow: "Workspace",
@@ -1884,10 +2042,7 @@ export default function App() {
               onSelectSection={(section) => {
                 openSection(section);
               }}
-              toolCounts={{
-                Conversations: visibleConversationFeed.length,
-                Unmatched: unmatchedItems.filter((item) => item.status === "new").length,
-              }}
+              toolCounts={sectionCounts}
               currentUser={
                 currentUser
                   ? {
@@ -1915,10 +2070,7 @@ export default function App() {
               onSelectSection={(section) => {
                 openSection(section);
               }}
-              toolCounts={{
-                Conversations: visibleConversationFeed.length,
-                Unmatched: unmatchedItems.filter((item) => item.status === "new").length,
-              }}
+              toolCounts={sectionCounts}
               currentUser={
                 currentUser
                   ? {
@@ -1943,32 +2095,44 @@ export default function App() {
           } backdrop-blur`}
         >
           <header
-            className={`crm-header-shell flex flex-col gap-4 ${
+            className={`crm-header-shell flex flex-col gap-5 ${
               immersivePipelineShell
                 ? "px-6 py-5 lg:flex-row lg:items-center lg:justify-between"
-                : "pb-2 lg:flex-row lg:items-start lg:justify-between"
+                : "pb-4 lg:flex-row lg:items-start lg:justify-between"
             }`}
           >
             <div>
-              <p className="text-xs uppercase tracking-[0.34em] text-slate-500">{pageCopy.eyebrow}</p>
-              <h1 className={`mt-2 font-display font-semibold text-white ${immersivePipelineShell ? "text-2xl sm:text-3xl" : "text-3xl sm:text-4xl"}`}>{pageCopy.title}</h1>
-              <p className={`mt-2 ${immersivePipelineShell ? "max-w-4xl text-sm leading-6" : "max-w-3xl text-sm leading-7"} text-slate-300`}>
+              <p className="crm-header-eyebrow">{pageCopy.eyebrow}</p>
+              <h1 className={`crm-header-title ${immersivePipelineShell ? "text-2xl sm:text-3xl" : "text-3xl sm:text-[2rem]"}`}>{pageCopy.title}</h1>
+              <p className={`crm-header-summary ${immersivePipelineShell ? "max-w-4xl" : "max-w-3xl"}`}>
                 {pageCopy.summary}
               </p>
-              <p className={`text-xs uppercase tracking-[0.26em] text-slate-500 ${immersivePipelineShell ? "mt-2" : "mt-3"}`}>
+              <p className={`crm-header-meta ${immersivePipelineShell ? "mt-2" : "mt-3"}`}>
                 Signed in as {currentUser?.name} | {currentUser?.role}
               </p>
             </div>
 
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
               <button
                 type="button"
                 onClick={() => setSidebarOpen(true)}
                 aria-label="Open navigation"
                 title="Open navigation"
-                className="crm-icon-button inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10 xl:hidden"
+                className="crm-icon-button inline-flex h-11 w-11 items-center justify-center xl:hidden"
               >
                 <Menu className="h-4 w-4" />
+              </button>
+              {missedCallRecoveryCount ? (
+                <div className="crm-alert-pill">
+                  {missedCallRecoveryCount} missed call{missedCallRecoveryCount === 1 ? "" : "s"} need recovery
+                </div>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => openSection(currentUser?.role === "admin" || currentUser?.role === "manager" ? "Leads" : "Conversations")}
+                className="crm-primary-button inline-flex items-center justify-center gap-2 px-4 py-3 text-sm font-semibold"
+              >
+                {currentUser?.role === "admin" || currentUser?.role === "manager" ? "Open lead desk" : "Open my desk"}
               </button>
               <NotificationTray
                 notifications={notifications}
@@ -1982,18 +2146,18 @@ export default function App() {
                 onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
                 aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
                 title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-                className="crm-icon-button inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10"
+                className="crm-icon-button inline-flex h-11 w-11 items-center justify-center"
               >
                 {theme === "dark" ? <SunMedium className="h-4 w-4" /> : <MoonStar className="h-4 w-4" />}
               </button>
               <button
                 type="button"
                 onClick={handleLogout}
-                className="crm-secondary-button inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+                className="crm-secondary-button inline-flex items-center justify-center gap-2 px-4 py-3 text-sm font-semibold"
               >
                 Logout
               </button>
-              <label className="crm-search-shell flex min-w-[260px] items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.03] px-4 py-3 text-slate-300 focus-within:border-ice-400/30 focus-within:bg-white/[0.06]">
+              <label className="crm-search-shell flex min-w-[300px] items-center gap-3 px-4 py-3 text-slate-300">
                 <Search className="h-4 w-4 text-slate-500" />
                 <input
                   value={query}
@@ -2003,7 +2167,7 @@ export default function App() {
                     });
                   }}
                   className="w-full bg-transparent text-sm text-white outline-none placeholder:text-slate-500"
-                  placeholder="Search customer, vehicle, source..."
+                  placeholder="Search customer, VIN, stock #, phone, task..."
                 />
               </label>
             </div>
@@ -2045,179 +2209,247 @@ export default function App() {
               <div className="crm-workspace-panel rounded-[2rem] bg-white/[0.02] p-4 sm:p-5">
                 {showDashboard ? (
                   <div className="grid gap-6">
-                    <div className="grid gap-6 2xl:grid-cols-[minmax(0,1.2fr)_360px]">
-                      <div className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-cyan-400/10 via-white/[0.04] to-amber-400/10 p-6">
-                        <div className="absolute inset-y-0 right-0 w-1/2 bg-[radial-gradient(circle_at_top_right,_rgba(255,255,255,0.18),_transparent_62%)]" />
-                        <div className="relative">
-                          <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Dealership command center</p>
-                          <h2 className="mt-3 max-w-2xl font-display text-3xl font-semibold text-white">
-                            Use the dashboard to direct the operation, not to work every single lead.
-                          </h2>
-                          <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">
-                            The desk is now split on purpose. Dashboard gives you command visibility, Leads is the working pipeline, and Assignments is the ownership board for managers.
-                          </p>
-                          <div className="mt-6 flex flex-wrap gap-3">
-                            <button
-                              type="button"
-                              onClick={() => openSection("Leads")}
-                              className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-ink-950 transition hover:bg-slate-100"
-                            >
-                              Open lead desk
-                            </button>
-                            {currentUser?.role === "admin" || currentUser?.role === "manager" ? (
-                              <button
-                                type="button"
-                                onClick={() => openSection("Assignments")}
-                                className="rounded-2xl border border-white/15 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
-                              >
-                                Open assignments
-                              </button>
-                            ) : null}
-                            <button
-                              type="button"
-                              onClick={() => openSection("Inventory")}
-                              className="rounded-2xl border border-white/15 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
-                            >
-                              Open inventory
-                            </button>
-                          </div>
-
-                          <div className="mt-8 grid gap-3 md:grid-cols-3">
-                            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Needs attention</p>
-                              <p className="mt-2 text-3xl font-semibold text-white">{String(metrics.needs_attention_count).padStart(2, "0")}</p>
-                              <p className="mt-2 text-sm text-slate-300">Work these from the lead desk.</p>
-                            </div>
-                            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Overdue tasks</p>
-                              <p className="mt-2 text-3xl font-semibold text-white">{String(metrics.overdue_task_count).padStart(2, "0")}</p>
-                              <p className="mt-2 text-sm text-slate-300">Follow-ups waiting on a rep response.</p>
-                            </div>
-                            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Unread alerts</p>
-                              <p className="mt-2 text-3xl font-semibold text-white">{String(metrics.unread_notification_count).padStart(2, "0")}</p>
-                              <p className="mt-2 text-sm text-slate-300">Routing changes, escalations, and desk alerts.</p>
-                            </div>
-                          </div>
-                        </div>
+                    <div className="crm-stats-grid">
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{visibleLeadTable.length}</p>
+                        <p className="crm-stat-title">Fresh leads</p>
+                        <p className="crm-stat-note">{visibleAttentionLeads.length} need contact right now</p>
                       </div>
-
-                      <div className="grid gap-4">
-                        <MetricCard
-                          eyebrow="Tracked leads"
-                          value={analytics.totalLeads}
-                          detail="Visible leads already inside the CRM today."
-                          accent="from-cyan-500/20 to-transparent"
-                        />
-                        <MetricCard
-                          eyebrow="Unassigned"
-                          value={analytics.unassignedCount}
-                          detail="Leads still waiting for ownership."
-                          accent="from-amber-500/20 to-transparent"
-                        />
-                        <MetricCard
-                          eyebrow="Conversations"
-                          value={analytics.conversationsCount}
-                          detail="Recent calls and SMS tied back to lead history."
-                          accent="from-lime-500/20 to-transparent"
-                        />
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{missedCallRecoveryCount}</p>
+                        <p className="crm-stat-title">Missed calls</p>
+                        <p className="crm-stat-note">{sectionCounts.Unmatched} unmatched items waiting for recovery</p>
+                      </div>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{appointmentCount}</p>
+                        <p className="crm-stat-title">Appointments</p>
+                        <p className="crm-stat-note">{routingOpenRepCount} reps open for new routing</p>
+                      </div>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{formatCurrencyCompact(openGrossPotential)}</p>
+                        <p className="crm-stat-title">Open gross potential</p>
+                        <p className="crm-stat-note">{analytics.unassignedCount} visible leads still unassigned</p>
                       </div>
                     </div>
 
-                    <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-                      <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-                        <div className="flex items-end justify-between gap-4 border-b border-white/10 pb-4">
+                    <div className="crm-dashboard-grid">
+                      <div className="crm-panel-card crm-panel-span-2">
+                        <div className="crm-panel-header">
                           <div>
-                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Priority snapshot</p>
-                            <h3 className="mt-2 font-display text-2xl font-semibold text-white">Immediate desk pressure</h3>
+                            <h3>Hot leads needing contact</h3>
+                            <p>Priority queue with live ownership, urgency, and action links.</p>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => openSection("Leads")}
-                            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/10"
-                          >
-                            View all
-                          </button>
-                        </div>
-                        <div className="mt-4 grid gap-3">
-                          {visibleAttentionLeads.slice(0, 5).map((lead) => (
-                            <button
-                              key={lead.id}
-                              type="button"
-                              onClick={() => {
-                                openSection("Leads");
-                                openLeadModal(lead.id);
-                              }}
-                              className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] p-4 text-left transition hover:border-white/20 hover:bg-white/[0.06]"
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <h4 className="truncate font-semibold text-white">{lead.customerName}</h4>
-                                    <span className="rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-200">
-                                      {lead.attentionReason}
-                                    </span>
-                                  </div>
-                                  <p className="mt-1 truncate text-sm text-slate-300">{lead.vehicleInterest}</p>
-                                </div>
-                                <span className="shrink-0 text-xs uppercase tracking-[0.18em] text-slate-500">{lead.lastActivity}</span>
-                              </div>
+                          <div className="flex items-center gap-2">
+                            <span className="crm-chip red">{hotLeadRows.length} urgent</span>
+                            <button type="button" onClick={() => openSection("Leads")} className="crm-table-button">
+                              View all
                             </button>
-                          ))}
-                          {!visibleAttentionLeads.length ? (
-                            <div className="rounded-[1.5rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                              Nothing urgent is waiting right now.
-                            </div>
-                          ) : null}
+                          </div>
+                        </div>
+                        {hotLeadRows.length ? (
+                          <div className="crm-table-wrap">
+                            <table className="crm-data-table">
+                              <thead>
+                                <tr>
+                                  <th>Customer</th>
+                                  <th>Vehicle</th>
+                                  <th>Source</th>
+                                  <th>Status</th>
+                                  <th>Last touch</th>
+                                  <th>Owner</th>
+                                  <th>Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {hotLeadRows.map((lead) => (
+                                  <tr key={lead.id}>
+                                    <td>
+                                      <div className="crm-row-primary">{lead.customerName}</div>
+                                      <div className="crm-row-secondary">{lead.phone}</div>
+                                    </td>
+                                    <td>
+                                      <div className="crm-row-primary">{buildVehicleLabel(lead)}</div>
+                                      <div className="crm-row-secondary">
+                                        {lead.stockNumber ? `Stock #${lead.stockNumber}` : lead.vehicleCondition || "Vehicle inquiry"}
+                                      </div>
+                                    </td>
+                                    <td>{lead.source}</td>
+                                    <td>
+                                      <span className={`crm-chip ${getLeadChipTone(lead)}`}>
+                                        {lead.attentionReason || lead.statusLabel}
+                                      </span>
+                                    </td>
+                                    <td>{lead.lastActivity}</td>
+                                    <td>{lead.assignedRep}</td>
+                                    <td>
+                                      <div className="crm-row-actions">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            openSection("Leads");
+                                            openLeadModal(lead.id);
+                                          }}
+                                          className="crm-table-button"
+                                        >
+                                          Open
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <div className="crm-empty-state">No hot leads are waiting right now.</div>
+                        )}
+                      </div>
+
+                      <div className="crm-panel-card">
+                        <div className="crm-panel-header">
+                          <div>
+                            <h3>Appointments today</h3>
+                            <p>Leads already pushed forward and needing confirmation.</p>
+                          </div>
+                          <span className="crm-chip blue">{appointmentCount} total</span>
+                        </div>
+                        <div className="crm-list-stack">
+                          {appointmentPreview.length ? (
+                            appointmentPreview.map((lead) => (
+                              <button
+                                key={lead.id}
+                                type="button"
+                                onClick={() => openLeadModal(lead.id)}
+                                className="crm-list-item"
+                              >
+                                <div className="crm-list-item-row">
+                                  <strong>{lead.customerName}</strong>
+                                  <span className="crm-chip green">{lead.statusLabel}</span>
+                                </div>
+                                <div className="crm-list-item-meta">{buildVehicleLabel(lead)}</div>
+                                <div className="crm-list-item-meta">
+                                  {lead.assignedRep} | {lead.lastActivity}
+                                </div>
+                              </button>
+                            ))
+                          ) : (
+                            <div className="crm-empty-state compact">No appointment-stage leads in this view.</div>
+                          )}
                         </div>
                       </div>
 
-                      <div className="grid gap-4">
-                        <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Routing health</p>
-                          <div className="mt-4 grid gap-3">
-                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
-                              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Open reps</p>
-                              <p className="mt-2 text-xl font-semibold text-white">{routingOpenRepCount}</p>
-                            </div>
-                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
-                              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Paused reps</p>
-                              <p className="mt-2 text-xl font-semibold text-white">{routingPausedRepCount}</p>
-                            </div>
-                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
-                              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Unmatched queue</p>
-                              <p className="mt-2 text-xl font-semibold text-white">
-                                {unmatchedItems.filter((item) => item.status === "new").length}
-                              </p>
-                            </div>
+                      <div className="crm-panel-card">
+                        <div className="crm-panel-header">
+                          <div>
+                            <h3>Rep performance</h3>
+                            <p>Conversation volume and owned desk load for the visible queue.</p>
+                          </div>
+                          <span className="crm-chip">Today</span>
+                        </div>
+                        <div className="crm-list-stack">
+                          {repPerformance.length ? (
+                            repPerformance.map((user) => {
+                              const progress = Math.min(100, Math.max(8, user.contactCount * 10));
+                              return (
+                                <div key={user.id} className="crm-list-item static">
+                                  <div className="crm-list-item-row">
+                                    <strong>{user.name}</strong>
+                                    <span>{user.contactCount} contacts</span>
+                                  </div>
+                                  <div className="crm-progress">
+                                    <div style={{ width: `${progress}%` }} />
+                                  </div>
+                                  <div className="crm-list-item-meta">
+                                    {user.assignedLeadCount} owned leads | {user.ownedAppointments} appointments
+                                  </div>
+                                </div>
+                              );
+                            })
+                          ) : (
+                            <div className="crm-empty-state compact">No sales rep activity in the current filtered view.</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="crm-dashboard-lower">
+                      <div className="crm-panel-card">
+                        <div className="crm-panel-header">
+                          <div>
+                            <h3>Calls & SMS</h3>
+                            <p>Recent communication touching the visible lead desk.</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="crm-chip blue">{conversationCallCount} calls</span>
+                            <span className="crm-chip green">{conversationSmsCount} sms</span>
                           </div>
                         </div>
+                        <div className="crm-list-stack">
+                          {recentConversationPreview.length ? (
+                            recentConversationPreview.map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => {
+                                  openSection("Conversations");
+                                  if (item.leadId) {
+                                    openLeadModal(item.leadId);
+                                  }
+                                }}
+                                className="crm-list-item"
+                              >
+                                <div className="crm-list-item-row">
+                                  <strong>{item.leadName || item.externalNumber || "Unknown contact"}</strong>
+                                  <span className={`crm-chip ${getConversationChipTone(item)}`}>
+                                    {item.type === "call" ? formatDurationShort(item.durationSeconds) : item.direction}
+                                  </span>
+                                </div>
+                                <div className="crm-list-item-meta">{item.preview || item.vehicleInterest}</div>
+                                <div className="crm-list-item-meta">
+                                  {item.assignedRep} | {item.happenedAtLabel}
+                                </div>
+                              </button>
+                            ))
+                          ) : (
+                            <div className="crm-empty-state compact">No recent calls or SMS match this filter.</div>
+                          )}
+                        </div>
+                      </div>
 
-                        <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
-                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Operational launchpad</p>
-                          <div className="mt-4 grid gap-3">
-                            <button
-                              type="button"
-                              onClick={() => openSection("Conversations")}
-                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
-                            >
-                              Open conversations
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => openSection("Unmatched")}
-                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
-                            >
-                              Resolve unmatched traffic
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => openSection("Inventory")}
-                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.08]"
-                            >
-                              Open stock workspace
-                            </button>
+                      <div className="crm-panel-card">
+                        <div className="crm-panel-header">
+                          <div>
+                            <h3>Desk launchpad</h3>
+                            <p>Fast links back into the parts of the CRM that need action.</p>
                           </div>
+                          <span className="crm-chip amber">{metrics.unread_notification_count} alerts</span>
+                        </div>
+                        {selectedLead ? (
+                          <div className="crm-focus-card">
+                            <div className="crm-focus-label">Current focus</div>
+                            <h4>{selectedLead.customerName}</h4>
+                            <p>{buildVehicleLabel(selectedLead)}</p>
+                            <div className="crm-focus-meta">
+                              <span className={`crm-chip ${getLeadChipTone(selectedLead)}`}>
+                                {selectedLead.attentionReason || selectedLead.statusLabel}
+                              </span>
+                              <span className="crm-chip">{selectedLead.assignedRep}</span>
+                            </div>
+                          </div>
+                        ) : null}
+                        <div className="crm-quick-links">
+                          <button type="button" onClick={() => openSection("Leads")} className="crm-action-tile">
+                            Open lead desk
+                          </button>
+                          <button type="button" onClick={() => openSection("Conversations")} className="crm-action-tile">
+                            Review calls & SMS
+                          </button>
+                          <button type="button" onClick={() => openSection("Unmatched")} className="crm-action-tile">
+                            Resolve unknown inbox
+                          </button>
+                          <button type="button" onClick={() => openSection("Inventory")} className="crm-action-tile">
+                            Open inventory match
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -2226,191 +2458,235 @@ export default function App() {
 
                 {showLeads ? (
                   <>
-                    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
-                      <div className="rounded-[1.75rem] bg-white/[0.025] p-5">
-                        <div>
-                          <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Lead desk</p>
-                          <h2 className="mt-2 font-display text-2xl font-semibold text-white">Work the next best follow-up</h2>
-                          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-                            Reps should be able to scan this page in seconds: who needs attention, why they need it, and where to go next.
-                          </p>
-                        </div>
-                        <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                          <div className="rounded-[1.35rem] bg-white/[0.03] px-4 py-4">
-                            <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Needs attention</p>
-                            <p className="mt-2 text-3xl font-semibold text-white">{visibleAttentionLeads.length}</p>
-                            <p className="mt-1 text-sm text-slate-400">Priority follow-up queue</p>
-                          </div>
-                          <div className="rounded-[1.35rem] bg-white/[0.03] px-4 py-4">
-                            <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Open tasks</p>
-                            <p className="mt-2 text-3xl font-semibold text-white">
-                              {visibleAttentionLeads.reduce((sum, lead) => sum + Number(lead.openTasks?.length || 0), 0)}
-                            </p>
-                            <p className="mt-1 text-sm text-slate-400">Tasks attached to visible queue</p>
-                          </div>
-                          <div className="rounded-[1.35rem] bg-white/[0.03] px-4 py-4">
-                            <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Appointments</p>
-                            <p className="mt-2 text-3xl font-semibold text-white">{appointmentCount}</p>
-                            <p className="mt-1 text-sm text-slate-400">Leads already moved forward</p>
-                          </div>
-                        </div>
+                    <div className="crm-stats-grid">
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{visibleAttentionLeads.length}</p>
+                        <p className="crm-stat-title">Needs attention</p>
+                        <p className="crm-stat-note">Priority follow-up queue</p>
                       </div>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{visibleOpenTaskCount}</p>
+                        <p className="crm-stat-title">Open tasks</p>
+                        <p className="crm-stat-note">Tasks attached to the visible lead desk</p>
+                      </div>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{appointmentCount}</p>
+                        <p className="crm-stat-title">Booked</p>
+                        <p className="crm-stat-note">Appointment-stage leads in this view</p>
+                      </div>
+                      <div className="crm-stat-card">
+                        <p className="crm-stat-value">{analytics.unassignedCount}</p>
+                        <p className="crm-stat-title">Needs owner</p>
+                        <p className="crm-stat-note">Visible leads without a rep</p>
+                      </div>
+                    </div>
 
-                      <div className="rounded-[1.75rem] bg-white/[0.025] p-5">
-                        <div className="flex flex-col gap-4">
-                          <label className="grid gap-2">
-                            <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Stage filter</span>
-                            <select
-                              value={leadStatusFilter}
-                              onChange={(event) => setLeadStatusFilter(event.target.value)}
-                              className="rounded-2xl border border-white/[0.06] bg-white/[0.04] px-4 py-3 text-sm text-white outline-none"
-                            >
-                              <option value="all" className="bg-ink-900">
-                                All stages
-                              </option>
-                              {pipelineStages.map((status) => (
-                                <option key={status} value={status} className="bg-ink-900">
-                                  {pipelineLabel(status)}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <div className="grid gap-3">
+                    <div className="grid gap-6 xl:grid-cols-[minmax(0,1.18fr)_320px]">
+                      <div className="crm-panel-card">
+                        <div className="crm-panel-header">
+                          <div>
+                            <h3>Lead command center</h3>
+                            <p>Dense operating table with source, ownership, urgency, and next-action control.</p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
                             <button
                               type="button"
-                              onClick={() => openSection("Pipeline")}
-                              className="rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold text-ink-950 transition hover:bg-slate-100"
+                              onClick={() => setLeadStatusFilter("all")}
+                              className={`crm-chip-button ${leadStatusFilter === "all" ? "active" : ""}`}
                             >
+                              All
+                            </button>
+                            {pipelineStages.map((status) => (
+                              <button
+                                key={status}
+                                type="button"
+                                onClick={() => setLeadStatusFilter(status)}
+                                className={`crm-chip-button ${leadStatusFilter === status ? "active" : ""}`}
+                              >
+                                {pipelineLabel(status)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {canBulkAutoAssign ? (
+                          <div className="crm-bulk-bar">
+                            <div>
+                              <p className="crm-bulk-title">Bulk routing</p>
+                              <p className="crm-bulk-note">
+                                Select visible unassigned leads, then auto-route them using your existing ownership rules.
+                              </p>
+                            </div>
+                            <div className="crm-bulk-actions">
+                              <span className="crm-chip">{selectedAutoAssignLeadIds.length} selected</span>
+                              <button
+                                type="button"
+                                onClick={selectVisibleBulkAssignableLeads}
+                                disabled={!visibleBulkAssignableLeadIds.length || bulkAutoAssigning}
+                                className="crm-table-button"
+                              >
+                                Select visible
+                              </button>
+                              <button
+                                type="button"
+                                onClick={clearBulkLeadSelection}
+                                disabled={!selectedAutoAssignLeadIds.length || bulkAutoAssigning}
+                                className="crm-table-button"
+                              >
+                                Clear
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleBulkAutoAssign}
+                                disabled={!selectedAutoAssignLeadIds.length || bulkAutoAssigning}
+                                className="crm-table-button primary"
+                              >
+                                {bulkAutoAssigning ? "Auto-assigning..." : "Auto-assign"}
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {visibleLeadTable.length ? (
+                          <div className="crm-table-wrap">
+                            <table className="crm-data-table">
+                              <thead>
+                                <tr>
+                                  {canBulkAutoAssign ? <th>Select</th> : null}
+                                  <th>Customer</th>
+                                  <th>Vehicle</th>
+                                  <th>Source</th>
+                                  <th>Status</th>
+                                  <th>Last contact</th>
+                                  <th>Next action</th>
+                                  <th>Owner</th>
+                                  <th>Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {visibleLeadTable.map((lead) => {
+                                  const selectable = canBulkAutoAssign && !lead.assignedTo;
+                                  return (
+                                    <tr key={lead.id}>
+                                      {canBulkAutoAssign ? (
+                                        <td>
+                                          {selectable ? (
+                                            <input
+                                              type="checkbox"
+                                              checked={selectedAutoAssignLeadIds.includes(Number(lead.id))}
+                                              onChange={() => toggleBulkLeadSelection(lead.id)}
+                                              disabled={bulkAutoAssigning}
+                                              className="crm-row-select"
+                                            />
+                                          ) : (
+                                            <span className="crm-row-secondary">-</span>
+                                          )}
+                                        </td>
+                                      ) : null}
+                                      <td>
+                                        <div className="crm-row-primary">{lead.customerName}</div>
+                                        <div className="crm-row-secondary">{lead.phone}</div>
+                                      </td>
+                                      <td>
+                                        <div className="crm-row-primary">{buildVehicleLabel(lead)}</div>
+                                        <div className="crm-row-secondary">
+                                          {lead.stockNumber ? `Stock #${lead.stockNumber}` : lead.vehicleCondition || "No stock linked"}
+                                        </div>
+                                      </td>
+                                      <td>{lead.source}</td>
+                                      <td>
+                                        <span className={`crm-chip ${getLeadChipTone(lead)}`}>
+                                          {lead.attentionReason || lead.statusLabel}
+                                        </span>
+                                      </td>
+                                      <td>{lead.lastActivity}</td>
+                                      <td>
+                                        <div className="crm-row-primary">{getLeadNextAction(lead)}</div>
+                                        <div className="crm-row-secondary">{lead.messagePreview}</div>
+                                      </td>
+                                      <td>{lead.assignedRep}</td>
+                                      <td>
+                                        <div className="crm-row-actions">
+                                          <button type="button" onClick={() => openLeadModal(lead.id)} className="crm-table-button">
+                                            Open
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <div className="crm-empty-state">No leads match the current search or stage filter.</div>
+                        )}
+                      </div>
+
+                      <div className="grid gap-4">
+                        <div className="crm-panel-card">
+                          <div className="crm-panel-header">
+                            <div>
+                              <h3>Quick routes</h3>
+                              <p>Jump into the workflow board that matches the desk task.</p>
+                            </div>
+                          </div>
+                          <div className="crm-quick-links">
+                            <button type="button" onClick={() => openSection("Pipeline")} className="crm-action-tile">
                               Open pipeline board
                             </button>
                             {currentUser?.role === "admin" || currentUser?.role === "manager" ? (
-                              <button
-                                type="button"
-                                onClick={() => openSection("Assignments")}
-                                className="rounded-2xl bg-white/[0.05] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.09]"
-                              >
+                              <button type="button" onClick={() => openSection("Assignments")} className="crm-action-tile">
                                 Open assignment board
                               </button>
                             ) : null}
-                            <button
-                              type="button"
-                              onClick={() => openSection("Conversations")}
-                              className="rounded-2xl bg-white/[0.05] px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/[0.09]"
-                            >
+                            <button type="button" onClick={() => openSection("Conversations")} className="crm-action-tile">
                               Review conversations
                             </button>
                           </div>
                         </div>
-                      </div>
-                    </div>
 
-                    {canBulkAutoAssign ? (
-                      <div className="mt-4 flex flex-col gap-3 rounded-[1.5rem] bg-white/[0.025] p-4 xl:flex-row xl:items-center xl:justify-between">
-                          <div>
-                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Bulk routing</p>
-                            <p className="mt-1 text-sm text-slate-300">
-                              Select unassigned leads from the queue, then auto-route them using contact ownership and current routing rules.
-                            </p>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
-                              {selectedAutoAssignLeadIds.length} selected
-                            </span>
-                            <button
-                              type="button"
-                              onClick={selectVisibleBulkAssignableLeads}
-                              disabled={!visibleBulkAssignableLeadIds.length || bulkAutoAssigning}
-                              className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              Select visible unassigned
-                            </button>
-                            <button
-                              type="button"
-                              onClick={clearBulkLeadSelection}
-                              disabled={!selectedAutoAssignLeadIds.length || bulkAutoAssigning}
-                              className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              Clear
-                            </button>
-                            <button
-                              type="button"
-                              onClick={handleBulkAutoAssign}
-                              disabled={!selectedAutoAssignLeadIds.length || bulkAutoAssigning}
-                              className="rounded-full border border-cyan-400/30 bg-cyan-400/15 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 transition hover:border-cyan-300/40 hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              {bulkAutoAssigning ? "Auto-assigning..." : "Auto-assign selected"}
-                            </button>
-                          </div>
-                      </div>
-                    ) : null}
-
-                    <div className="mt-4 grid gap-6 xl:grid-cols-[minmax(0,1.18fr)_320px]">
-                      <div className="rounded-[1.75rem] bg-white/[0.02] p-5">
-                        <div className="mb-4 flex items-end justify-between gap-3">
-                          <div>
-                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Priority queue</p>
-                            <h3 className="mt-1 font-display text-xl font-semibold text-white">Needs attention</h3>
-                            <p className="mt-1 text-sm text-slate-400">The fastest path to keeping reps on track.</p>
-                          </div>
-                          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300">
-                            {visibleAttentionLeads.length}
-                          </span>
-                        </div>
-                        <div className="grid max-h-[980px] gap-4 overflow-y-auto pr-1">
-                          {visibleAttentionLeads.length ? (
-                            visibleAttentionLeads.map((lead) => (
-                              <AttentionLeadCard
-                                key={lead.id}
-                                lead={lead}
-                                selected={lead.id === selectedLead?.id}
-                                canSelect={canBulkAutoAssign && !lead.assignedTo}
-                                selectionChecked={selectedAutoAssignLeadIds.includes(Number(lead.id))}
-                                onToggleSelect={toggleBulkLeadSelection}
-                                onSelect={() => {
-                                  openLeadModal(lead.id);
-                                }}
-                              />
-                            ))
-                          ) : (
-                            <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] px-5 py-10 text-center text-slate-400">
-                              No leads require attention right now.
+                        <div className="crm-panel-card">
+                          <div className="crm-panel-header">
+                            <div>
+                              <h3>Pipeline snapshot</h3>
+                              <p>Visible counts by stage for the active filter and search.</p>
                             </div>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="grid gap-4">
-                        <div className="rounded-[1.75rem] bg-white/[0.025] p-5">
-                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Pipeline snapshot</p>
-                          <div className="mt-4 grid gap-3">
+                          </div>
+                          <div className="crm-list-stack">
                             {pipelineStages.map((status) => (
-                              <div key={status} className="flex items-center justify-between rounded-2xl bg-white/[0.03] px-4 py-3">
-                                <span className="text-sm font-medium text-white">{pipelineLabel(status)}</span>
-                                <span className="rounded-full bg-white/5 px-3 py-1 text-xs font-semibold text-slate-300">
-                                  {(visiblePipelineGroups[status] || []).length}
-                                </span>
+                              <div key={status} className="crm-list-item static">
+                                <div className="crm-list-item-row">
+                                  <strong>{pipelineLabel(status)}</strong>
+                                  <span className="crm-chip">{(visiblePipelineGroups[status] || []).length}</span>
+                                </div>
                               </div>
                             ))}
                           </div>
                         </div>
 
                         {selectedLead ? (
-                          <div className="rounded-[1.75rem] bg-white/[0.025] p-5">
-                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Current focus</p>
-                            <h3 className="mt-2 font-display text-xl font-semibold text-white">{selectedLead.customerName}</h3>
-                            <p className="mt-2 text-sm leading-6 text-slate-300">{selectedLead.vehicleInterest}</p>
-                            <div className="mt-4 flex flex-wrap gap-2 text-xs">
-                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-slate-300">{selectedLead.assignedRep}</span>
-                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-slate-300">{selectedLead.source}</span>
-                              <span className="rounded-full bg-white/5 px-3 py-1.5 text-slate-300">{selectedLead.statusLabel}</span>
+                          <div className="crm-panel-card">
+                            <div className="crm-panel-header">
+                              <div>
+                                <h3>Current focus</h3>
+                                <p>Lead detail shortcut for whatever the desk is working right now.</p>
+                              </div>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => openLeadModal(selectedLead.id)}
-                              className="mt-4 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
-                            >
-                              Open lead popup
-                            </button>
+                            <div className="crm-focus-card">
+                              <div className="crm-focus-label">{selectedLead.source}</div>
+                              <h4>{selectedLead.customerName}</h4>
+                              <p>{buildVehicleLabel(selectedLead)}</p>
+                              <div className="crm-focus-meta">
+                                <span className={`crm-chip ${getLeadChipTone(selectedLead)}`}>
+                                  {selectedLead.attentionReason || selectedLead.statusLabel}
+                                </span>
+                                <span className="crm-chip">{selectedLead.assignedRep}</span>
+                              </div>
+                              <button type="button" onClick={() => openLeadModal(selectedLead.id)} className="crm-table-button primary">
+                                Open lead popup
+                              </button>
+                            </div>
                           </div>
                         ) : null}
                       </div>
