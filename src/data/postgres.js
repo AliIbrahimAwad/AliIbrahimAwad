@@ -15,7 +15,7 @@ const {
   titleCaseStatus,
   toStoredStatus,
 } = require("./core");
-const { canViewAllLeads } = require("../models/user");
+const { canViewAllLeads, normalizeUserRole } = require("../models/user");
 const { LEAD_ACTIVITY_TYPES } = require("../types/models");
 const { normalizePhone } = require("../utils/phones");
 const { toDateOnlyString } = require("../utils/dates");
@@ -1294,7 +1294,7 @@ class PostgresCrmDatabase extends BaseCrmDatabase {
       name: row.name,
       email: row.email,
       password_hash: row.password_hash,
-      role: row.role,
+      role: normalizeUserRole(row.role),
       is_active: availability.is_active,
       is_available: availability.is_available,
       working_days: availability.working_days,

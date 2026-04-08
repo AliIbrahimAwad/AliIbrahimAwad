@@ -268,6 +268,10 @@ function formatInventoryImportError(item) {
   return { id: item.id, rowNumber: item.row_number ?? null, stockNumber: item.stock_number || "", vin: item.vin || "", errorMessage: item.error_message || "" };
 }
 
+function isIgnorableBootstrapError(message) {
+  return /inventory unit not found/i.test(String(message || ""));
+}
+
 export default function App() {
   const [authStatus, setAuthStatus] = useState("loading");
   const [authLoading, setAuthLoading] = useState(false);
@@ -330,6 +334,44 @@ export default function App() {
   const isManagerViewAllowed = currentUser?.role === "admin" || currentUser?.role === "manager";
   const effectiveViewMode = isManagerViewAllowed ? viewMode : "rep";
 
+  async function loadInventoryHealthData({ includeInventoryList = false } = {}) {
+    const resultEntries = await Promise.allSettled([
+      includeInventoryList ? getInventory({ limit: 200 }) : Promise.resolve(null),
+      getInventoryImportRuns(10),
+      isManagerViewAllowed ? getInventoryImportErrors({ source_type: "ftp_sync", limit: 6 }) : Promise.resolve({ items: [] }),
+      isManagerViewAllowed ? getInventorySyncStatus() : Promise.resolve(null),
+    ]);
+
+    const [inventoryResult, runsResult, importErrorsResult, syncStatusResult] = resultEntries;
+    let firstError = "";
+
+    if (inventoryResult.status === "fulfilled" && inventoryResult.value) {
+      setInventoryItems((inventoryResult.value.items || []).map(formatInventoryItem));
+    } else if (inventoryResult.status === "rejected" && !isIgnorableBootstrapError(inventoryResult.reason?.message)) {
+      firstError = firstError || inventoryResult.reason?.message || "";
+    }
+
+    if (runsResult.status === "fulfilled") {
+      setInventoryImportRuns((runsResult.value.items || []).map(formatInventoryRun));
+    } else if (!isIgnorableBootstrapError(runsResult.reason?.message)) {
+      firstError = firstError || runsResult.reason?.message || "";
+    }
+
+    if (importErrorsResult.status === "fulfilled") {
+      setInventoryImportErrors((importErrorsResult.value.items || []).map(formatInventoryImportError));
+    } else if (!isIgnorableBootstrapError(importErrorsResult.reason?.message)) {
+      firstError = firstError || importErrorsResult.reason?.message || "";
+    }
+
+    if (syncStatusResult.status === "fulfilled") {
+      setInventorySyncStatus(syncStatusResult.value);
+    } else if (!isIgnorableBootstrapError(syncStatusResult.reason?.message)) {
+      firstError = firstError || syncStatusResult.reason?.message || "";
+    }
+
+    return firstError;
+  }
+
   useEffect(() => {
     let active = true;
     getSession()
@@ -380,13 +422,9 @@ export default function App() {
         getLeads({ limit: 250 }),
         getConversations(120),
         getUnmatchedCommunications({ limit: 200 }),
-        getInventory({ limit: 200 }),
         isManagerViewAllowed ? getUsers() : Promise.resolve({ items: [] }),
         isManagerViewAllowed ? getAssignableUsers() : Promise.resolve({ items: [] }),
         isManagerViewAllowed ? getExecutionSettings() : Promise.resolve(null),
-        getInventoryImportRuns(10),
-        isManagerViewAllowed ? getInventoryImportErrors({ source_type: "ftp_sync", limit: 6 }) : Promise.resolve({ items: [] }),
-        isManagerViewAllowed ? getInventorySyncStatus() : Promise.resolve(null),
       ]);
 
       const [
@@ -394,13 +432,9 @@ export default function App() {
         leadsResult,
         conversationsResult,
         unmatchedResult,
-        inventoryResult,
         usersResult,
         assigneesResult,
         settingsResult,
-        runsResult,
-        importErrorsResult,
-        syncStatusResult,
       ] = resultEntries;
 
       const authError = resultEntries.find((entry) => entry.status === "rejected" && entry.reason?.status === 401);
@@ -444,12 +478,6 @@ export default function App() {
         firstError = firstError || unmatchedResult.reason?.message || "";
       }
 
-      if (inventoryResult.status === "fulfilled") {
-        setInventoryItems((inventoryResult.value.items || []).map(formatInventoryItem));
-      } else {
-        firstError = firstError || inventoryResult.reason?.message || "";
-      }
-
       if (usersResult.status === "fulfilled") {
         setUsers(usersResult.value.items || []);
       } else {
@@ -468,25 +496,11 @@ export default function App() {
         firstError = firstError || settingsResult.reason?.message || "";
       }
 
-      if (runsResult.status === "fulfilled") {
-        setInventoryImportRuns((runsResult.value.items || []).map(formatInventoryRun));
-      } else {
-        firstError = firstError || runsResult.reason?.message || "";
-      }
+      const inventoryHealthError = effectiveViewMode === "manager"
+        ? await loadInventoryHealthData({ includeInventoryList: activePage === "inventory" })
+        : "";
 
-      if (importErrorsResult.status === "fulfilled") {
-        setInventoryImportErrors((importErrorsResult.value.items || []).map(formatInventoryImportError));
-      } else {
-        firstError = firstError || importErrorsResult.reason?.message || "";
-      }
-
-      if (syncStatusResult.status === "fulfilled") {
-        setInventorySyncStatus(syncStatusResult.value);
-      } else {
-        firstError = firstError || syncStatusResult.reason?.message || "";
-      }
-
-      setError(firstError);
+      setError(firstError || inventoryHealthError);
     } catch (loadError) {
       if (loadError.status === 401) {
         setAuthStatus("unauthenticated");
@@ -504,6 +518,28 @@ export default function App() {
       loadCoreData();
     }
   }, [authStatus]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || effectiveViewMode !== "manager") {
+      return;
+    }
+
+    if (!["inventory", "team"].includes(activePage)) {
+      return;
+    }
+
+    loadInventoryHealthData({ includeInventoryList: true })
+      .then((inventoryError) => {
+        if (inventoryError) {
+          setError((current) => current || inventoryError);
+        }
+      })
+      .catch((loadError) => {
+        if (!isIgnorableBootstrapError(loadError.message || "")) {
+          setError((current) => current || loadError.message || "Unable to load inventory.");
+        }
+      });
+  }, [activePage, authStatus, effectiveViewMode]);
 
   useEffect(() => {
     const sales = users.filter((user) => user.role === "sales");

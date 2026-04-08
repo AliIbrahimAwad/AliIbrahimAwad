@@ -9,11 +9,12 @@ function isValidUserRole(value) {
 }
 
 function canManageUsers(user) {
-  return user && user.role === "admin";
+  return Boolean(user && normalizeUserRole(user.role) === "admin");
 }
 
 function canAssignLeads(user) {
-  return Boolean(user && (user.role === "admin" || user.role === "manager"));
+  const role = normalizeUserRole(user?.role);
+  return Boolean(user && (role === "admin" || role === "manager"));
 }
 
 function canUpdateLeadStatus(user, lead = null) {
@@ -21,11 +22,13 @@ function canUpdateLeadStatus(user, lead = null) {
     return false;
   }
 
-  if (user.role === "admin" || user.role === "manager") {
+  const role = normalizeUserRole(user.role);
+
+  if (role === "admin" || role === "manager") {
     return true;
   }
 
-  if (user.role !== "sales" || !lead) {
+  if (role !== "sales" || !lead) {
     return false;
   }
 
@@ -34,7 +37,8 @@ function canUpdateLeadStatus(user, lead = null) {
 }
 
 function canViewAllLeads(user) {
-  return Boolean(user && (user.role === "admin" || user.role === "manager"));
+  const role = normalizeUserRole(user?.role);
+  return Boolean(user && (role === "admin" || role === "manager"));
 }
 
 module.exports = {
