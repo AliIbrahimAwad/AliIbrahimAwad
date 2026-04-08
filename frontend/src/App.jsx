@@ -357,6 +357,21 @@ export default function App() {
     }
   }, [currentUser?.role]);
 
+  useEffect(() => {
+    if (!isManagerViewAllowed) {
+      return;
+    }
+
+    if (viewMode === "manager" && String(activePage).startsWith("rep-")) {
+      setActivePage("dashboard");
+      return;
+    }
+
+    if (viewMode === "rep" && !String(activePage).startsWith("rep-")) {
+      setActivePage("rep-home");
+    }
+  }, [activePage, isManagerViewAllowed, viewMode]);
+
   async function loadCoreData() {
     setBootLoading(true);
     try {
@@ -1020,6 +1035,7 @@ export default function App() {
     setSearch,
     setViewMode,
     setRepPreviewId,
+    setSelectedUnmatchedId,
     setNotificationsOpen,
     setActivePage,
     setLeadDrawerOpen,
