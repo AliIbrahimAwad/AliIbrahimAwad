@@ -48,6 +48,13 @@ export function getLead(id) {
   return request(`/api/leads/${id}`);
 }
 
+export function createLead(payload) {
+  return request("/api/leads", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function updateLeadStatus(id, status) {
   return request(`/api/leads/${id}/status`, {
     method: "PATCH",
