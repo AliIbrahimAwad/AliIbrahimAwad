@@ -375,50 +375,118 @@ export default function App() {
   async function loadCoreData() {
     setBootLoading(true);
     try {
-      const dashboardTask = getDashboardWorklist();
-      const leadsTask = getLeads({ limit: 250 });
-      const conversationsTask = getConversations(120);
-      const unmatchedTask = getUnmatchedCommunications({ limit: 200 });
-      const inventoryTask = getInventory({ limit: 200 });
-      const usersTask = isManagerViewAllowed ? getUsers() : Promise.resolve({ items: [] });
-      const assigneesTask = isManagerViewAllowed ? getAssignableUsers() : Promise.resolve({ items: [] });
-      const settingsTask = isManagerViewAllowed ? getExecutionSettings() : Promise.resolve(null);
-      const runsTask = getInventoryImportRuns(10);
-      const errorsTask = isManagerViewAllowed ? getInventoryImportErrors({ source_type: "ftp_sync", limit: 6 }) : Promise.resolve({ items: [] });
-      const syncTask = isManagerViewAllowed ? getInventorySyncStatus() : Promise.resolve(null);
-
-      const [dashboard, allLeads, conversations, unmatched, inventory, team, assignable, settings, runs, importErrors, syncStatus] = await Promise.all([
-        dashboardTask,
-        leadsTask,
-        conversationsTask,
-        unmatchedTask,
-        inventoryTask,
-        usersTask,
-        assigneesTask,
-        settingsTask,
-        runsTask,
-        errorsTask,
-        syncTask,
+      const resultEntries = await Promise.allSettled([
+        getDashboardWorklist(),
+        getLeads({ limit: 250 }),
+        getConversations(120),
+        getUnmatchedCommunications({ limit: 200 }),
+        getInventory({ limit: 200 }),
+        isManagerViewAllowed ? getUsers() : Promise.resolve({ items: [] }),
+        isManagerViewAllowed ? getAssignableUsers() : Promise.resolve({ items: [] }),
+        isManagerViewAllowed ? getExecutionSettings() : Promise.resolve(null),
+        getInventoryImportRuns(10),
+        isManagerViewAllowed ? getInventoryImportErrors({ source_type: "ftp_sync", limit: 6 }) : Promise.resolve({ items: [] }),
+        isManagerViewAllowed ? getInventorySyncStatus() : Promise.resolve(null),
       ]);
 
-      const attentionItems = (dashboard.attention_items || []).map(formatLead);
-      setLeads(attentionItems);
-      setLeadLibrary((allLeads.items || []).map(formatLead));
-      setConversationFeed((conversations.items || []).map(formatConversationItem));
-      const unmatchedList = (unmatched.items || []).map(formatUnmatchedItem);
-      setUnmatchedItems(unmatchedList);
-      setInventoryItems((inventory.items || []).map(formatInventoryItem));
-      setInventoryImportRuns((runs.items || []).map(formatInventoryRun));
-      setInventoryImportErrors((importErrors.items || []).map(formatInventoryImportError));
-      setInventorySyncStatus(syncStatus);
-      setNotifications(dashboard.notifications || []);
-      setMetrics(dashboard.summary || emptyMetrics);
-      setUsers(team.items || []);
-      setAssignees(assignable.items || []);
-      setExecutionSettings(settings);
-      setSelectedLeadId((current) => current ?? attentionItems[0]?.id ?? allLeads.items?.[0]?.id ?? null);
-      setSelectedUnmatchedId((current) => current ?? unmatchedList[0]?.id ?? null);
-      setError("");
+      const [
+        dashboardResult,
+        leadsResult,
+        conversationsResult,
+        unmatchedResult,
+        inventoryResult,
+        usersResult,
+        assigneesResult,
+        settingsResult,
+        runsResult,
+        importErrorsResult,
+        syncStatusResult,
+      ] = resultEntries;
+
+      const authError = resultEntries.find((entry) => entry.status === "rejected" && entry.reason?.status === 401);
+      if (authError) {
+        setAuthStatus("unauthenticated");
+        setCurrentUser(null);
+        return;
+      }
+
+      let firstError = "";
+
+      if (dashboardResult.status === "fulfilled") {
+        const attentionItems = (dashboardResult.value.attention_items || []).map(formatLead);
+        setLeads(attentionItems);
+        setNotifications(dashboardResult.value.notifications || []);
+        setMetrics(dashboardResult.value.summary || emptyMetrics);
+        setSelectedLeadId((current) => current ?? attentionItems[0]?.id ?? null);
+      } else {
+        firstError = firstError || dashboardResult.reason?.message || "";
+      }
+
+      if (leadsResult.status === "fulfilled") {
+        const leadItems = (leadsResult.value.items || []).map(formatLead);
+        setLeadLibrary(leadItems);
+        setSelectedLeadId((current) => current ?? leadItems[0]?.id ?? null);
+      } else {
+        firstError = firstError || leadsResult.reason?.message || "";
+      }
+
+      if (conversationsResult.status === "fulfilled") {
+        setConversationFeed((conversationsResult.value.items || []).map(formatConversationItem));
+      } else {
+        firstError = firstError || conversationsResult.reason?.message || "";
+      }
+
+      if (unmatchedResult.status === "fulfilled") {
+        const unmatchedList = (unmatchedResult.value.items || []).map(formatUnmatchedItem);
+        setUnmatchedItems(unmatchedList);
+        setSelectedUnmatchedId((current) => current ?? unmatchedList[0]?.id ?? null);
+      } else {
+        firstError = firstError || unmatchedResult.reason?.message || "";
+      }
+
+      if (inventoryResult.status === "fulfilled") {
+        setInventoryItems((inventoryResult.value.items || []).map(formatInventoryItem));
+      } else {
+        firstError = firstError || inventoryResult.reason?.message || "";
+      }
+
+      if (usersResult.status === "fulfilled") {
+        setUsers(usersResult.value.items || []);
+      } else {
+        firstError = firstError || usersResult.reason?.message || "";
+      }
+
+      if (assigneesResult.status === "fulfilled") {
+        setAssignees(assigneesResult.value.items || []);
+      } else {
+        firstError = firstError || assigneesResult.reason?.message || "";
+      }
+
+      if (settingsResult.status === "fulfilled") {
+        setExecutionSettings(settingsResult.value);
+      } else {
+        firstError = firstError || settingsResult.reason?.message || "";
+      }
+
+      if (runsResult.status === "fulfilled") {
+        setInventoryImportRuns((runsResult.value.items || []).map(formatInventoryRun));
+      } else {
+        firstError = firstError || runsResult.reason?.message || "";
+      }
+
+      if (importErrorsResult.status === "fulfilled") {
+        setInventoryImportErrors((importErrorsResult.value.items || []).map(formatInventoryImportError));
+      } else {
+        firstError = firstError || importErrorsResult.reason?.message || "";
+      }
+
+      if (syncStatusResult.status === "fulfilled") {
+        setInventorySyncStatus(syncStatusResult.value);
+      } else {
+        firstError = firstError || syncStatusResult.reason?.message || "";
+      }
+
+      setError(firstError);
     } catch (loadError) {
       if (loadError.status === 401) {
         setAuthStatus("unauthenticated");
@@ -445,7 +513,10 @@ export default function App() {
   }, [users]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !selectedLeadId) {
+    const shouldLoadLeadDetails =
+      leadDrawerOpen || ["lead-detail", "rep-customer", "comms"].includes(activePage);
+
+    if (authStatus !== "authenticated" || !selectedLeadId || !shouldLoadLeadDetails) {
       setSelectedLeadDetails(null);
       return;
     }
@@ -464,7 +535,14 @@ export default function App() {
           tasks: payload.tasks || [],
         });
       } catch (loadError) {
-        if (active) setError(loadError.message || "Unable to load lead details.");
+        if (!active) {
+          return;
+        }
+
+        setSelectedLeadDetails(null);
+        if (!/inventory unit not found/i.test(loadError.message || "")) {
+          setError(loadError.message || "Unable to load lead details.");
+        }
       } finally {
         if (active) setDetailLoading(false);
       }
@@ -475,7 +553,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [authStatus, selectedLeadId]);
+  }, [activePage, authStatus, leadDrawerOpen, selectedLeadId]);
 
   const selectedLead =
     selectedLeadDetails && Number(selectedLeadDetails.id) === Number(selectedLeadId)
